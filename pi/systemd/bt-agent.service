@@ -1,0 +1,13 @@
+[Unit]
+Description=Bluetooth auto-accept pairing agent (NoInputNoOutput)
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bt-agent -c NoInputNoOutput
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+# Copy to /etc/lockerroom/config.toml. Secrets never in the repo.
+
+api_base_url = "https://locker-room-music.example.workers.dev"
+device_key = "REPLACE_ME"
+speaker_name = "Locker Room Speaker"
+sync_interval_s = 15
+db_path = "/var/lib/lockerroom/lockerroom.db"
+log_path = "/var/log/lockerroom/listener.log"

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+config.toml
+
+# local dev secrets
+backend/.dev.vars
+backend/node_modules/
+backend/.wrangler/

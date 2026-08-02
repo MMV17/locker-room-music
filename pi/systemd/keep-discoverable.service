@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep Bluetooth adapter discoverable and pairable
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/keep-discoverable.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
