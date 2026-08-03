@@ -2,6 +2,21 @@ name = "locker-room-music"
 main = "src/index.ts"
 compatibility_date = "2024-12-18"
 
+# Served on a custom domain for a readable URL and so Cloudflare Tunnel can
+# share the zone later. workers.dev stays enabled as a fallback: both hostnames
+# route to this Worker, which is useful when DNS for the custom domain is slow
+# to propagate (campus resolvers cached the old Namecheap NS delegation for
+# hours after the switch).
+#
+# Note: an earlier comment here claimed the campus firewall blocks *.workers.dev
+# by SNI. That was wrong. The handshake failures were Cloudflare having no
+# certificate for a hostname that had not been successfully deployed yet.
+# Verified 2026-08-03 from campus wifi: workers.dev completes TLS normally.
+workers_dev = true
+routes = [
+  { pattern = "lockerroom.finestkindfarms.com", custom_domain = true }
+]
+
 # Secrets are set with `wrangler secret put`, never committed:
 #   DEVICE_KEY      shared with the Pi
 #   MAC_SALT        salts device hashes; changing it orphans every device row
@@ -11,4 +26,4 @@ compatibility_date = "2024-12-18"
 [[d1_databases]]
 binding = "DB"
 database_name = "lockerroom"
-database_id = "REPLACE_AFTER_CREATE"
+database_id = "d8e68dc0-5eab-42a3-b54c-441b1f79627c"

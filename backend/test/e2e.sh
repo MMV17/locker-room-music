@@ -38,17 +38,26 @@ curl -s -c "$JAR" -X POST "$BASE/api/session" -H 'content-type: application/json
 grep -q lr_token "$JAR" && ok "session cookie issued" || bad "session cookie" "no cookie set"
 
 echo "== play ingest =="
-PLAY_ID="11111111-1111-1111-1111-111111111111"
+# Fixture ids are unique per run. They used to be hardcoded, which made the
+# suite pass only against a freshly-created database: on a second run the play
+# already had ended_at set and the device was already claimed, so every
+# "window is open" and "unclaimed device" assertion failed with confusing
+# output. Local D1 persists in .wrangler/state between runs, so tests must not
+# collide with their own history.
+PLAY_ID=$(uuidgen | tr 'A-Z' 'a-z')
+MAC_PREFIX="5C:AD:BA:F0"
+MAC_TAIL=$(printf '%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)))
+DEVICE_MAC="$MAC_PREFIX:$MAC_TAIL"
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' \
-  -d "{\"play_id\":\"$PLAY_ID\",\"device_mac\":\"5C:AD:BA:F0:B2:61\",\"device_alias\":\"Jake's iPhone\",\"title\":\"Decode\",\"artist\":\"Paramore\",\"duration_ms\":240000,\"started_at\":\"$STARTED\"}" > /dev/null
+  -d "{\"play_id\":\"$PLAY_ID\",\"device_mac\":\"$DEVICE_MAC\",\"device_alias\":\"Jake's iPhone\",\"title\":\"Decode\",\"artist\":\"Paramore\",\"duration_ms\":240000,\"started_at\":\"$STARTED\"}" > /dev/null
 ok "play accepted"
 
 # Idempotent: the Pi retries after ambiguous timeouts.
 curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' \
-  -d "{\"play_id\":\"$PLAY_ID\",\"device_mac\":\"5C:AD:BA:F0:B2:61\",\"title\":\"Decode\",\"artist\":\"Paramore\",\"duration_ms\":240000,\"started_at\":\"$STARTED\"}" > /dev/null
+  -d "{\"play_id\":\"$PLAY_ID\",\"device_mac\":\"$DEVICE_MAC\",\"title\":\"Decode\",\"artist\":\"Paramore\",\"duration_ms\":240000,\"started_at\":\"$STARTED\"}" > /dev/null
 ok "duplicate play upsert accepted (idempotent)"
 
 echo "== THE most important rule: no live tallies =="
@@ -105,12 +114,12 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BASE/api/plays/nope" \
 echo "== device claiming =="
 UNCLAIMED=$(curl -s -b "$JAR" "$BASE/api/devices/unclaimed")
 # Spec: mac_hint is the LAST TWO octets, and nothing more.
-echo "$UNCLAIMED" | grep -q '"mac_hint":"B2:61"' \
+echo "$UNCLAIMED" | grep -q "\"mac_hint\":\"$MAC_TAIL\"" \
   && ok "unclaimed device exposes only a two-octet hint" || bad "mac hint" "$UNCLAIMED"
 echo "$UNCLAIMED" | grep -q '"alias":"Jake'"'"'s iPhone"' \
   && ok "alias survives an idempotent retry that omitted it" \
   || bad "alias clobbered by retry" "$UNCLAIMED"
-echo "$UNCLAIMED" | grep -qi '5C:AD:BA' \
+echo "$UNCLAIMED" | grep -qi "$MAC_PREFIX" \
   && bad "raw MAC must never appear" "$UNCLAIMED" \
   || ok "raw MAC absent from API (non-negotiable #3)"
 
