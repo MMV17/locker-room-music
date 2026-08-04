@@ -117,16 +117,63 @@ is seen — tracks dedupe on `track_key` and artwork is cached forever per spec
 neither provider fixes catalog rock: Journey still resolves to a compilation
 rather than *Escape*, because no free API has a "canonical release" concept.
 
+## Remote control over 443 (added 2026-08-04)
+
+Since nothing can connect *to* the Pi, the direction is inverted: the Pi
+beacons out on 443 — the one route HCGuest leaves open — and the response
+carries any pending command.
+
+- Pi side: `pi/lockerroom/control.py`, `beacon_loop`, every 60s.
+- Server: `POST /api/pi/beacon` (device key). Doubles as the liveness
+  heartbeat, which is why the queued one was retired.
+- Queue a command: `POST /api/admin/pi/commands`, or the **Speaker** section
+  of `/admin`. History and results show there too.
+
+**The command set is a fixed allowlist** — `restart-listener`, `reboot`,
+`report-status` — enforced at the API boundary *and* again on the Pi, which
+does not trust the server to be the only gate. Commands run as an argv list,
+never through a shell. **There is deliberately no "run arbitrary command".**
+Adding one would turn a locker room speaker into remote code execution; the
+pressure to add it will come the first time the allowlist does not cover a
+problem, and the answer is to add a specific named command instead.
+
+Only one command may be outstanding at a time, so three impatient clicks
+cannot reboot the Pi three times. Expect up to ~2 minutes end to end: one
+beacon to collect, one to report back.
+
+Verified in production: queued 16:47:53, dispatched 16:48:41, completed
+16:49:41 with `ok=1`.
+
+## Clean slate, 2026-08-04
+
+Production data was deliberately wiped so the first real session is a genuine
+first-time experience — for voting *and* for DJing. Cleared: `users`,
+`devices`, `tracks`, `plays`, `votes`, `device_tokens`, `pi_commands`.
+**Kept: `settings`** (team colour `#8f00ff`, name "Holy Cross") — a first-timer
+should see the configured team, not defaults.
+
+Because `device_tokens` was cleared, every phone is signed out and lands on
+Join. Because `devices` was cleared, the first phone to DJ shows up unclaimed
+and gets the "Whose phone is this?" prompt. `MAC_SALT` was NOT rotated, so the
+same phone still hashes to the same device row.
+
+A full pre-wipe snapshot is in the session scratchpad
+(`prod-full-snapshot.json`), which will not survive indefinitely — copy it
+somewhere durable if that history ever matters.
+
 ## Known issues, not yet addressed
 
-**Heartbeats dominate the outbox.** ~1,100 of those 1,261 rows were heartbeats,
-each durably stored, retried with backoff, and eventually replayed. But a
-heartbeat only asserts "alive at time T" — replaying a four-hour-old one tells
-the server nothing usable, and after an outage the Pi spends its first minutes
-back online flushing stale pings before the plays anyone cares about get
-through. Spec §5.3's "never drop an entry" is right for plays and votes;
-heartbeats are liveness, not events. Either keep them out of the durable outbox
-or collapse to the newest before sync.
+**~~Heartbeats dominate the outbox.~~ FIXED 2026-08-04.** It peaked at 98.5%
+(2,498 of 2,530 rows). Heartbeats no longer touch the outbox at all: they are
+now a live `POST /api/pi/beacon` in `pi/lockerroom/control.py`, and the outbox
+holds only plays and their PATCHes — the things spec §5.3's never-drop rule is
+actually about. A missed beacon is skipped, not queued; the next one is 60s
+away. `sync.heartbeat_loop` remains as a stub that raises, so an older
+deployment fails loudly instead of quietly refilling the table.
+
+The historical heartbeat rows are still on disk and still marked synced, so
+they will never replay. Left alone deliberately — spec §5.3 says never delete
+from the local DB.
 
 **Two plays have `played_ms=NULL`** — 16 `POST /api/plays` against 14 `PATCH`es.
 Plays that opened and never closed, most likely cut off when the Pi lost its
@@ -188,8 +235,9 @@ standard answers are blocked there, measured directly:
 - SSH between guest clients is filtered: ICMP passes (ping succeeds, 0% loss)
   but TCP/22 times out, so a laptop on HCGuest cannot reach the Pi either.
 
-So today the Pi is reachable **only by physical access** (USB-C ethernet +
-Internet Sharing). One consolation: because HCGuest is open rather than
+So SSH is reachable **only by physical access** (USB-C ethernet + Internet
+Sharing). For the common case there is now a control channel instead — see
+below. One consolation: because HCGuest is open rather than
 802.1X, macOS will now share it, so the iPhone-hotspot step in "Reaching the
 Pi" below is no longer needed.
 
