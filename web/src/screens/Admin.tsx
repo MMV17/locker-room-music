@@ -25,6 +25,16 @@ interface AdminUser {
   active: number;
 }
 
+interface PiCommand {
+  id: string;
+  command: string;
+  created_at: string;
+  dispatched_at: string | null;
+  completed_at: string | null;
+  ok: number | null;
+  result: string | null;
+}
+
 interface AdminDevice {
   mac_hash: string;
   mac_hint: string;
@@ -137,6 +147,7 @@ export function Admin({ teamName }: { teamName: string }) {
 
       <Appearance call={call} />
       <Roster call={call} />
+      <Speaker call={call} />
       <Devices call={call} />
       <Plays call={call} />
     </main>
@@ -455,5 +466,102 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h2>
       {children}
     </section>
+  );
+}
+
+/**
+ * Remote control for the Pi.
+ *
+ * The locker room network blocks every inbound path to it - 7844 is closed so
+ * Cloudflare Tunnel cannot run, Tailscale is blocked by SNI, and TCP/22 is
+ * filtered between guest clients. So the Pi polls out on 443 and picks work up
+ * from here. Expect up to a minute of lag: that is the beacon interval, not a
+ * hang.
+ */
+function Speaker({ call }: { call: Call }) {
+  const [commands, setCommands] = useState<PiCommand[] | null>(null);
+  const [allowed, setAllowed] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    call<{ commands: PiCommand[]; allowed: string[] }>("/api/admin/pi/commands")
+      .then((r) => {
+        setCommands(r.commands);
+        setAllowed(r.allowed);
+      })
+      .catch(() => setCommands([]));
+  }, [call]);
+
+  useEffect(load, [load]);
+
+  const send = async (command: string) => {
+    // Reboot cuts audio for whoever is DJing right now.
+    if (command === "reboot" && !confirm("Reboot the speaker? Music stops for about a minute.")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await call("/api/admin/pi/commands", {
+        method: "POST",
+        body: JSON.stringify({ command }),
+      });
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not queue that");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label = (c: PiCommand) =>
+    c.completed_at ? (c.ok ? "done" : "failed") : c.dispatched_at ? "running" : "queued";
+
+  return (
+    <Section title="Speaker">
+      {error && <div className="banner is-bad">{error}</div>}
+      <p className="t-sub" style={{ marginBottom: 12 }}>
+        The speaker checks in about once a minute, so a command can take that long to
+        start.
+      </p>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {allowed.map((cmd) => (
+          <button
+            key={cmd}
+            className="btn"
+            disabled={busy}
+            onClick={() => send(cmd)}
+          >
+            {cmd.replace(/-/g, " ")}
+          </button>
+        ))}
+      </div>
+
+      {!commands ? (
+        <Spinner />
+      ) : commands.length === 0 ? (
+        <div className="empty">
+          <p className="empty-title">Nothing sent yet</p>
+          Commands you send to the speaker appear here with their result.
+        </div>
+      ) : (
+        <div className="rows">
+          {commands.slice(0, 6).map((c) => (
+            <div key={c.id} className="row">
+              <span className="row-main">
+                <span className="row-title">{c.command.replace(/-/g, " ")}</span>
+                <span className="row-sub">
+                  {label(c)} · {formatWhen(c.created_at)}
+                  {c.result ? ` · ${c.result.split("\n")[0].slice(0, 40)}` : ""}
+                </span>
+              </span>
+              <button className="btn-quiet" onClick={load}>
+                Refresh
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
   );
 }

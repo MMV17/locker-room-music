@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
 import { normalize } from "./trackKey";
+import { PI_COMMANDS, isPiCommand } from "./piControl";
 
 export const admin = new Hono<{ Bindings: Env }>();
 
@@ -155,4 +156,43 @@ admin.post("/api/admin/votes/:id/void", async (c) => {
     .run();
   if (!r.meta.changes) return c.json({ error: "Unknown vote" }, 404);
   return c.json({ ok: true });
+});
+
+/* Pi remote control.
+
+   Admin-gated because it acts on physical hardware. The allowlist is enforced
+   here as well as on the Pi: a command that is not on it never reaches the
+   queue, so a mistyped name fails loudly at the point of entry rather than
+   sitting queued forever waiting for a Pi that will refuse it. */
+
+admin.get("/api/admin/pi/commands", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
+       FROM pi_commands ORDER BY created_at DESC LIMIT 20`,
+  ).all();
+  return c.json({ commands: results, allowed: PI_COMMANDS });
+});
+
+admin.post("/api/admin/pi/commands", async (c) => {
+  const b = await c.req.json<{ command?: string }>().catch(() => ({}) as any);
+  if (!isPiCommand(b.command)) {
+    return c.json({ error: `Unknown command. Allowed: ${PI_COMMANDS.join(", ")}` }, 400);
+  }
+
+  // One outstanding command at a time. Queueing three reboots because the
+  // first appeared to do nothing would reboot the Pi three times.
+  const outstanding = await c.env.DB.prepare(
+    "SELECT id FROM pi_commands WHERE completed_at IS NULL",
+  ).first<{ id: string }>();
+  if (outstanding) {
+    return c.json({ error: "A command is already queued or running" }, 409);
+  }
+
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
+  )
+    .bind(id, b.command, nowIso())
+    .run();
+  return c.json({ ok: true, id, command: b.command });
 });

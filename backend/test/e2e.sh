@@ -247,6 +247,51 @@ echo "$BODY" | grep -qi '<div id="root">' \
 APIMISS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/definitely-not-a-route")
 [ "$APIMISS" = "404" ] && ok "unknown /api path is a JSON 404, not the shell" || bad "api 404" "got $APIMISS"
 
+echo "== pi remote control =="
+# The allowlist is what stops this being remote code execution on a device in
+# a locker room, so it is asserted at the API boundary, not just on the Pi.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"command":"rm -rf /"}')
+[ "$code" = "400" ] && ok "command outside the allowlist is rejected" || bad "allowlist" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
+  -H 'content-type: application/json' -d '{"command":"reboot"}')
+[ "$code" = "401" ] && ok "queueing a command needs the admin password" || bad "command auth" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/pi/beacon" \
+  -H 'content-type: application/json' -d '{}')
+[ "$code" = "401" ] && ok "beacon without the device key is rejected" || bad "beacon auth" "got $code"
+
+CMD_ID=$(curl -s -X POST "$BASE/api/admin/pi/commands" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"command":"report-status"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$CMD_ID" ] && ok "queued an allowed command" || bad "queue" "no id"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"command":"reboot"}')
+[ "$code" = "409" ] && ok "a second queued command is refused while one is outstanding" || bad "single outstanding" "got $code"
+
+GOT=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}')
+echo "$GOT" | grep -q "report-status" && ok "beacon receives the pending command" || bad "beacon dispatch" "$GOT"
+
+AGAIN=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}')
+echo "$AGAIN" | grep -q '"command":null' && ok "a dispatched command is not handed out twice" || bad "double dispatch" "$AGAIN"
+
+curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"speaker_name\":\"Locker Room Speaker\",\"result\":{\"id\":\"$CMD_ID\",\"ok\":true,\"output\":\"up 4 minutes\"}}" > /dev/null
+DONE=$(curl -s "$BASE/api/admin/pi/commands" -H "X-Admin-Password: $ADMIN_PW")
+echo "$DONE" | grep -q "up 4 minutes" && ok "the Pi's result is recorded" || bad "result recorded" "$DONE"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"command":"reboot"}')
+[ "$code" = "200" ] && ok "queueing works again once the last one completed" || bad "requeue" "got $code"
+
 echo "== heartbeat =="
 curl -s -X POST "$BASE/api/heartbeat" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null

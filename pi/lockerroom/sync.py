@@ -64,11 +64,11 @@ async def _reschedule(store: Store, outbox_id: str, attempts: int, reason: str, 
 
 
 async def heartbeat_loop(config: Config, store: Store, interval_s: float = 60.0) -> None:
-    while True:
-        await store.enqueue(
-            outbox_id=f"heartbeat-{datetime.now(timezone.utc).isoformat()}",
-            method="POST",
-            endpoint="/api/heartbeat",
-            payload={"speaker_name": config.speaker_name, "at": datetime.now(timezone.utc).isoformat()},
-        )
-        await asyncio.sleep(interval_s)
+    """Deprecated: superseded by control.beacon_loop.
+
+    Kept only so an older deployment that still imports it does not crash on
+    start. Queuing liveness in a durable outbox is what made that table 98.5%
+    heartbeats, and a replayed heartbeat asserts something that is no longer
+    true. Do not wire this back up.
+    """
+    raise RuntimeError("heartbeat_loop is superseded by control.beacon_loop")

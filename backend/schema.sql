@@ -79,6 +79,29 @@ CREATE TABLE IF NOT EXISTS heartbeats (
   last_seen_at  TEXT NOT NULL
 );
 
+-- Remote control for the Pi (see POST /api/pi/beacon).
+--
+-- The locker room network allows outbound 443 and nothing else useful: port
+-- 7844 is blocked, so Cloudflare Tunnel cannot run, and Tailscale is blocked
+-- by SNI. There is no way to reach INTO the Pi. So the Pi reaches out on the
+-- one route that works and asks whether there is anything to do.
+--
+-- `command` is validated against a fixed allowlist on the way in AND again on
+-- the Pi. There is deliberately no "run this string" command: that would be
+-- remote code execution on a device sitting in a locker room.
+CREATE TABLE IF NOT EXISTS pi_commands (
+  id            TEXT PRIMARY KEY,
+  command       TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  dispatched_at TEXT,
+  completed_at  TEXT,
+  ok            INTEGER,
+  result        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pi_commands_pending
+  ON pi_commands (created_at) WHERE dispatched_at IS NULL;
+
 -- Operator-set values that must outlive a deploy. Currently the team colour
 -- and team name (spec 9.2: "one configurable team-color token that the
 -- operator sets once"). A table rather than a Worker secret because the admin

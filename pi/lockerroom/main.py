@@ -8,7 +8,8 @@ from . import config as config_mod
 from .bluez_watcher import BluezWatcher
 from .lifecycle import SessionManager
 from .storage import Store
-from .sync import drain_loop, heartbeat_loop
+from .control import beacon_loop
+from .sync import drain_loop
 
 
 def setup_logging(log_path) -> None:
@@ -44,7 +45,9 @@ async def async_main() -> None:
 
     await asyncio.gather(
         drain_loop(cfg, store),
-        heartbeat_loop(cfg, store),
+        # Liveness + remote control. Deliberately not routed through the
+        # outbox: see the module docstring in control.py.
+        beacon_loop(cfg),
     )
 
 

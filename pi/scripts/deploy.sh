@@ -3,7 +3,11 @@
 # Usage: pi/scripts/deploy.sh [pi-host]
 set -euo pipefail
 
-PI_HOST="${1:-pi@192.168.1.6}"
+# 192.168.1.6 was the old home network and is dead. The dependable route is
+# USB-C ethernet with macOS Internet Sharing, which hands the Pi 192.168.2.2.
+# Over HCGuest wifi the Pi is NOT reachable at all - TCP/22 is filtered
+# between guest clients - so this is the only way in. See docs/STATE.md.
+PI_HOST="${1:-pi@192.168.2.2}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 echo "Deploying to ${PI_HOST}..."

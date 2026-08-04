@@ -190,15 +190,72 @@ app.patch("/api/plays/:id", requireDeviceKey, async (c) => {
   return c.json({ ok: true });
 });
 
-app.post("/api/heartbeat", requireDeviceKey, async (c) => {
-  const body = await c.req.json<{ speaker_name?: string }>().catch(() => ({}) as any);
-  await c.env.DB.prepare(
+const touchHeartbeat = (env: Env, speakerName: string) =>
+  env.DB.prepare(
     `INSERT INTO heartbeats (speaker_name, last_seen_at) VALUES (?, ?)
      ON CONFLICT(speaker_name) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
   )
-    .bind(body.speaker_name ?? "Locker Room Speaker", nowIso())
+    .bind(speakerName, nowIso())
     .run();
+
+/**
+ * Superseded by /api/pi/beacon, kept because the Pi's outbox may still hold
+ * unsent rows addressed here. Removing it would strand them: the drain treats
+ * a 404 as non-retryable, backs off hard, and keeps the row forever.
+ */
+app.post("/api/heartbeat", requireDeviceKey, async (c) => {
+  const body = await c.req.json<{ speaker_name?: string }>().catch(() => ({}) as any);
+  await touchHeartbeat(c.env, body.speaker_name ?? "Locker Room Speaker");
   return c.json({ ok: true });
+});
+
+/**
+ * Liveness and remote control in one request. See piControl.ts for why the
+ * Pi has to poll rather than be reached.
+ *
+ * Deliberately NOT queued in the Pi's outbox: this is a live exchange. If it
+ * fails, the next one is 60 seconds away and the stale one was worthless.
+ */
+app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
+  const body = await c.req
+    .json<{
+      speaker_name?: string;
+      result?: { id: string; ok: boolean; output?: string };
+    }>()
+    .catch(() => ({}) as any);
+
+  await touchHeartbeat(c.env, body.speaker_name ?? "Locker Room Speaker");
+
+  // Report on whatever we handed out last time, before taking anything new.
+  if (body.result?.id) {
+    await c.env.DB.prepare(
+      `UPDATE pi_commands SET completed_at = ?, ok = ?, result = ?
+       WHERE id = ? AND completed_at IS NULL`,
+    )
+      .bind(
+        nowIso(),
+        body.result.ok ? 1 : 0,
+        (body.result.output ?? "").slice(0, 2000),
+        body.result.id,
+      )
+      .run();
+  }
+
+  // One at a time, oldest first. Claimed by stamping dispatched_at, so a
+  // command is handed out once even if the Pi beacons twice in quick
+  // succession — "reboot" running twice is not what anyone asked for.
+  const pending = await c.env.DB.prepare(
+    `SELECT id, command FROM pi_commands
+     WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 1`,
+  ).first<{ id: string; command: string }>();
+
+  if (!pending) return c.json({ ok: true, command: null });
+
+  await c.env.DB.prepare("UPDATE pi_commands SET dispatched_at = ? WHERE id = ?")
+    .bind(nowIso(), pending.id)
+    .run();
+
+  return c.json({ ok: true, command: { id: pending.id, name: pending.command } });
 });
 
 /* ------------------------------------------------------------------ *
