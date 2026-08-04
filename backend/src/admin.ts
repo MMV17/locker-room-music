@@ -58,6 +58,39 @@ admin.patch("/api/admin/users/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/* Devices and plays.
+   The public /api/devices/unclaimed only lists orphans, and /api/history hides
+   anything still inside its vote window - neither is a basis for the two
+   corrective actions below, so admin gets its own unfiltered view. */
+
+admin.get("/api/admin/devices", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT d.mac_hash, d.mac_hint, d.alias, d.first_seen, d.claimed_at,
+            u.name AS owner_name,
+            COUNT(p.id) AS plays
+     FROM devices d
+     LEFT JOIN users u ON u.id = d.user_id
+     LEFT JOIN plays p ON p.device_hash = d.mac_hash
+     GROUP BY d.mac_hash
+     ORDER BY plays DESC`,
+  ).all();
+  return c.json({ devices: results });
+});
+
+admin.get("/api/admin/plays", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT p.id, p.started_at, p.counted, p.voided,
+            t.title, t.artist,
+            u.name AS dj_name
+     FROM plays p
+     JOIN tracks t ON t.id = p.track_id
+     LEFT JOIN users u ON u.id = p.user_id
+     ORDER BY p.started_at DESC
+     LIMIT 50`,
+  ).all();
+  return c.json({ plays: results });
+});
+
 /* Un-claim a device */
 
 admin.post("/api/admin/devices/:hash/unclaim", async (c) => {

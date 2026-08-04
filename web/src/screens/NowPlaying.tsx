@@ -1,0 +1,308 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, get, post } from "./../api";
+import type { MyDj, NowPlay, NowResponse } from "./../api";
+import { Artwork, Empty, Spinner, formatClock } from "./../components";
+import { ThumbDown, ThumbUp } from "./../icons";
+import { useNavigate } from "./../router";
+import { Reveal, markRevealed, wasRevealed } from "./Reveal";
+
+/** Spec 8: never faster. Polling is the only thing that could blow the budget. */
+const POLL_MS = 10_000;
+
+export function NowPlaying({ teamName }: { teamName: string }) {
+  const navigate = useNavigate();
+  const [now, setNow] = useState<NowResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [myDj, setMyDj] = useState<MyDj | null>(null);
+  const [revealFor, setRevealFor] = useState<NowPlay | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // The play we last saw with an *open* window. The reveal fires on the
+  // transition out of that, which is also why a cold open onto an
+  // already-closed song correctly reveals nothing.
+  const openPlay = useRef<NowPlay | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const next = await get<NowResponse>("/api/now");
+      const prev = openPlay.current;
+
+      if (prev && (next.play?.id !== prev.id || next.play?.vote_window_open === false)) {
+        openPlay.current = null;
+        if (!wasRevealed(prev.id)) {
+          markRevealed(prev.id);
+          setRevealFor(prev);
+        }
+      }
+      if (next.play?.vote_window_open) openPlay.current = next.play;
+
+      setNow(next);
+      setError(null);
+    } catch (e) {
+      // A dropped poll is not worth a visible error; the room's wifi is bad
+      // and the next tick will very likely succeed.
+      if (e instanceof ApiError && e.status !== 401) setError(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  /* Poll. Stops when the tab is backgrounded and when nothing is playing —
+     both required by spec 8, and between them they are the difference between
+     a few thousand requests a day and blowing the free tier before lunch. */
+  useEffect(() => {
+    let timer: number | undefined;
+
+    const tick = () => {
+      if (document.hidden) return;
+      void load();
+      timer = window.setTimeout(tick, POLL_MS);
+    };
+
+    const onVisible = () => {
+      window.clearTimeout(timer);
+      if (!document.hidden) tick();
+    };
+
+    tick();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
+
+  const play = now?.play ?? null;
+  const iAmDj = play?.i_am_dj ?? false;
+
+  // Only the DJ sees their own standing, and only while they are DJing.
+  useEffect(() => {
+    if (!iAmDj) return;
+    get<MyDj>("/api/me/dj")
+      .then(setMyDj)
+      .catch(() => setMyDj(null));
+  }, [iAmDj]);
+
+  const vote = async (value: 1 | -1) => {
+    if (!play) return;
+    const previous = play.my_vote;
+    // Optimistic: the control fills before the network confirms (spec 9.1).
+    setNow((s) => (s?.play ? { ...s, play: { ...s.play, my_vote: value } } : s));
+    try {
+      await post("/api/votes", { play_id: play.id, value });
+    } catch (e) {
+      setNow((s) => (s?.play ? { ...s, play: { ...s.play, my_vote: previous } } : s));
+      if (e instanceof ApiError && e.status === 409) {
+        // The window shut between the render and the tap. Show the locked
+        // state rather than an error — it is not the user's mistake.
+        setNow((s) => (s?.play ? { ...s, play: { ...s.play, vote_window_open: false } } : s));
+      } else if (e instanceof ApiError) {
+        setError(e.message);
+      }
+    }
+  };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <>
+      {revealFor && <Reveal play={revealFor} onClose={() => setRevealFor(null)} />}
+
+      <main className="screen np">
+        <header className="np-head">
+          <span className="status">
+            <span className={"dot" + (now?.speaker_online ? " is-live" : "")} />
+            <span className="t-label">{now?.speaker_online ? "Live" : "Offline"}</span>
+          </span>
+          <span className="t-label">{teamName}</span>
+          <button
+            className="jersey is-sm"
+            onClick={() => navigate("/join")}
+            aria-label={`Signed in as ${now?.viewer?.name ?? "unknown"}. Change.`}
+          >
+            {now?.viewer?.jersey_number || (now?.viewer?.name?.[0] ?? "?")}
+          </button>
+        </header>
+
+        {error && <div className="banner is-bad">{error}</div>}
+
+        {!play ? (
+          <NothingPlaying online={now?.speaker_online ?? false} />
+        ) : (
+          <>
+            <Artwork
+              className="np-art"
+              src={play.artwork_url}
+              fallback={play.artwork_fallback}
+              alt={`Artwork for ${play.title}`}
+            />
+
+            <div className="np-meta">
+              <h1 className="t-title">{play.title}</h1>
+              <p className="t-sub">{play.artist ?? "Unknown artist"}</p>
+              {play.album && <p className="np-album">{play.album}</p>}
+            </div>
+
+            <DjChip play={play} onClaim={() => navigate("/claim")} />
+
+            <Progress play={play} />
+
+            {!play.vote_window_open ? (
+              <div className="vote-locked">
+                <p className="t-label">Voting closed</p>
+              </div>
+            ) : iAmDj ? (
+              <DjStanding myDj={myDj} />
+            ) : (
+              <div className="votes">
+                <button
+                  className={"vote" + (play.my_vote === -1 ? " is-on-down" : "")}
+                  aria-label="Thumbs down"
+                  aria-pressed={play.my_vote === -1}
+                  onClick={() => vote(-1)}
+                >
+                  <ThumbDown />
+                </button>
+                <button
+                  className={"vote" + (play.my_vote === 1 ? " is-on-up" : "")}
+                  aria-label="Thumbs up"
+                  aria-pressed={play.my_vote === 1}
+                  onClick={() => vote(1)}
+                >
+                  <ThumbUp />
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+    </>
+  );
+}
+
+function NothingPlaying({ online }: { online: boolean }) {
+  return online ? (
+    <Empty title="Nothing playing">
+      Connect to <strong>Locker Room Speaker</strong> over Bluetooth to DJ.
+    </Empty>
+  ) : (
+    <Empty title="Speaker offline">Songs and votes resume when it reconnects.</Empty>
+  );
+}
+
+/**
+ * Who is playing it. When nobody has claimed the phone, this names the phone
+ * instead — the play still counts and is still votable, it just has no owner
+ * on the DJ leaderboard yet.
+ */
+function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
+  if (play.dj) {
+    return (
+      <span className="dj-chip">
+        <span className="jersey is-sm">{play.dj.jersey_number || play.dj.name[0]}</span>
+        <span className="stack">
+          <span className="dj-chip-name">{play.dj.name}</span>
+          {/* Not "You're DJing" when it is you — the panel below the progress
+              bar already says exactly that, and saying it twice reads as a
+              bug rather than as emphasis. */}
+          <span className="dj-chip-sub">DJ</span>
+        </span>
+      </span>
+    );
+  }
+
+  if (play.device_unclaimed && play.device) {
+    return (
+      <span className="stack" style={{ alignItems: "center", gap: 6 }}>
+        <span className="dj-chip is-unclaimed">
+          <span className="jersey is-sm">?</span>
+          <span className="stack">
+            <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
+            <span className="dj-chip-sub">Unclaimed · {play.device.mac_hint}</span>
+          </span>
+        </span>
+        <button className="btn-quiet" onClick={onClaim}>
+          Whose phone is this?
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="dj-chip is-unclaimed">
+      <span className="jersey is-sm">?</span>
+      <span className="dj-chip-name">Unknown DJ</span>
+    </span>
+  );
+}
+
+/**
+ * Elapsed ticks locally between polls rather than being pushed by the server
+ * — a value that only moves every 10 seconds looks broken.
+ *
+ * The bar is hidden entirely when the Pi never reported a duration. That is
+ * not hypothetical: production already holds plays that opened and never
+ * closed when the Pi lost its network mid-session.
+ */
+function Progress({ play }: { play: NowPlay }) {
+  const [elapsed, setElapsed] = useState(() => Date.now() - Date.parse(play.started_at));
+
+  useEffect(() => {
+    setElapsed(Date.now() - Date.parse(play.started_at));
+    if (!play.vote_window_open) return;
+    const id = window.setInterval(
+      () => setElapsed(Date.now() - Date.parse(play.started_at)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [play.started_at, play.vote_window_open]);
+
+  const duration = play.duration_ms ?? null;
+  const shown = duration ? Math.min(elapsed, duration) : elapsed;
+
+  if (!duration) {
+    return (
+      <div className="np-progress">
+        <span className="np-time">{formatClock(shown)}</span>
+        <span className="np-bar" aria-hidden="true" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="np-progress">
+      <span className="np-time">{formatClock(shown)}</span>
+      <span
+        className="np-bar"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(duration / 1000)}
+        aria-valuenow={Math.round(shown / 1000)}
+      >
+        <span className="np-bar-fill" style={{ width: `${(shown / duration) * 100}%` }} />
+      </span>
+      <span className="np-time">{formatClock(duration)}</span>
+    </div>
+  );
+}
+
+/**
+ * What the DJ sees in place of the vote controls. Their standing is private
+ * by design (spec 7.2), and this is the one screen where it is relevant.
+ */
+function DjStanding({ myDj }: { myDj: MyDj | null }) {
+  return (
+    <div className="vote-locked center">
+      <p className="empty-title">You're DJing this one</p>
+      <p className="t-sub">
+        {!myDj
+          ? "You can't rate your own song."
+          : myDj.qualified
+            ? `${myDj.counted_plays} counted plays — you're on the DJ board.`
+            : `${myDj.plays_until_qualified} more ${
+                myDj.plays_until_qualified === 1 ? "song" : "songs"
+              } to qualify for the DJ board.`}
+      </p>
+    </div>
+  );
+}

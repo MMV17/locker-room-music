@@ -10,9 +10,9 @@ Build order status (spec section 10):
 | 2 | Listener logs to local SQLite | **Done, verified on hardware** |
 | 3 | Worker + D1 + schema, deployed | **Done — deployed and verified in production** |
 | 4 | Pi syncs to the Worker | **Done — 1,261 rows drained to production, 0 lost** |
-| 5 | Voting site: join + now-playing | Not started (see "Frontend" below) |
-| 6 | Results reveal, leaderboards, rating math | Backend math done; UI not started |
-| 7 | Admin and device claiming | Backend done; UI not started |
+| 5 | Voting site: join + now-playing | **Done — built and verified locally, not yet deployed** |
+| 6 | Results reveal, leaderboards, rating math | **Done — all screens built** |
+| 7 | Admin and device claiming | **Done — all screens built** |
 
 ---
 
@@ -26,6 +26,11 @@ Build order status (spec section 10):
 | D1 database | `lockerroom` / `d8e68dc0-5eab-42a3-b54c-441b1f79627c`, region ENAM |
 | Cloudflare account | `7db3c13ee0073570030cac33d8c9f0dc` |
 | Secrets | `DEVICE_KEY`, `MAC_SALT`, `TEAM_CODE` (=`CRUSADERS`), `ADMIN_PASSWORD` |
+
+For local work, `backend/.dev.vars` (gitignored) holds the placeholder values
+`test/e2e.sh` authenticates with: `dev-device-key` / `dev-team` / `dev-admin`.
+It is not in the repo — recreate it if the checkout is fresh, or every local
+request 401s.
 
 **Secrets live in `backend/.secrets.local`** (mode 600, gitignored). Cloudflare
 secrets are write-only — that file is the ONLY copy. `MAC_SALT` especially:
@@ -63,11 +68,54 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Phase 5 — the voting site.** Everything that is not frontend is done. Read
-the "Frontend" section below *before* writing any UI; the visual direction was
-explicitly rejected and never replaced, so that is a conversation first.
+**Deploy the site, then run it on real phones.** All seven screens are built
+and pass locally against `wrangler dev`, but nothing from phase 5 has been
+deployed or seen on hardware. Next steps, in order:
 
-Nothing in phase 5 needs the Pi or the hotspot.
+1. `cd web && npm install && npm run build` (writes to `backend/public/`),
+   then `cd backend && npx wrangler deploy`.
+2. Apply the schema change to production: the `settings` table is new.
+   `npx wrangler d1 execute lockerroom --remote --file=./schema.sql` — it is
+   `CREATE TABLE IF NOT EXISTS`, so it is safe against the live database.
+3. Set the real team colour and name from `/admin` using `ADMIN_PASSWORD`.
+4. Add the actual roster, then get it on five phones and run a session
+   (spec build order step 5).
+
+## Artwork — verified 2026-08-03, and rebuilt
+
+Previously flagged unverified because the dev container could not reach the
+iTunes API. It reaches fine from Mack's laptop, and the path is now confirmed
+end to end: a real `POST /api/plays` stores a real cover URL and the track
+lands on `artwork_state = 'found'`.
+
+Verifying it surfaced a genuine problem. iTunes only accepts a **free-text**
+search, and the result set around a popular song is full of traps — searching
+"Paramore Decode" also returns *Lullaby Versions of Paramore*, *Karaoke
+Night*, a Mary Sammer cover, and three unrelated songs called "decode". The
+old code took `limit=1` on that list and was right only by luck of ranking.
+
+`artwork.ts` now tries **Deezer first**, because it supports *field-scoped*
+queries (`artist:"X" track:"Y"`) and iTunes does not. That scoping is what
+structurally prevents a karaoke record from becoming a track's cover. iTunes
+stays as a fallback so a Deezer outage or an edge-IP rate limit (~50 req/5s,
+and from a Worker that IP is Cloudflare's shared edge) degrades to a second
+source rather than straight to a colour block. Both providers request 10
+results, filter by artist, and prefer the release whose album matches.
+
+`POST /api/plays` now passes the AVRCP **album** into the lookup. The Pi was
+already sending it and it was being dropped. It is what disambiguates a song
+that exists on a single, an album, a soundtrack, and three compilations —
+Deezer + album resolves "Decode" to the Atlantic 45, where iTunes alone
+returned the Twilight soundtrack.
+
+`pick()` returns null rather than a weak match on purpose: a colour block is
+a better outcome than confidently showing the wrong cover.
+
+**Two things to know.** The album hint only applies the *first* time a track
+is seen — tracks dedupe on `track_key` and artwork is cached forever per spec
+6.4, so the first phone to play a song fixes its cover for the season. And
+neither provider fixes catalog rock: Journey still resolves to a compilation
+rather than *Escape*, because no free API has a "canonical release" concept.
 
 ## Known issues, not yet addressed
 
@@ -153,7 +201,12 @@ ssh pi@192.168.1.6 "sudo tail -f /var/log/lockerroom/listener.log"
 # Backend unit tests (15)
 cd backend && npx vitest run
 
-# Backend end-to-end (22) — needs `npx wrangler dev --local` running first.
+# Frontend: build into backend/public/, or run a dev server on :5173 that
+# proxies /api to wrangler on :8787
+cd web && npm run build
+cd web && npm run dev
+
+# Backend end-to-end (35) — needs `npx wrangler dev --local` running first.
 # Safe to re-run against the same local D1; fixture ids are unique per run.
 cd backend && ./test/e2e.sh
 
@@ -199,24 +252,57 @@ entirely by decision — expect its own surprises.
 
 ---
 
-## Frontend — read before designing anything
+## Frontend — the direction, now settled
 
-**The user does not like the spec's section 9.2 visual direction** (scoreboard
-slot, condensed athletic block type, jersey typography). This was stated up
-front, before any UI work.
+The spec's §9.2 direction (scoreboard slot, condensed athletic block type,
+jersey typography) was rejected by Mack up front and is **dead**. Do not
+revive it.
 
-Direction has **not** been established. Do not default to the spec's
-prescription, and do not default to generic generated-app styling. Ask what
-they want — references, an existing look, or reactions to concrete options —
-and note they declined to answer a multiple-choice framing of this question, so
-prefer showing over asking.
+What replaced it, from a reference screenshot Mack supplied — a light music
+player UI:
 
-Available tooling is thin here: no general frontend-design skill exists. The
-`DesignSync` tool can read/write design-system projects in the user's
-claude.ai/design account (unexplored — they never confirmed whether one
-exists). `artifact-design` is scoped to single-page Artifacts.
-`claude-in-chrome` can screenshot a phone-sized viewport so they can react to
-something real.
+- Pale cool-grey page (`#EDF0F5`), white surfaces, generous whitespace
+- Rounded-square artwork as the hero, soft wide shadow
+- Very large geometric-sans headings against small grey secondary text; the
+  type carries the identity and the layout stays quiet
+- Flat monochrome inline SVG icons. **No emoji anywhere** — explicit request
+- **The accent colour appears in very few places** — the active tab underline,
+  the jersey badge, the primary button, the active nav pill
+
+That last point is the load-bearing one. Accent-only is what lets an arbitrary
+school colour drop in: a pale gold that would be unreadable as a background is
+fine as a 3px rule. `web/src/theme.ts` derives `--team-ink` (darkened until it
+clears 4.5:1 on white), `--team-on` (readable *against* the fill), and
+`--team-soft` from the single admin-set hex.
+
+**Thumbs stay green and red regardless of team colour.** Semantic colour
+outranks brand colour on the one control the product exists for. If a school
+is red, the down vote is still red.
+
+Type is Outfit Variable, self-hosted via `@fontsource-variable/outfit` — never
+a Google Fonts CDN link, because campus wifi is unpredictable and the type is
+the identity. `unicode-range` means the 15KB latin-ext subset only downloads if
+a track title actually needs it.
+
+### Decisions made during the build
+
+- **Thumbs up/down only.** A four-level scale (double thumbs) was designed and
+  then cancelled before implementation. `votes.value` keeps its
+  `CHECK (value IN (-1,1))` and `scoring.ts` was never touched.
+- **A DJ cannot vote on their own song** — enforced in `POST /api/votes`, with
+  their private qualification standing shown where the controls would be.
+- **Join stays open** (team code + pick your name, no per-player PIN).
+- **Device claiming is first-tap-wins**, mitigated by a confirm step naming the
+  device and the song count. See the comment in `devices.ts`.
+
+### Where it lives
+
+`web/` — Vite + React + TS, no UI library, no CSS framework. Builds to
+`backend/public/`, which the Worker serves via its `[assets]` binding.
+
+Same-origin is deliberate: the session cookie is `SameSite=Lax`, and a separate
+Pages origin would mean it is never sent on API fetches. See the comment block
+in `wrangler.toml`.
 
 ---
 

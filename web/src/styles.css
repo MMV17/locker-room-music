@@ -1,0 +1,764 @@
+/* ------------------------------------------------------------------ *
+ * Locker Room — design tokens
+ *
+ * Light, airy, one accent. The accent is the team colour and it appears in
+ * very few places: the active tab underline, the jersey badge, a selected
+ * state. That restraint is what lets an arbitrary school colour drop in —
+ * a pale gold that would be unreadable as a background is fine as a 3px rule.
+ * ------------------------------------------------------------------ */
+
+:root {
+  --page: #edf0f5;
+  --surface: #ffffff;
+  --ink: #14171c;
+  --ink-2: #4a515c;
+  --muted: #8a93a0;
+  --hairline: #e4e8ee;
+
+  /* Set at boot from GET /api/theme. The defaults here are the same neutral
+     slate the API falls back to, so the first paint is never wrong-coloured. */
+  --team: #2f3a45;
+  --team-ink: #2f3a45; /* contrast-corrected for use as text on white */
+  --team-soft: rgba(47, 58, 69, 0.1);
+  --team-on: #ffffff; /* readable against a --team fill */
+
+  /* Fixed and deliberately independent of --team. If the school colour
+     happens to be red, the down vote is still red — semantic colour outranks
+     brand colour on the one control this product exists for. */
+  --up: #16a34a;
+  --up-soft: rgba(22, 163, 74, 0.1);
+  --down: #dc2626;
+  --down-soft: rgba(220, 38, 38, 0.1);
+
+  --r-card: 28px;
+  --r-art: 24px;
+  --r-thumb: 12px;
+
+  --shadow: 0 8px 28px rgba(20, 23, 28, 0.07), 0 2px 6px rgba(20, 23, 28, 0.04);
+  --shadow-lift: 0 14px 40px rgba(20, 23, 28, 0.12), 0 3px 8px rgba(20, 23, 28, 0.06);
+
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Outfit Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  /* The vote controls are the only interactive target that matters; nothing
+     here should be selectable-draggable under a wet thumb. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* ------------------------------------------------------------------ *
+ * Type
+ * ------------------------------------------------------------------ */
+
+.t-display {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.t-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.t-section {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.t-sub {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* The reference's letterspaced "SONGS" device, reused for every small label. */
+.t-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ *
+ * Layout
+ * ------------------------------------------------------------------ */
+
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen {
+  flex: 1;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 20px 20px calc(104px + var(--safe-b));
+}
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.center {
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ *
+ * Tabs — the accent's main home
+ * ------------------------------------------------------------------ */
+
+.tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 22px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  position: relative;
+  padding: 0 0 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+.tab.is-active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tab.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--team);
+}
+
+/* ------------------------------------------------------------------ *
+ * Surfaces
+ * ------------------------------------------------------------------ */
+
+.card {
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.rows {
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  width: 100%;
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row-rank {
+  width: 22px;
+  flex: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: right;
+}
+
+.row-art {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: var(--r-thumb);
+  object-fit: cover;
+  background: var(--hairline);
+}
+
+/* These rows are built from spans, not divs, so the column direction has to
+   be set explicitly — inline children ignore the ellipsis rules below and
+   run into the score on the right. */
+.row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.row-title {
+  display: block;
+  max-width: 100%;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-sub {
+  display: block;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-score {
+  flex: none;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-score.is-pos {
+  color: var(--up);
+}
+
+.row-score.is-neg {
+  color: var(--down);
+}
+
+.row-score.is-flat {
+  color: var(--muted);
+}
+
+/* Jersey badge — the team colour on a person. */
+.jersey {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: var(--r-thumb);
+  background: var(--team);
+  color: var(--team-on);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.jersey.is-sm {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Now playing
+ * ------------------------------------------------------------------ */
+
+.np {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 18px;
+}
+
+.np-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.np-art {
+  width: min(62vw, 268px);
+  aspect-ratio: 1;
+  border-radius: var(--r-art);
+  box-shadow: var(--shadow-lift);
+  object-fit: cover;
+  display: block;
+}
+
+.np-meta {
+  width: 100%;
+}
+
+.np-album {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* The DJ chip. The reference has no equivalent — this is the one invented
+   element, and it carries the "who is playing it" half of the brief. */
+.dj-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px 7px 7px;
+  background: var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  max-width: 100%;
+}
+
+.dj-chip-name {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dj-chip-sub {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.dj-chip.is-unclaimed .jersey {
+  background: var(--hairline);
+  color: var(--muted);
+}
+
+/* Progress — deliberately not the reference's waveform. We have no audio and
+   never will (spec non-negotiable #1), so a waveform would be invented data. */
+.np-progress {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.np-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.np-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ink);
+  transition: width 1s linear;
+}
+
+.np-time {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* ------------------------------------------------------------------ *
+ * Vote controls — sized for a taped, wet hand (spec 9.1)
+ * ------------------------------------------------------------------ */
+
+.votes {
+  display: flex;
+  gap: 26px;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+
+.vote {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.vote:active {
+  transform: scale(0.94);
+}
+
+.vote svg {
+  width: 42px;
+  height: 42px;
+}
+
+.vote.is-on-up {
+  background: var(--up);
+  color: #fff;
+}
+
+.vote.is-on-down {
+  background: var(--down);
+  color: #fff;
+}
+
+.vote:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+.vote-locked {
+  padding: 26px 0 10px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Bottom nav
+ * ------------------------------------------------------------------ */
+
+.nav {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(14px + var(--safe-b));
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  background: var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow-lift);
+}
+
+.nav-item {
+  width: 58px;
+  height: 46px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.nav-item.is-active {
+  color: var(--team-ink);
+  background: var(--team-soft);
+}
+
+.nav-item svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Results reveal — full-screen takeover, the one real moment (spec 9.2)
+ * ------------------------------------------------------------------ */
+
+.reveal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--page);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  text-align: center;
+  animation: reveal-in 260ms ease-out both;
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.reveal-art {
+  width: min(46vw, 190px);
+  aspect-ratio: 1;
+  border-radius: var(--r-art);
+  box-shadow: var(--shadow-lift);
+  object-fit: cover;
+}
+
+.reveal-score {
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  animation: score-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both 140ms;
+}
+
+@keyframes score-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+}
+
+.reveal-split {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.tally {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tally svg {
+  width: 20px;
+  height: 20px;
+}
+
+.tally.is-up {
+  background: var(--up-soft);
+  color: var(--up);
+}
+
+.tally.is-down {
+  background: var(--down-soft);
+  color: var(--down);
+}
+
+/* ------------------------------------------------------------------ *
+ * Controls
+ * ------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 22px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition: transform 120ms ease;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn.is-primary {
+  background: var(--team);
+  color: var(--team-on);
+}
+
+.btn.is-danger {
+  color: var(--down);
+}
+
+.btn.is-block {
+  width: 100%;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.btn-quiet {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 8px;
+}
+
+.field {
+  display: block;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.input {
+  width: 100%;
+  /* 16px minimum: iOS zooms any smaller input on focus and never zooms back. */
+  font-size: 16px;
+  padding: 15px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.input:focus {
+  border-color: var(--team);
+}
+
+.input.is-code {
+  text-align: center;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ *
+ * States
+ * ------------------------------------------------------------------ */
+
+.empty {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-title {
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.dot.is-live {
+  background: var(--up);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.banner {
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+
+.banner.is-bad {
+  background: var(--down-soft);
+  color: var(--down);
+}
+
+.banner.is-ok {
+  background: var(--up-soft);
+  color: var(--up);
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2.5px solid var(--hairline);
+  border-top-color: var(--muted);
+  animation: spin 700ms linear infinite;
+  margin: 60px auto;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

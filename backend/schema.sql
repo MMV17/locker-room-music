@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS heartbeats (
   last_seen_at  TEXT NOT NULL
 );
 
+-- Operator-set values that must outlive a deploy. Currently the team colour
+-- and team name (spec 9.2: "one configurable team-color token that the
+-- operator sets once"). A table rather than a Worker secret because the admin
+-- changes it from the UI, and secrets are write-only.
+CREATE TABLE IF NOT EXISTS settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_plays_started_at ON plays (started_at);
 CREATE INDEX IF NOT EXISTS idx_plays_user_id    ON plays (user_id);
 CREATE INDEX IF NOT EXISTS idx_plays_track_id   ON plays (track_id);

@@ -12,3 +12,9 @@ backend/.dev.vars
 backend/.secrets.local
 backend/node_modules/
 backend/.wrangler/
+
+# The frontend build output. Source lives in web/; this is where `npm run
+# build` in web/ writes, and where the Worker's [assets] binding reads from.
+backend/public/
+web/node_modules/
+web/dist/

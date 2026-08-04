@@ -9,6 +9,7 @@ import { lookupArtwork } from "./artwork";
 import { boards } from "./leaderboards";
 import { devices } from "./devices";
 import { admin } from "./admin";
+import { theme } from "./theme";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -103,7 +104,14 @@ app.post("/api/plays", requireDeviceKey, async (c) => {
       .bind(key)
       .first<{ id: string }>();
     // Artwork lookup runs after the response; never block the Pi on it.
-    if (track) c.executionCtx.waitUntil(lookupArtwork(c.env, track.id, title, artist));
+    // The album comes from AVRCP and tells us which *release* is playing,
+    // which is what disambiguates a song that appears on a single, an
+    // album, a soundtrack, and three greatest-hits compilations.
+    if (track) {
+      c.executionCtx.waitUntil(
+        lookupArtwork(c.env, track.id, title, artist, body.album ?? null),
+      );
+    }
   }
   if (!track) return c.json({ error: "could not resolve track" }, 500);
 
@@ -258,7 +266,15 @@ app.get("/api/now", requireSession, async (c) => {
     ? Date.now() - Date.parse(hb.last_seen_at) < 3 * 60_000
     : false;
 
-  if (!play) return c.json({ play: null, speaker_online: speakerOnline });
+  const viewer = await c.env.DB.prepare(
+    "SELECT id, name, jersey_number FROM users WHERE id = ?",
+  )
+    .bind(userId)
+    .first<{ id: string; name: string; jersey_number: string | null }>();
+
+  if (!play) {
+    return c.json({ play: null, speaker_online: speakerOnline, viewer: viewer ?? null });
+  }
 
   const track = await c.env.DB.prepare("SELECT * FROM tracks WHERE id = ?")
     .bind(play.track_id)
@@ -278,20 +294,43 @@ app.get("/api/now", requireSession, async (c) => {
     .bind(play.id, userId)
     .first<{ value: number }>();
 
+  // Only when nobody owns the device: the claim screen needs something a
+  // human can recognise their own phone by. Both fields are already
+  // non-identifying - the hint is two octets (spec 6.1).
+  const unclaimed = !play.user_id && !!play.device_hash;
+  const device = unclaimed
+    ? await c.env.DB.prepare("SELECT mac_hash, mac_hint, alias FROM devices WHERE mac_hash = ?")
+        .bind(play.device_hash)
+        .first<{ mac_hash: string; mac_hint: string; alias: string | null }>()
+    : null;
+
   const open = isVoteWindowOpen(play);
 
   return c.json({
     speaker_online: speakerOnline,
+    // Who the caller is. The client cannot work this out on its own, and it
+    // needs it for both the DJ state below and the switch-user affordance.
+    viewer: viewer
+      ? { id: viewer.id, name: viewer.name, jersey_number: viewer.jersey_number }
+      : null,
     play: {
       id: play.id,
       started_at: play.started_at,
       ended_at: play.ended_at,
+      duration_ms: play.duration_ms,
       title: track?.title ?? "(unknown)",
       artist: track?.artist ?? null,
+      album: track?.album ?? null,
       artwork_url: track?.artwork_url ?? null,
       artwork_fallback: fallbackColor(track?.track_key ?? ""),
       dj: dj ? { id: dj.id, name: dj.name, jersey_number: dj.jersey_number } : null,
-      device_unclaimed: !play.user_id && !!play.device_hash,
+      device_unclaimed: unclaimed,
+      device: device
+        ? { mac_hash: device.mac_hash, mac_hint: device.mac_hint, alias: device.alias }
+        : null,
+      // The DJ cannot vote on their own song (see POST /api/votes). The client
+      // shows their standing where the vote controls would be.
+      i_am_dj: play.user_id === userId,
       vote_window_open: open,
       vote_closes_at: new Date(voteWindowClosesAt(play)).toISOString(),
       my_vote: myVote?.value ?? null,
@@ -316,6 +355,13 @@ app.post("/api/votes", requireSession, async (c) => {
     .bind(body.play_id)
     .first<PlayRow>();
   if (!play) return c.json({ error: "Unknown song" }, 404);
+
+  // A DJ rating their own song is padding their own leaderboard position.
+  // Enforced here rather than only in the UI - the client hiding the controls
+  // is the visible half of this rule, not the rule itself.
+  if (play.user_id && play.user_id === userId) {
+    return c.json({ error: "You can't rate your own song" }, 403);
+  }
 
   // Server-enforced, no exceptions.
   if (!isVoteWindowOpen(play)) {
@@ -389,9 +435,40 @@ app.route("/", devices);
 app.use("/api/admin/*", requireAdmin);
 app.route("/", admin);
 
+// GET /api/theme is public (the join screen is branded before anyone signs
+// in); PUT /api/admin/theme is covered by the requireAdmin middleware above,
+// which is why this is mounted after it.
+app.route("/", theme);
+
 app.onError((err, c) => {
   console.error("unhandled", err);
   return c.json({ error: "Something went wrong" }, 500);
+});
+
+/* ------------------------------------------------------------------ *
+ * Static site
+ * ------------------------------------------------------------------ */
+
+/**
+ * Client-side routes (/songs, /djs, /admin, ...) have no matching file, so
+ * they fall through to here and get the app shell.
+ *
+ * This must stay at the very bottom: it matches everything, and anything
+ * registered after it would be unreachable. An unknown /api path is answered
+ * as JSON instead - handing a caller of a mistyped endpoint a page of HTML
+ * with a 200 on it is worse than useless when debugging the Pi.
+ *
+ * Real asset requests never reach this handler at all. wrangler.toml sets
+ * not_found_handling = "none", so the assets runtime serves matching files
+ * itself and only forwards misses.
+ */
+app.get("*", async (c) => {
+  if (c.req.path.startsWith("/api/")) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  const url = new URL(c.req.url);
+  url.pathname = "/index.html";
+  return c.env.ASSETS.fetch(new Request(url, { headers: c.req.raw.headers }));
 });
 
 export default app;

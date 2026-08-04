@@ -8,6 +8,8 @@ export interface Env {
   TEAM_CODE: string;
   /** Password gate for admin routes. */
   ADMIN_PASSWORD: string;
+  /** The built frontend, served same-origin so the session cookie works. */
+  ASSETS: Fetcher;
 }
 
 export interface PlayRow {

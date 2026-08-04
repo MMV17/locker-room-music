@@ -27,3 +27,18 @@ routes = [
 binding = "DB"
 database_name = "lockerroom"
 database_id = "d8e68dc0-5eab-42a3-b54c-441b1f79627c"
+
+# The voting site, built from ../web and served from this same Worker.
+#
+# Same-origin is the point. The session cookie is httpOnly/Secure/SameSite=Lax,
+# and a separate Pages origin would mean it is never sent on API fetches — the
+# fix for which is relaxing to SameSite=None, weakening it for no gain.
+#
+# not_found_handling = "none" rather than "single-page-application": SPA mode
+# answers *any* unmatched path with index.html, which would swallow /api/*
+# before the Worker ever saw it. With "none", misses fall through to Hono and
+# the catch-all at the bottom of src/index.ts serves the app shell.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "none"
