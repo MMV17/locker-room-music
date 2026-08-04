@@ -78,8 +78,8 @@ deployed or seen on hardware. Next steps, in order:
    `npx wrangler d1 execute lockerroom --remote --file=./schema.sql` — it is
    `CREATE TABLE IF NOT EXISTS`, so it is safe against the live database.
 3. Set the real team colour and name from `/admin` using `ADMIN_PASSWORD`.
-4. Add the actual roster, then get it on five phones and run a session
-   (spec build order step 5).
+4. Get it on five phones and run a real session (spec build order step 5).
+   No roster step any more - players add themselves at the join screen.
 
 ## Artwork — verified 2026-08-03, and rebuilt
 
@@ -291,7 +291,13 @@ a track title actually needs it.
   `CHECK (value IN (-1,1))` and `scoring.ts` was never touched.
 - **A DJ cannot vote on their own song** — enforced in `POST /api/votes`, with
   their private qualification standing shown where the controls would be.
-- **Join stays open** (team code + pick your name, no per-player PIN).
+- **Players sign themselves up** (team code + first name, last name, number).
+  No admin-curated roster, no per-player PIN. The team code is therefore the
+  only gate: anyone holding it can register under any name, including a
+  teammate's. Accepted knowingly; admin can deactivate a bad row after the
+  fact. Signup is idempotent on `identity_key` so a cleared cookie or a new
+  phone finds the existing player instead of forking their history. Jersey
+  numbers may repeat across players by decision. `position` is gone entirely.
 - **Device claiming is first-tap-wins**, mitigated by a confirm step naming the
   device and the song count. See the comment in `devices.ts`.
 
