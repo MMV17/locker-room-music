@@ -14,6 +14,29 @@ import { runBackup } from "./backup";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
+/**
+ * Bare-domain redirect. Temporary scaffolding for beta: the URL gets said out
+ * loud in a loud room, and people type "auxgoat.com" without the school in
+ * front of it. Without this they get "server cannot be found" and give up.
+ *
+ * 302, deliberately, NOT 301. This is meant to be removed once a second
+ * school exists and the apex becomes a landing page that does not favour any
+ * one team. A 301 is cached by browsers effectively forever, so every phone
+ * that ever hit the apex would keep bouncing to Holy Cross long after the
+ * rule was deleted, with no way to fix it from the server side.
+ *
+ * Registered before every other route so it runs first.
+ */
+const BARE_HOSTS = new Set(["auxgoat.com", "www.auxgoat.com"]);
+app.use("*", async (c, next) => {
+  const url = new URL(c.req.url);
+  if (BARE_HOSTS.has(url.hostname)) {
+    url.hostname = "hc.auxgoat.com";
+    return c.redirect(url.toString(), 302);
+  }
+  await next();
+});
+
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
