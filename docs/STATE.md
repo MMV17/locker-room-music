@@ -1,6 +1,10 @@
 # Project state — resume here
 
-Last worked: **2026-08-03**. Spec is `docs/spec.md`.
+Last worked: **2026-08-04**. Spec is `docs/spec.md`.
+
+**Live at `https://hc.auxgoat.com`.** All seven build-order phases are done and
+deployed. The product is beta-ready; what remains is real-session UX, not
+plumbing.
 
 Build order status (spec section 10):
 
@@ -10,9 +14,9 @@ Build order status (spec section 10):
 | 2 | Listener logs to local SQLite | **Done, verified on hardware** |
 | 3 | Worker + D1 + schema, deployed | **Done — deployed and verified in production** |
 | 4 | Pi syncs to the Worker | **Done — 1,261 rows drained to production, 0 lost** |
-| 5 | Voting site: join + now-playing | **Done — built and verified locally, not yet deployed** |
-| 6 | Results reveal, leaderboards, rating math | **Done — all screens built** |
-| 7 | Admin and device claiming | **Done — all screens built** |
+| 5 | Voting site: join + now-playing | **Done — deployed, one real play recorded end to end** |
+| 6 | Results reveal, leaderboards, rating math | **Done — deployed, not yet exercised with real votes** |
+| 7 | Admin and device claiming | **Done — deployed; claiming exercised once** |
 
 ---
 
@@ -69,18 +73,29 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Deploy the site, then run it on real phones.** All seven screens are built
-and pass locally against `wrangler dev`, but nothing from phase 5 has been
-deployed or seen on hardware. Next steps, in order:
+**Debug the real user experience.** Everything is deployed and the database is
+a clean slate on purpose, so the next session is about what it feels like on a
+phone in a locker room — not about infrastructure.
 
-1. `cd web && npm install && npm run build` (writes to `backend/public/`),
-   then `cd backend && npx wrangler deploy`.
-2. Apply the schema change to production: the `settings` table is new.
-   `npx wrangler d1 execute lockerroom --remote --file=./schema.sql` — it is
-   `CREATE TABLE IF NOT EXISTS`, so it is safe against the live database.
-3. Set the real team colour and name from `/admin` using `ADMIN_PASSWORD`.
-4. Get it on five phones and run a real session (spec build order step 5).
-   No roster step any more - players add themselves at the join screen.
+Nothing has been exercised at scale: **zero votes have ever been cast**, no
+leaderboard has ever rendered with real data, and the results reveal has never
+fired for a real audience. Those are the untested paths.
+
+Open questions that only a real session answers:
+
+- Is the vote control actually usable one-handed, at arm's length, in 4
+  seconds (spec §9.1)?
+- Does the results reveal land as a moment, or go unnoticed?
+- What does the screen look like between songs, and when the speaker is off?
+- Does anything about the join flow confuse someone doing it once, fast?
+
+### Beta pre-flight — all closed as of 2026-08-04
+
+- Team told before switch-on (spec §13) — **done**
+- Cloudflare billing alert — **done**
+- `MAC_SALT` and the other three secrets backed up off-laptop — **done**
+- `TEAM_CODE` stays `CRUSADERS` for beta — **conscious decision**, it is now
+  the only gate since signup is self-service
 
 ## Artwork — verified 2026-08-03, and rebuilt
 
