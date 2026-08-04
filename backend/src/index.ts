@@ -10,6 +10,7 @@ import { boards } from "./leaderboards";
 import { devices } from "./devices";
 import { admin } from "./admin";
 import { theme } from "./theme";
+import { runBackup } from "./backup";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -583,4 +584,20 @@ app.get("*", async (c) => {
   return c.env.ASSETS.fetch(new Request(url, { headers: c.req.raw.headers }));
 });
 
-export default app;
+/**
+ * Hono handles fetch; the cron trigger needs its own entry point, so the
+ * default export becomes an object rather than the app itself.
+ */
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      runBackup(env, new Date()).then((r) => {
+        // Logged either way: a backup that quietly stopped running is worse
+        // than one that never existed, because it looks like insurance.
+        if (r.ok) console.log(`backup ok key=${r.key} bytes=${r.bytes} rows=${r.rows} pruned=${r.pruned}`);
+        else console.error(`backup FAILED: ${r.error}`);
+      }),
+    );
+  },
+};

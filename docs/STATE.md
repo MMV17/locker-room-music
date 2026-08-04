@@ -21,7 +21,8 @@ Build order status (spec section 10):
 | Thing | Value |
 |---|---|
 | Worker | `locker-room-music` |
-| Primary URL | `https://lockerroom.finestkindfarms.com` |
+| Primary URL | `https://hc.auxgoat.com` (`hc` = the school; see wrangler.toml) |
+| Old URL, kept | `https://lockerroom.finestkindfarms.com` — the Pi's fallback, do not remove |
 | Fallback URL | `https://locker-room-music.mmvinton17.workers.dev` |
 | D1 database | `lockerroom` / `d8e68dc0-5eab-42a3-b54c-441b1f79627c`, region ENAM |
 | Cloudflare account | `7db3c13ee0073570030cac33d8c9f0dc` |
@@ -160,6 +161,59 @@ same phone still hashes to the same device row.
 A full pre-wipe snapshot is in the session scratchpad
 (`prod-full-snapshot.json`), which will not survive indefinitely — copy it
 somewhere durable if that history ever matters.
+
+## Backups (spec 13)
+
+Two independent paths, because a season of data is not reproducible.
+
+**Automatic — daily to R2.** Cron `0 8 * * *` (≈03:00 US Eastern, never
+mid-practice) runs `src/backup.ts`, which dumps every table to gzipped JSON in
+the `lockerroom-backups` bucket. It reads table names from `sqlite_master`
+rather than a hardcoded list, so a table added later cannot silently go
+missing. Trigger one by hand or check it is running from `/admin`, or:
+
+```bash
+curl -X POST https://hc.auxgoat.com/api/admin/backups -H "X-Admin-Password: ..."
+curl      https://hc.auxgoat.com/api/admin/backups -H "X-Admin-Password: ..."
+```
+
+**Cost guardrails.** Cloudflare has **no hard spend cap for R2** — no setting
+says "never bill me" — so the guardrails are structural and live in
+`backup.ts`: one write per day (~31 Class A ops/month against 1,000,000 free),
+`MAX_BACKUPS = 30` retained, `MAX_DUMP_BYTES = 25 MB` per object, and
+`MAX_TOTAL_BYTES = 1 GB` for the whole bucket. Breaching any of them makes the
+job **refuse and log** rather than write. Worst case storage is 750 MB, 7.5% of
+the free 10 GB; the first real backup was **271 bytes**. Egress on R2 is always
+free. Set a billing alert in the dashboard as a backstop — that is the one
+guardrail that cannot live in code.
+
+**Manual — `./backend/scripts/backup.sh`.** Dumps to `~/lockerroom-backups`,
+outside the repo deliberately. Use before anything risky.
+
+**Restoring.** Reach for **Time Travel first** — it covers 30 days, needs no
+file, and is far harder to get wrong:
+
+```bash
+npx wrangler d1 time-travel info lockerroom
+npx wrangler d1 time-travel restore lockerroom --timestamp=<ISO8601>
+```
+
+For older damage, the `.sql` dump imports directly. The R2 objects are JSON,
+so they restore by script rather than by `d1 execute`:
+
+```bash
+npx wrangler r2 object get lockerroom-backups/d1/<key> --file=out.json.gz --remote
+gunzip -c out.json.gz | python3 -m json.tool | less
+```
+
+Both paths were tested, not assumed: the `.sql` dump round-tripped into local
+D1 with all 9 tables intact, and the R2 object decompressed with correct
+content.
+
+**A restore does not bring back `MAC_SALT`.** Device rows are keyed on
+`SHA-256(mac + salt)`, so restoring against a different salt orphans every
+claim and every DJ attribution. It exists only in `backend/.secrets.local`.
+Back it up separately, off this laptop.
 
 ## Known issues, not yet addressed
 

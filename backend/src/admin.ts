@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { normalize } from "./trackKey";
 import { PI_COMMANDS, isPiCommand } from "./piControl";
+import { runBackup, listBackups } from "./backup";
 
 export const admin = new Hono<{ Bindings: Env }>();
 
@@ -195,4 +196,14 @@ admin.post("/api/admin/pi/commands", async (c) => {
     .bind(id, b.command, nowIso())
     .run();
   return c.json({ ok: true, id, command: b.command });
+});
+
+/* Backups. The cron runs daily; these exist so a backup can be taken before
+   something risky, and so "is this actually running?" has an answer. */
+
+admin.get("/api/admin/backups", async (c) => c.json(await listBackups(c.env)));
+
+admin.post("/api/admin/backups", async (c) => {
+  const r = await runBackup(c.env, new Date());
+  return c.json(r, r.ok ? 200 : 500);
 });

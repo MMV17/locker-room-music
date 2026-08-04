@@ -56,3 +56,17 @@ database_id = "d8e68dc0-5eab-42a3-b54c-441b1f79627c"
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "none"
+
+# Daily backup of D1 to R2 (spec 13). 08:00 UTC = ~03:00-04:00 US Eastern,
+# chosen so it never lands mid-practice.
+#
+# Cost: Cloudflare has no hard spend cap for R2, so the guardrails are
+# structural and live in src/backup.ts - one write a day, a hard retention
+# count, and per-dump and per-bucket size ceilings that make the job REFUSE
+# rather than write. See the comment block there for the arithmetic.
+[triggers]
+crons = ["0 8 * * *"]
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "lockerroom-backups"

@@ -10,6 +10,8 @@ export interface Env {
   ADMIN_PASSWORD: string;
   /** The built frontend, served same-origin so the session cookie works. */
   ASSETS: Fetcher;
+  /** Daily D1 backups. See backup.ts for the cost guardrails. */
+  BACKUPS?: R2Bucket;
 }
 
 export interface PlayRow {
