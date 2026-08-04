@@ -139,11 +139,65 @@ its antenna with wifi. The USB dongle from the spec's parts list is not plugged
 in. **Deliberately deferred by Mack** until range actually causes a problem; do
 not re-raise unprompted.
 
-**How the Pi gets internet in the locker room is unsolved.** Every campus SSID
-is WPA2 Enterprise, which a headless Pi handles badly and which likely needs
-device registration. Options, best first: a wired ethernet drop; registering the
-Pi on the school's IoT/device PSK network; a cellular hotspot. This has lead
-time — start the IT conversation early.
+**How the Pi gets internet: SOLVED — `HCGuest`, verified 2026-08-04.**
+
+`HCGuest` is a genuinely open network (`Security: None`, no PSK, no 802.1X),
+with **no captive portal** and **no TLS interception** (cert chains to Google
+Trust Services and verifies against the system store). It is an OWE transition
+network — there is a companion `_owetm_HCGuest_*` BSS — but the plain open BSS
+associates fine and that is what the Pi uses.
+
+The Pi is configured and running on it. Wifi is managed by **NetworkManager**,
+not `wpa_supplicant.conf` — there is no such file on this box, so use `nmcli`:
+
+```bash
+sudo nmcli connection add type wifi con-name HCGuest ifname wlan0 ssid HCGuest \
+  connection.autoconnect yes connection.autoconnect-priority 20 ipv4.method auto
+sudo nmcli connection modify HCGuest wifi.cloned-mac-address permanent
+```
+
+`cloned-mac-address permanent` matters: NetworkManager randomises by default,
+and a guest network that meters or expires sessions per-MAC would see a brand
+new device on every reconnect. **wlan0 is `e4:5f:01:c2:6e:ab`** — a different
+MAC from eth0 (`...a9`), which is the one to hand over if the school ever adds
+device registration.
+
+Verified with the ethernet cable physically unplugged: the Pi holds
+`10.104.239.147/19` and heartbeats reach production continuously.
+
+Two things still unmeasured: signal in the actual locker room (it saw HCGuest
+at **-71 dBm** from the desk, workable but not strong), and whether the guest
+network expires sessions on a timer. A daily cut-off would show up as the Pi
+going quiet at the same time each day; the outbox means no data is lost, but
+live now-playing would stop.
+
+**Remote access to the Pi is NOT solved, and cannot be from HCGuest.** Both
+standard answers are blocked there, measured directly:
+
+- **Cloudflare Tunnel is impossible.** The edge requires outbound 7844; that
+  port is blocked for both TCP and UDP, while TCP 443 to the *same* edge IPs is
+  open. Every cloudflared protocol uses 7844, so there is no configuration that
+  works. `cloudflared` is installed and fully configured on the Pi (tunnel
+  `lockerroom-pi`, `pi.finestkindfarms.com` CNAME already created) but the
+  service is **disabled** — if IT ever opens 7844, enabling it is one command.
+- **Tailscale is blocked by SNI.** Proven at the TLS layer, not guessed: to the
+  same IP and port, SNI `controlplane.tailscale.com` gets no handshake at all
+  while SNI `example.com` returns `CONNECTED` / `Verify return code: 0 (ok)`.
+- **Plain 443 to anywhere else is fine** — github.com 200, cloudflare.com 301,
+  the Worker 200.
+- SSH between guest clients is filtered: ICMP passes (ping succeeds, 0% loss)
+  but TCP/22 times out, so a laptop on HCGuest cannot reach the Pi either.
+
+So today the Pi is reachable **only by physical access** (USB-C ethernet +
+Internet Sharing). One consolation: because HCGuest is open rather than
+802.1X, macOS will now share it, so the iPhone-hotspot step in "Reaching the
+Pi" below is no longer needed.
+
+`sshd` was hardened while this was set up — `PasswordAuthentication no`, key
+only. Note the drop-in is `/etc/ssh/sshd_config.d/01-lockerroom.conf`: it must
+sort **before** `50-cloud-init.conf`, which sets `PasswordAuthentication yes`,
+because OpenSSH takes the *first* value it obtains, not the last. Named `99-`
+it is silently ignored.
 
 **Remote admin access.** Campus wifi has client isolation (verified: an ARP
 sweep of all 512 addresses in `10.6.14.0/23` drew replies from exactly two
