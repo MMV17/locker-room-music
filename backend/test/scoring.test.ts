@@ -112,3 +112,47 @@ describe("vote window", () => {
     expect(isVoteWindowOpen(play({ voided: 1, duration_ms: 200_000 }))).toBe(false);
   });
 });
+
+/* The pause bug, from a real observation: "POWER" by Kanye West started at
+   22:04:28 with duration_ms=292093, so the wall-clock window closed at
+   22:09:50 while the track sat paused mid-song and still on the speaker. */
+describe("vote window survives a pause", () => {
+  const base = {
+    id: "p1",
+    track_id: "t1",
+    device_hash: null,
+    user_id: null,
+    started_at: "2026-08-04T22:04:28.000Z",
+    ended_at: null,
+    duration_ms: 292093,
+    played_ms: null,
+    counted: 1,
+    voided: 0,
+  } as any;
+
+  const START = Date.parse("2026-08-04T22:04:28.000Z");
+  const WALL_CLOCK_CLOSE = START + 292093 + 30_000;
+
+  it("closes on wall clock when the Pi is silent (spec 6.3 fallback)", () => {
+    const at = WALL_CLOCK_CLOSE + 1000;
+    expect(isVoteWindowOpen({ ...base }, at)).toBe(false);
+  });
+
+  it("stays open while the Pi keeps saying the song is on the speaker", () => {
+    const at = WALL_CLOCK_CLOSE + 60_000;
+    const play = { ...base, keepalive_at: new Date(at - 20_000).toISOString(), play_status: "paused" };
+    expect(isVoteWindowOpen(play, at)).toBe(true);
+  });
+
+  it("closes once the Pi stops reporting it", () => {
+    const at = WALL_CLOCK_CLOSE + 600_000;
+    const play = { ...base, keepalive_at: new Date(at - 400_000).toISOString(), play_status: "paused" };
+    expect(isVoteWindowOpen(play, at)).toBe(false);
+  });
+
+  it("a real end still closes the window on ended_at, keepalive or not", () => {
+    const ended = "2026-08-04T22:06:00.000Z";
+    const play = { ...base, ended_at: ended, keepalive_at: new Date(Date.parse(ended) + 5_000).toISOString() };
+    expect(isVoteWindowOpen(play, Date.parse(ended) + 31_000)).toBe(false);
+  });
+});

@@ -50,7 +50,15 @@ CREATE TABLE IF NOT EXISTS plays (
   duration_ms   INTEGER,
   played_ms     INTEGER,
   counted       INTEGER NOT NULL DEFAULT 1,
-  voided        INTEGER NOT NULL DEFAULT 0
+  voided        INTEGER NOT NULL DEFAULT 0,
+  -- Set by the Pi's beacon while this play is still on the speaker. Without
+  -- it the vote window closes on wall-clock time (started_at + duration_ms
+  -- + 30s), which keeps ticking while playback is PAUSED - so pausing a song
+  -- mid-track ended voting on a song still sitting on the speaker.
+  keepalive_at  TEXT,
+  -- 'playing' | 'paused', last reported by the Pi. Lets the site freeze the
+  -- progress bar instead of counting through a pause.
+  play_status   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS votes (

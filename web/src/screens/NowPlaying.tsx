@@ -245,17 +245,31 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
  * closed when the Pi lost its network mid-session.
  */
 function Progress({ play }: { play: NowPlay }) {
-  const [elapsed, setElapsed] = useState(() => Date.now() - Date.parse(play.started_at));
+  const paused = play.play_status === "paused";
+
+  // Anchor on the Pi's played_ms when we have it: it counts playback time and
+  // excludes pauses, where wall-clock-since-started_at does not. Pausing a
+  // song used to make this bar run on past the end of the track.
+  const anchor = () =>
+    play.played_ms != null ? play.played_ms : Date.now() - Date.parse(play.started_at);
+
+  const [elapsed, setElapsed] = useState(anchor);
 
   useEffect(() => {
-    setElapsed(Date.now() - Date.parse(play.started_at));
-    if (!play.vote_window_open) return;
+    setElapsed(anchor());
+    // Frozen while paused - the music is not moving, so neither is this.
+    if (paused || !play.vote_window_open) return;
+    // Tick forward from the anchor rather than recomputing from started_at,
+    // so time accumulated during a pause is never counted.
+    const startedTicking = Date.now();
+    const base = anchor();
     const id = window.setInterval(
-      () => setElapsed(Date.now() - Date.parse(play.started_at)),
+      () => setElapsed(base + (Date.now() - startedTicking)),
       1000,
     );
     return () => window.clearInterval(id);
-  }, [play.started_at, play.vote_window_open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [play.started_at, play.vote_window_open, paused, play.played_ms]);
 
   const duration = play.duration_ms ?? null;
   const shown = duration ? Math.min(elapsed, duration) : elapsed;

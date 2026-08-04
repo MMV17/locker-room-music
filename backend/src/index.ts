@@ -245,10 +245,29 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
     .json<{
       speaker_name?: string;
       result?: { id: string; ok: boolean; output?: string };
+      current_play?: { id: string; status?: string; played_ms?: number };
     }>()
     .catch(() => ({}) as any);
 
   await touchHeartbeat(c.env, body.speaker_name ?? "Locker Room Speaker");
+
+  // The song still on the speaker. This is what keeps the vote window open
+  // through a pause: without it the window closes on wall-clock time, which
+  // does not stop when the music does. played_ms comes from the Pi and
+  // already excludes paused time, so the site can show a bar that freezes.
+  if (body.current_play?.id) {
+    await c.env.DB.prepare(
+      `UPDATE plays SET keepalive_at = ?, play_status = ?, played_ms = COALESCE(?, played_ms)
+       WHERE id = ? AND ended_at IS NULL`,
+    )
+      .bind(
+        nowIso(),
+        body.current_play.status ?? "playing",
+        body.current_play.played_ms ?? null,
+        body.current_play.id,
+      )
+      .run();
+  }
 
   // Report on whatever we handed out last time, before taking anything new.
   if (body.result?.id) {
@@ -275,8 +294,17 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
 
   if (!pending) return c.json({ ok: true, command: null });
 
-  await c.env.DB.prepare("UPDATE pi_commands SET dispatched_at = ? WHERE id = ?")
-    .bind(nowIso(), pending.id)
+  // reboot is fire-and-forget: the Pi is killed before it can report, so
+  // record the outcome now rather than leaving a row that never completes.
+  const isReboot = pending.command === "reboot";
+  await c.env.DB.prepare(
+    isReboot
+      ? `UPDATE pi_commands SET dispatched_at = ?, completed_at = ?, ok = 1,
+           result = 'reboot issued - the Pi cannot report back, watch for the speaker coming online'
+         WHERE id = ?`
+      : "UPDATE pi_commands SET dispatched_at = ? WHERE id = ?",
+  )
+    .bind(...(isReboot ? [nowIso(), nowIso(), pending.id] : [nowIso(), pending.id]))
     .run();
 
   return c.json({ ok: true, command: { id: pending.id, name: pending.command } });
@@ -469,6 +497,11 @@ app.get("/api/now", requireSession, async (c) => {
       i_am_dj: play.user_id === userId,
       vote_window_open: open,
       vote_closes_at: new Date(voteWindowClosesAt(play)).toISOString(),
+      // 'paused' freezes the progress bar. Without this the client
+      // interpolates from started_at against the wall clock and counts
+      // straight through a pause.
+      play_status: play.play_status ?? "playing",
+      played_ms: play.played_ms ?? null,
       my_vote: myVote?.value ?? null,
       // Deliberately absent while open: up/down counts. See spec 6.3.
     },

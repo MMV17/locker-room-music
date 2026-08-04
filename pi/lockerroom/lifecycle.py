@@ -112,6 +112,29 @@ class SessionManager:
         self._store = store
         self._sessions: dict[str, Session] = {}
 
+    def open_play_state(self, at: datetime | None = None) -> dict[str, Any] | None:
+        """The play currently on the speaker, for the beacon to report.
+
+        The server needs this because the vote window would otherwise close on
+        wall-clock time: `started_at + duration + 30s` keeps ticking while
+        playback is paused, so pausing mid-song used to end voting on a song
+        still sitting on the speaker. Reporting the open play lets the server
+        hold the window open for as long as the Pi says the song is live.
+
+        `played_ms_at` excludes paused time, so this is true playback position
+        rather than elapsed wall clock.
+        """
+        moment = at or now()
+        for session in self._sessions.values():
+            play = session.current_play
+            if play is not None and play.created and not play.closed:
+                return {
+                    "id": play.id,
+                    "status": play.status,
+                    "played_ms": play.played_ms_at(moment),
+                }
+        return None
+
     # -- BluezWatcher.LifecycleSink protocol --------------------------------
 
     async def on_device_connected(self, device_path: str, mac: str, alias: str) -> None:

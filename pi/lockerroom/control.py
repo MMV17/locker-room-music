@@ -68,7 +68,9 @@ def _run(name: str) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-async def beacon_loop(config: Config, interval_s: float = 60.0) -> None:
+async def beacon_loop(
+    config: Config, sessions=None, interval_s: float = 60.0
+) -> None:
     """POST liveness, carry back the last result, pick up the next command."""
     pending_result: dict | None = None
 
@@ -83,6 +85,15 @@ async def beacon_loop(config: Config, interval_s: float = 60.0) -> None:
                     "speaker_name": config.speaker_name,
                     "at": datetime.now(timezone.utc).isoformat(),
                 }
+                # Tell the server the song is still live so it does not close
+                # the vote window on a paused track. See open_play_state().
+                if sessions is not None:
+                    try:
+                        state = sessions.open_play_state()
+                        if state is not None:
+                            payload["current_play"] = state
+                    except Exception:
+                        log.exception("could not read open play state")
                 if pending_result is not None:
                     payload["result"] = pending_result
 

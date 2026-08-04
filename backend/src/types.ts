@@ -25,6 +25,8 @@ export interface PlayRow {
   played_ms: number | null;
   counted: number;
   voided: number;
+  keepalive_at?: string | null;
+  play_status?: string | null;
 }
 
 export interface TrackRow {

@@ -248,6 +248,18 @@ APIMISS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/definitely-not-a-rou
 [ "$APIMISS" = "404" ] && ok "unknown /api path is a JSON 404, not the shell" || bad "api 404" "got $APIMISS"
 
 echo "== pi remote control =="
+# Local D1 persists between runs and only one command may be outstanding at a
+# time, so a command left un-reported by a previous run would block every
+# assertion below. Drain it through the same API the Pi uses.
+for _ in 1 2 3; do
+  LEFTOVER=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+    -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}')
+  LEFT_ID=$(echo "$LEFTOVER" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$LEFT_ID" ] && break
+  curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+    -H 'content-type: application/json' \
+    -d "{\"speaker_name\":\"Locker Room Speaker\",\"result\":{\"id\":\"$LEFT_ID\",\"ok\":true,\"output\":\"drained by e2e setup\"}}" > /dev/null
+done
 # The allowlist is what stops this being remote code execution on a device in
 # a locker room, so it is asserted at the API boundary, not just on the Pi.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
@@ -291,6 +303,28 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/comman
   -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
   -d '{"command":"reboot"}')
 [ "$code" = "200" ] && ok "queueing works again once the last one completed" || bad "requeue" "got $code"
+
+# reboot is fire-and-forget: the Pi is killed before it can report a result.
+# It used to sit dispatched-but-never-completed forever, and the
+# one-outstanding-at-a-time rule then blocked every future command - so a
+# single reboot permanently wedged remote control.
+# The previous assertion left a reboot queued; collect it so this block starts
+# from a clean queue.
+curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null
+
+RB_ID=$(curl -s -X POST "$BASE/api/admin/pi/commands" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"command":"reboot"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$RB_ID" ] && ok "queued a reboot" || bad "queue reboot" "no id"
+
+curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"command":"report-status"}')
+[ "$code" = "200" ] && ok "a dispatched reboot does not wedge the queue" || bad "reboot wedge" "got $code"
 
 echo "== heartbeat =="
 curl -s -X POST "$BASE/api/heartbeat" -H "X-Device-Key: $DEVICE_KEY" \

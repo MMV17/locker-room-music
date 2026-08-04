@@ -47,7 +47,7 @@ async def async_main() -> None:
         drain_loop(cfg, store),
         # Liveness + remote control. Deliberately not routed through the
         # outbox: see the module docstring in control.py.
-        beacon_loop(cfg),
+        beacon_loop(cfg, session_manager),
     )
 
 

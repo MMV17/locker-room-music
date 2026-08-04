@@ -166,6 +166,14 @@ admin.post("/api/admin/votes/:id/void", async (c) => {
    queue, so a mistyped name fails loudly at the point of entry rather than
    sitting queued forever waiting for a Pi that will refuse it. */
 
+/**
+ * A dispatched command that has not reported back within this long is treated
+ * as finished for queueing purposes. `reboot` never reports - the Pi is gone
+ * before it can - so without this the first reboot would block every command
+ * that followed it.
+ */
+const STALE_DISPATCH_MS = 5 * 60_000;
+
 admin.get("/api/admin/pi/commands", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
@@ -182,9 +190,20 @@ admin.post("/api/admin/pi/commands", async (c) => {
 
   // One outstanding command at a time. Queueing three reboots because the
   // first appeared to do nothing would reboot the Pi three times.
+  //
+  // "Outstanding" excludes commands dispatched long ago and never reported.
+  // Without that escape hatch a Pi that died mid-command would block the
+  // queue forever - and `reboot` does exactly that every single time, because
+  // the process is killed before it can report back. One reboot used to
+  // wedge remote control permanently.
+  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
   const outstanding = await c.env.DB.prepare(
-    "SELECT id FROM pi_commands WHERE completed_at IS NULL",
-  ).first<{ id: string }>();
+    `SELECT id FROM pi_commands
+      WHERE completed_at IS NULL
+        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
+  )
+    .bind(staleCutoff)
+    .first<{ id: string }>();
   if (outstanding) {
     return c.json({ error: "A command is already queued or running" }, 409);
   }

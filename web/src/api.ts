@@ -75,6 +75,10 @@ export interface NowPlay {
   device: DeviceRef | null;
   i_am_dj: boolean;
   vote_window_open: boolean;
+  /** 'playing' | 'paused', from the Pi. Freezes the progress bar. */
+  play_status: string;
+  /** True playback position from the Pi, excluding paused time. */
+  played_ms: number | null;
   vote_closes_at: string;
   my_vote: 1 | -1 | null;
   /* No tallies here while the window is open. Spec 6.3 — the single most
