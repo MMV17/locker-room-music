@@ -300,6 +300,12 @@ repeat. Check `uptime` once you are in; it will show no reboots.
 # Watch the Pi live
 ssh pi@192.168.1.6 "sudo tail -f /var/log/lockerroom/listener.log"
 
+# Back up production D1 (spec 13). Writes outside the repo, verifies the dump
+# is usable, keeps 30. Restore instructions are in the script's footer - read
+# them before you need them. Time Travel (30 days) is the first thing to reach
+# for; this dump is for damage older than that.
+./backend/scripts/backup.sh
+
 # Backend unit tests (15)
 cd backend && npx vitest run
 

@@ -12,8 +12,22 @@ compatibility_date = "2024-12-18"
 # by SNI. That was wrong. The handshake failures were Cloudflare having no
 # certificate for a hostname that had not been successfully deployed yet.
 # Verified 2026-08-03 from campus wifi: workers.dev completes TLS normally.
+#
+# hc.auxgoat.com is the product hostname. The `hc` label is the school; a
+# second school gets its own label, its own Worker, and its own D1, and the
+# two never share a row. Nothing in src/ knows the string "hc" — team name and
+# colour come from the settings table, which is why /admin can change them —
+# so adding a school is a deploy, not a rewrite.
+#
+# lockerroom.finestkindfarms.com is KEPT DELIBERATELY. The Pi's config names
+# exactly one API host, there is no allowlisted command to change it, and over
+# HCGuest the Pi cannot be reached at all (TCP/22 is filtered). If the new
+# hostname ever fails to resolve and it were the only one, the Pi would go
+# dark and take the control channel with it — recoverable only by physically
+# standing next to it. A spare hostname costs nothing; do not remove this.
 workers_dev = true
 routes = [
+  { pattern = "hc.auxgoat.com", custom_domain = true },
   { pattern = "lockerroom.finestkindfarms.com", custom_domain = true }
 ]
 
