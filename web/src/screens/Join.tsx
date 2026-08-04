@@ -1,44 +1,52 @@
-import { useEffect, useState } from "react";
-import { ApiError, get, post } from "./../api";
-import type { RosterUser } from "./../api";
-import { Spinner } from "./../components";
+import { useState } from "react";
+import { ApiError, post } from "./../api";
 import { navigate } from "./../router";
 
 /**
- * Team code, then pick your name. No per-player secret by decision: it is a
- * locker room, everyone is on the same team, and a PIN is one more thing a
- * hundred teenagers can forget. Nothing behind this gate is worth more than
- * that trade.
+ * Team code, then your own name and number. No admin-curated roster and no
+ * per-player secret: it is a locker room, everyone is on the same team, and a
+ * PIN is one more thing a hundred teenagers can forget. Nothing behind this
+ * gate is worth more than that trade.
+ *
+ * Signing up with a name and number you have used before returns you to the
+ * SAME player rather than creating a second one, so clearing Safari's data or
+ * switching phones does not split your history.
  */
 export function Join({ teamName, onJoined }: { teamName: string; onJoined: () => void }) {
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"code" | "name">("code");
-  const [roster, setRoster] = useState<RosterUser[] | null>(null);
+  const [first, setFirst] = useState("");
+  const [last, setLast] = useState("");
+  const [jersey, setJersey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (step !== "name") return;
-    get<{ users: RosterUser[] }>("/api/roster")
-      .then((r) => setRoster(r.users))
-      .catch(() => setRoster([]));
-  }, [step]);
+  const ready = first.trim() !== "" && last.trim() !== "";
 
-  const join = async (userId: string) => {
+  const join = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ready || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await post("/api/session", { team_code: code.trim(), user_id: userId });
+      await post("/api/session", {
+        team_code: code.trim(),
+        first_name: first.trim(),
+        last_name: last.trim(),
+        jersey_number: jersey.trim() || null,
+      });
       navigate("/", true);
       onJoined();
-    } catch (e) {
+    } catch (err) {
       // The code is only checked here, so a wrong one surfaces at the very
-      // last step. Send them back rather than leaving them stuck on a list.
-      if (e instanceof ApiError && e.status === 403) {
+      // last step. Send them back rather than leaving them stuck on a form.
+      if (err instanceof ApiError && err.status === 403) {
         setStep("code");
         setError("That team code isn't right.");
-      } else if (e instanceof ApiError) {
-        setError(e.message);
+      } else if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError("Could not sign you in. Try again.");
       }
     } finally {
       setBusy(false);
@@ -78,32 +86,61 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
             Continue
           </button>
         </form>
-      ) : !roster ? (
-        <Spinner />
-      ) : roster.length === 0 ? (
-        <div className="empty">
-          <p className="empty-title">No roster yet</p>
-          Names appear here once a coach adds the team.
-        </div>
       ) : (
-        <>
-          <div className="rows">
-            {roster.map((u) => (
-              <button key={u.id} className="row" disabled={busy} onClick={() => join(u.id)}>
-                <span className="jersey">{u.jersey_number || u.name[0]}</span>
-                <span className="row-main">
-                  <span className="row-title">{u.name}</span>
-                  {u.position && <span className="row-sub">{u.position}</span>}
-                </span>
-              </button>
-            ))}
-          </div>
+        <form onSubmit={join}>
+          <label className="field">
+            <span className="t-label">First name</span>
+            <input
+              className="input"
+              value={first}
+              onChange={(e) => setFirst(e.target.value)}
+              autoCapitalize="words"
+              autoComplete="given-name"
+              autoCorrect="off"
+              autoFocus
+              aria-label="First name"
+            />
+          </label>
+
+          <label className="field">
+            <span className="t-label">Last name</span>
+            <input
+              className="input"
+              value={last}
+              onChange={(e) => setLast(e.target.value)}
+              autoCapitalize="words"
+              autoComplete="family-name"
+              autoCorrect="off"
+              aria-label="Last name"
+            />
+          </label>
+
+          <label className="field">
+            <span className="t-label">Number</span>
+            <input
+              className="input"
+              value={jersey}
+              onChange={(e) => setJersey(e.target.value)}
+              // Numeric keypad without type="number": jersey numbers are worn
+              // as "07" as often as "7", and a number input would eat the
+              // leading zero and add spinner arrows nobody wants here.
+              inputMode="numeric"
+              maxLength={3}
+              autoComplete="off"
+              aria-label="Jersey number"
+            />
+          </label>
+
+          <button className="btn is-primary is-block" disabled={!ready || busy}>
+            {busy ? "Signing in…" : "Start rating"}
+          </button>
+
           <div className="center">
-            <button className="btn-quiet" onClick={() => setStep("code")}>
+            <button type="button" className="btn-quiet" onClick={() => setStep("code")}>
               Back
             </button>
           </div>
-        </>
+        </form>
       )}
     </main>
   );

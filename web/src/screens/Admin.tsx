@@ -20,7 +20,8 @@ interface AdminUser {
   id: string;
   name: string;
   jersey_number: string | null;
-  position: string | null;
+  first_name: string;
+  last_name: string;
   active: number;
 }
 
@@ -237,9 +238,10 @@ function Appearance({ call }: { call: Call }) {
 
 function Roster({ call }: { call: Call }) {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
-  const [name, setName] = useState("");
+  const [first, setFirst] = useState("");
+  const [last, setLast] = useState("");
   const [jersey, setJersey] = useState("");
-  const [position, setPosition] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     call<{ users: AdminUser[] }>("/api/admin/users")
@@ -249,16 +251,28 @@ function Roster({ call }: { call: Call }) {
 
   useEffect(load, [load]);
 
+  // Players add themselves at signup; this is the fallback for the one who
+  // cannot. A duplicate name+number comes back 409 rather than quietly
+  // creating a second row.
   const add = async () => {
-    if (!name.trim()) return;
-    await call("/api/admin/users", {
-      method: "POST",
-      body: JSON.stringify({ name, jersey_number: jersey || null, position: position || null }),
-    });
-    setName("");
-    setJersey("");
-    setPosition("");
-    load();
+    if (!first.trim() || !last.trim()) return;
+    setError(null);
+    try {
+      await call("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          first_name: first,
+          last_name: last,
+          jersey_number: jersey || null,
+        }),
+      });
+      setFirst("");
+      setLast("");
+      setJersey("");
+      load();
+    } catch {
+      setError("That player already exists.");
+    }
   };
 
   const toggle = async (u: AdminUser) => {
@@ -271,29 +285,36 @@ function Roster({ call }: { call: Call }) {
 
   return (
     <Section title="Roster">
+      {error && <div className="banner is-bad">{error}</div>}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input
           className="input"
-          placeholder="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
+          placeholder="First name"
+          value={first}
+          onChange={(e) => setFirst(e.target.value)}
         />
         <input
           className="input"
-          placeholder="#"
-          value={jersey}
-          onChange={(e) => setJersey(e.target.value)}
-          style={{ width: 78 }}
+          placeholder="Last name"
+          value={last}
+          onChange={(e) => setLast(e.target.value)}
         />
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           className="input"
-          placeholder="Position"
-          value={position}
-          onChange={(e) => setPosition(e.target.value)}
+          placeholder="#"
+          value={jersey}
+          onChange={(e) => setJersey(e.target.value)}
+          inputMode="numeric"
+          maxLength={3}
+          style={{ width: 78 }}
         />
-        <button className="btn is-primary" onClick={add} disabled={!name.trim()}>
+        <button
+          className="btn is-primary"
+          onClick={add}
+          disabled={!first.trim() || !last.trim()}
+        >
           Add
         </button>
       </div>
@@ -309,7 +330,7 @@ function Roster({ call }: { call: Call }) {
                 <span className="row-title" style={{ opacity: u.active ? 1 : 0.5 }}>
                   {u.name}
                 </span>
-                <span className="row-sub">{u.position ?? "—"}</span>
+                <span className="row-sub">#{u.jersey_number ?? "—"}</span>
               </span>
               <button className="btn-quiet" onClick={() => toggle(u)}>
                 {u.active ? "Deactivate" : "Restore"}

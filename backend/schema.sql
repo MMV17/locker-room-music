@@ -1,10 +1,22 @@
 -- Locker Room Music schema (spec section 6.1).
 
+-- Players sign themselves up (team code + first name, last name, number).
+-- There is no admin-curated roster: the team code is the only gate, which is
+-- an accepted trade — see the comment on POST /api/session.
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,
-  name          TEXT NOT NULL,
+  first_name    TEXT NOT NULL,
+  last_name     TEXT NOT NULL,
   jersey_number TEXT,
-  position      TEXT,
+  -- normalize(first)|normalize(last)|normalize(jersey), matching trackKey.ts.
+  -- This is what makes a re-signup (cleared cookies, new phone, reinstalled
+  -- browser) find the existing player instead of silently creating a second
+  -- one and splitting their play history in half.
+  --
+  -- Jersey numbers may repeat across players by decision — a QB and a DB can
+  -- both wear 12 — so the number alone is deliberately NOT unique. The name
+  -- is what carries the identity here.
+  identity_key  TEXT NOT NULL UNIQUE,
   active        INTEGER NOT NULL DEFAULT 1,
   created_at    TEXT NOT NULL
 );

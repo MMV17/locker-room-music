@@ -15,11 +15,14 @@ FAIL=0
 ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $1"; echo "        $2"; FAIL=$((FAIL+1)); }
 
-echo "== setup: roster =="
-USER_ID=$(curl -s -X POST "$BASE/api/admin/users" \
-  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
-  -d '{"name":"Jake","jersey_number":"12","position":"WR"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-[ -n "$USER_ID" ] && ok "created player" || bad "created player" "no id returned"
+echo "== setup: player =="
+# Players sign themselves up now, so the fixture is a signup rather than an
+# admin insert. The last name carries the run suffix: identity_key is UNIQUE
+# and signup is idempotent on it, so a fixed name would silently reuse the
+# previous run's player along with their claimed device and play history.
+SUFFIX="$$-$(date +%s)"
+FIRST="Jake"
+LAST="Tester$SUFFIX"
 
 echo "== auth =="
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/now")
@@ -30,12 +33,28 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/plays" \
 [ "$code" = "401" ] && ok "play write without device key is rejected" || bad "play write without device key" "got $code"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" \
-  -H 'content-type: application/json' -d "{\"team_code\":\"wrong\",\"user_id\":\"$USER_ID\"}")
+  -H 'content-type: application/json' \
+  -d "{\"team_code\":\"wrong\",\"first_name\":\"$FIRST\",\"last_name\":\"$LAST\",\"jersey_number\":\"12\"}")
 [ "$code" = "403" ] && ok "wrong team code is rejected" || bad "wrong team code" "got $code"
 
-curl -s -c "$JAR" -X POST "$BASE/api/session" -H 'content-type: application/json' \
-  -d "{\"team_code\":\"$TEAM_CODE\",\"user_id\":\"$USER_ID\"}" > /dev/null
-grep -q lr_token "$JAR" && ok "session cookie issued" || bad "session cookie" "no cookie set"
+SIGNUP=$(curl -s -c "$JAR" -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"$FIRST\",\"last_name\":\"$LAST\",\"jersey_number\":\"12\"}")
+grep -q lr_token "$JAR" && ok "signup issues a session cookie" || bad "session cookie" "no cookie set"
+USER_ID=$(echo "$SIGNUP" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$USER_ID" ] && ok "signup created the player" || bad "signup created the player" "no id: $SIGNUP"
+
+# Idempotent on identity: the same name and number must return the SAME player,
+# or clearing cookies would split someone's history across two rows.
+JAR2="$(mktemp)"
+AGAIN=$(curl -s -c "$JAR2" -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"$FIRST\",\"last_name\":\"$LAST\",\"jersey_number\":\"12\"}")
+AGAIN_ID=$(echo "$AGAIN" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ "$AGAIN_ID" = "$USER_ID" ] && ok "re-signup returns the same player" || bad "re-signup" "$USER_ID vs $AGAIN_ID"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" \
+  -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"\",\"last_name\":\"\"}")
+[ "$code" = "400" ] && ok "signup requires a name" || bad "signup requires a name" "got $code"
 
 echo "== play ingest =="
 # Fixture ids are unique per run. They used to be hardcoded, which made the

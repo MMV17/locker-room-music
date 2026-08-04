@@ -71,7 +71,7 @@ boards.get("/api/leaderboard/djs", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT
        p.id AS play_id, p.user_id,
-       u.name, u.jersey_number,
+       TRIM(u.first_name || ' ' || u.last_name) AS name, u.jersey_number,
        SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
        SUM(CASE WHEN v.value = -1 THEN 1 ELSE 0 END) AS down
      FROM plays p
@@ -135,7 +135,7 @@ boards.get("/api/history", async (c) => {
     `SELECT
        p.id, p.started_at, p.ended_at, p.counted,
        t.title, t.artist, t.artwork_url, t.track_key,
-       u.name AS dj_name, u.jersey_number,
+       TRIM(u.first_name || ' ' || u.last_name) AS dj_name, u.jersey_number,
        SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
        SUM(CASE WHEN v.value = -1 THEN 1 ELSE 0 END) AS down
      FROM plays p

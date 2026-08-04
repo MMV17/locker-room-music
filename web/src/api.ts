@@ -100,9 +100,11 @@ export interface Results {
 
 export interface RosterUser {
   id: string;
+  /** Composed server-side from first_name + last_name. */
   name: string;
+  first_name: string;
+  last_name: string;
   jersey_number: string | null;
-  position: string | null;
 }
 
 export interface TrackEntry {

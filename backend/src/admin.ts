@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
+import { normalize } from "./trackKey";
 
 export const admin = new Hono<{ Bindings: Env }>();
 
@@ -7,51 +8,85 @@ const nowIso = () => new Date().toISOString();
 
 /* Roster CRUD */
 
+/** Must stay identical to the key built in POST /api/session. */
+const identityKey = (first: string, last: string, jersey: string | null) =>
+  `${normalize(first)}|${normalize(last)}|${normalize(jersey ?? "")}`;
+
 admin.get("/api/admin/users", async (c) => {
   const { results } = await c.env.DB.prepare(
-    "SELECT * FROM users ORDER BY name",
+    `SELECT *, TRIM(first_name || ' ' || last_name) AS name
+       FROM users ORDER BY last_name, first_name`,
   ).all();
   return c.json({ users: results });
 });
 
+/**
+ * Players normally sign themselves up; this stays for the one who cannot —
+ * a broken phone, a name the team code holder needs to fix.
+ */
 admin.post("/api/admin/users", async (c) => {
   const b = await c.req.json<{
-    name: string;
+    first_name: string;
+    last_name: string;
     jersey_number?: string;
-    position?: string;
   }>();
-  if (!b.name?.trim()) return c.json({ error: "name is required" }, 400);
+  const first = (b.first_name ?? "").trim();
+  const last = (b.last_name ?? "").trim();
+  if (!first || !last) {
+    return c.json({ error: "first_name and last_name are required" }, 400);
+  }
+  const jersey = (b.jersey_number ?? "").trim() || null;
 
   const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO users (id, name, jersey_number, position, active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+  const r = await c.env.DB.prepare(
+    `INSERT INTO users (id, first_name, last_name, jersey_number, identity_key, active, created_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(identity_key) DO NOTHING`,
   )
-    .bind(id, b.name.trim(), b.jersey_number ?? null, b.position ?? null, nowIso())
+    .bind(id, first, last, jersey, identityKey(first, last, jersey), nowIso())
     .run();
+  if (!r.meta.changes) return c.json({ error: "That player already exists" }, 409);
   return c.json({ ok: true, id });
 });
 
 admin.patch("/api/admin/users/:id", async (c) => {
   const b = await c.req.json<{
-    name?: string;
+    first_name?: string;
+    last_name?: string;
     jersey_number?: string;
-    position?: string;
     active?: boolean;
   }>();
+  const id = c.req.param("id");
+
+  const current = await c.env.DB.prepare(
+    "SELECT first_name, last_name, jersey_number FROM users WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ first_name: string; last_name: string; jersey_number: string | null }>();
+  if (!current) return c.json({ error: "Unknown player" }, 404);
+
+  // identity_key has to be recomputed here, not just stored once at signup.
+  // If an admin fixes a misspelled name and the key keeps the old spelling,
+  // that player's next sign-in matches nothing, creates a second row, and
+  // their play history silently splits in two.
+  const first = b.first_name?.trim() || current.first_name;
+  const last = b.last_name?.trim() || current.last_name;
+  const jersey =
+    b.jersey_number === undefined ? current.jersey_number : b.jersey_number.trim() || null;
+
   const r = await c.env.DB.prepare(
     `UPDATE users SET
-       name = COALESCE(?, name),
-       jersey_number = COALESCE(?, jersey_number),
-       position = COALESCE(?, position),
+       first_name = ?, last_name = ?, jersey_number = ?, identity_key = ?,
        active = COALESCE(?, active)
      WHERE id = ?`,
   )
     .bind(
-      b.name ?? null,
-      b.jersey_number ?? null,
-      b.position ?? null,
+      first,
+      last,
+      jersey,
+      identityKey(first, last, jersey),
       b.active === undefined ? null : b.active ? 1 : 0,
-      c.req.param("id"),
+      id,
     )
     .run();
   if (!r.meta.changes) return c.json({ error: "Unknown player" }, 404);
@@ -66,7 +101,7 @@ admin.patch("/api/admin/users/:id", async (c) => {
 admin.get("/api/admin/devices", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT d.mac_hash, d.mac_hint, d.alias, d.first_seen, d.claimed_at,
-            u.name AS owner_name,
+            TRIM(u.first_name || ' ' || u.last_name) AS owner_name,
             COUNT(p.id) AS plays
      FROM devices d
      LEFT JOIN users u ON u.id = d.user_id
@@ -81,7 +116,7 @@ admin.get("/api/admin/plays", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT p.id, p.started_at, p.counted, p.voided,
             t.title, t.artist,
-            u.name AS dj_name
+            TRIM(u.first_name || ' ' || u.last_name) AS dj_name
      FROM plays p
      JOIN tracks t ON t.id = p.track_id
      LEFT JOIN users u ON u.id = p.user_id

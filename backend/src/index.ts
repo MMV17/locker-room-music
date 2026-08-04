@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, PlayRow } from "./types";
 import { hashMac, macHint, hashToken, newToken, safeEqual, fallbackColor } from "./crypto";
-import { trackKey } from "./trackKey";
+import { trackKey, normalize } from "./trackKey";
 import { isVoteWindowOpen, voteWindowClosesAt } from "./voteWindow";
 import { trackScore } from "./scoring";
 import { lookupArtwork } from "./artwork";
@@ -205,17 +205,60 @@ app.post("/api/heartbeat", requireDeviceKey, async (c) => {
  * Session
  * ------------------------------------------------------------------ */
 
+/**
+ * Sign up / sign in. Players enter their own name and number behind the team
+ * code; there is no admin-curated roster.
+ *
+ * The trade this makes, stated plainly: the team code is the only gate, so
+ * anyone holding it can register under any name, including a teammate's. The
+ * admin screen can deactivate a bad row after the fact. That was accepted as
+ * the price of not making someone maintain a hundred-player roster by hand.
+ *
+ * Idempotent on identity. Re-running this with the same name and number
+ * returns the SAME user rather than making a new one — otherwise clearing
+ * cookies or switching phones would split a player's history across two rows
+ * and quietly halve their DJ score.
+ */
 app.post("/api/session", async (c) => {
-  const body = await c.req.json<{ team_code: string; user_id: string }>();
+  const body = await c.req.json<{
+    team_code: string;
+    first_name: string;
+    last_name: string;
+    jersey_number?: string;
+  }>();
   if (!safeEqual(body.team_code ?? "", c.env.TEAM_CODE)) {
     return c.json({ error: "Wrong team code" }, 403);
   }
-  const user = await c.env.DB.prepare(
-    "SELECT id, name FROM users WHERE id = ? AND active = 1",
+
+  const first = (body.first_name ?? "").trim();
+  const last = (body.last_name ?? "").trim();
+  const jersey = (body.jersey_number ?? "").trim();
+  if (!first || !last) {
+    return c.json({ error: "First and last name are required" }, 400);
+  }
+
+  const identityKey = `${normalize(first)}|${normalize(last)}|${normalize(jersey)}`;
+
+  await c.env.DB.prepare(
+    `INSERT INTO users (id, first_name, last_name, jersey_number, identity_key, active, created_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(identity_key) DO NOTHING`,
   )
-    .bind(body.user_id)
-    .first<{ id: string; name: string }>();
-  if (!user) return c.json({ error: "Unknown player" }, 404);
+    .bind(uuid(), first, last, jersey || null, identityKey, nowIso())
+    .run();
+
+  const user = await c.env.DB.prepare(
+    "SELECT id, first_name, last_name, active FROM users WHERE identity_key = ?",
+  )
+    .bind(identityKey)
+    .first<{ id: string; first_name: string; last_name: string; active: number }>();
+  if (!user) return c.json({ error: "Could not create player" }, 500);
+
+  // Deactivated by an admin — reactivating on a fresh signup would make the
+  // admin's only corrective tool useless.
+  if (!user.active) {
+    return c.json({ error: "This player has been removed by an admin" }, 403);
+  }
 
   const token = newToken();
   await c.env.DB.prepare(
@@ -231,12 +274,24 @@ app.post("/api/session", async (c) => {
     path: "/",
     maxAge: 60 * 60 * 24 * 365,
   });
-  return c.json({ ok: true, user: { id: user.id, name: user.name } });
+  return c.json({
+    ok: true,
+    user: { id: user.id, name: `${user.first_name} ${user.last_name}`.trim() },
+  });
 });
 
-app.get("/api/roster", async (c) => {
+/**
+ * Composed server-side so `name` stays the shape every consumer already
+ * expects — leaderboards, now-playing, and the claim list all read it.
+ *
+ * Session-gated: nothing on the join path needs it any more now that players
+ * type their own name, so there is no reason to let an unauthenticated caller
+ * enumerate the team.
+ */
+app.get("/api/roster", requireSession, async (c) => {
   const { results } = await c.env.DB.prepare(
-    "SELECT id, name, jersey_number, position FROM users WHERE active = 1 ORDER BY name",
+    `SELECT id, TRIM(first_name || ' ' || last_name) AS name, first_name, last_name, jersey_number
+       FROM users WHERE active = 1 ORDER BY last_name, first_name`,
   ).all();
   return c.json({ users: results });
 });
@@ -267,7 +322,7 @@ app.get("/api/now", requireSession, async (c) => {
     : false;
 
   const viewer = await c.env.DB.prepare(
-    "SELECT id, name, jersey_number FROM users WHERE id = ?",
+    "SELECT id, TRIM(first_name || ' ' || last_name) AS name, jersey_number FROM users WHERE id = ?",
   )
     .bind(userId)
     .first<{ id: string; name: string; jersey_number: string | null }>();
@@ -282,7 +337,7 @@ app.get("/api/now", requireSession, async (c) => {
 
   const dj = play.user_id
     ? await c.env.DB.prepare(
-        "SELECT id, name, jersey_number FROM users WHERE id = ?",
+        "SELECT id, TRIM(first_name || ' ' || last_name) AS name, jersey_number FROM users WHERE id = ?",
       )
         .bind(play.user_id)
         .first<any>()
