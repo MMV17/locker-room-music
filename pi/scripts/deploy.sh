@@ -13,6 +13,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 echo "Deploying to ${PI_HOST}..."
 scp -q -r "${REPO_ROOT}/pi/lockerroom" "${PI_HOST}:/tmp/lockerroom_pkg"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-listener.service" "${PI_HOST}:/tmp/lockerroom-listener.service"
+scp -q "${REPO_ROOT}/pi/systemd/lockerroom-netwatch.service" "${PI_HOST}:/tmp/lockerroom-netwatch.service"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -20,10 +21,15 @@ sudo rm -rf /opt/lockerroom/lockerroom
 sudo mv /tmp/lockerroom_pkg /opt/lockerroom/lockerroom
 sudo find /opt/lockerroom/lockerroom -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 sudo mv /tmp/lockerroom-listener.service /etc/systemd/system/lockerroom-listener.service
+sudo mv /tmp/lockerroom-netwatch.service /etc/systemd/system/lockerroom-netwatch.service
 sudo systemctl daemon-reload
 sudo systemctl restart lockerroom-listener
+# The watchdog is enabled as well as started: its whole job is to be running
+# after an unattended reboot, which is exactly when nobody is here to start it.
+sudo systemctl enable --now lockerroom-netwatch
 sleep 3
 systemctl is-active lockerroom-listener
+systemctl is-active lockerroom-netwatch
 REMOTE
 
 echo "Deployed."

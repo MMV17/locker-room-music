@@ -1,0 +1,22 @@
+[Unit]
+Description=Locker Room Music wifi egress watchdog (probe wlan0 -> bounce -> reboot)
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+# Deliberately NOT Requires=lockerroom-listener.service. The watchdog exists to
+# recover a box nobody can reach, so it must survive the listener being dead.
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lockerroom
+Environment=PYTHONPATH=/opt/lockerroom
+# System python3, not /opt/lockerroom/venv. The watchdog has no third-party
+# imports on purpose: a broken venv is one of the states it needs to run in.
+ExecStart=/usr/bin/python3 -m lockerroom.netwatch
+Restart=always
+RestartSec=10
+
+# Runs as root because it drives nmcli and can call systemctl reboot. The
+# command surface is a fixed set of argv lists in netwatch.py, never a shell.
+
+[Install]
+WantedBy=multi-user.target

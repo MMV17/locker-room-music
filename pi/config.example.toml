@@ -6,3 +6,18 @@ speaker_name = "Locker Room Speaker"
 sync_interval_s = 15
 db_path = "/var/lib/lockerroom/lockerroom.db"
 log_path = "/var/log/lockerroom/listener.log"
+
+# Wifi egress watchdog. Every key below is optional and shown at its default —
+# omit the whole table and the watchdog still runs, because the failure it
+# guards against (associated, has an IP, no actual egress) is silent.
+[netwatch]
+# enabled = true
+# interface = "wlan0"          # probes are bound to this, so a plugged-in
+#                              # ethernet cable cannot mask dead wifi
+# connection = ""              # nmcli connection name; "" = look it up live
+# probe_interval_s = 60
+# timeout_s = 10
+# bounce_after = 5             # ~5 min dead  -> nmcli down/up
+# restart_nm_after = 10        # ~10 min dead -> restart NetworkManager
+# reboot_after = 15            # ~15 min dead -> reboot
+# min_reboot_interval_s = 21600  # 6h, so a still-broken box cannot loop

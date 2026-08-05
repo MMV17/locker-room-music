@@ -281,9 +281,47 @@ a weekday evening. Separately the Pi was seen **associated with an IP but unable
 to reach its own gateway** — zombie wifi that a `nmcli` reconnect did not fix.
 A headless box sits in that state indefinitely.
 
-Not yet built: a watchdog that verifies real egress (not just association) and
-bounces the connection when it has been dead for a few minutes. Worth doing
-before the season if this recurs.
+**Built 2026-08-05 — `lockerroom-netwatch`.** See below.
+
+## The wifi egress watchdog (2026-08-05)
+
+`pi/lockerroom/netwatch.py`, running as `lockerroom-netwatch.service`, enabled
+so it comes back after an unattended reboot.
+
+Two design points carry the whole thing:
+
+- **The probe is bound to the wifi interface** (`curl --interface wlan0`). With
+  the ethernet cable in, the Pi prefers eth0 (metric 100 vs wlan0's 600), so an
+  unbound probe would leave over ethernet and cheerfully report healthy while
+  wifi was dead. Verified on hardware: bound to a down interface the probe
+  returns failure rather than falling back to the working route.
+- **A failure needs BOTH the Worker and a neutral host to be unreachable.** The
+  neutral host is `captive.apple.com`, deliberately not a Cloudflare property —
+  the Worker already sits behind Cloudflare, and one incident there must not be
+  able to reboot a speaker in a locker room. A Worker outage is someone else's
+  problem, not a reason to power-cycle.
+
+The ladder, on a 60s probe: **5 fails (~5 min) → bounce the connection; 10 →
+restart NetworkManager; 15 (~15 min) → reboot.** The reboot rung exists because
+the zombie state observed on 2026-08-04 *survived* an `nmcli` reconnect —
+without it this watchdog would have watched that outage and done nothing that
+helped. It is rate-limited to one reboot per 6 hours, persisted to
+`/var/lib/lockerroom/netwatch-state.json`, so a Pi that comes up still broken
+cannot loop. Past the top of the ladder it keeps retrying rather than giving up.
+
+Runs under **system `python3`, not the listener's venv**, and imports nothing
+third-party — a broken venv is one of the states it has to survive. It does not
+depend on `lockerroom-listener` either, for the same reason. Commands are argv
+lists, never a shell, matching the rule set by the pi control channel.
+
+Every knob is optional and lives under `[netwatch]` in `config.toml`; omit the
+table entirely and it still runs, because the failure it guards against is
+silent. 18 tests in `pi/tests/test_netwatch.py`, all pure — the ladder is
+testable without a Pi, a radio, or a fifteen-minute wait.
+
+```bash
+journalctl -u lockerroom-netwatch -f
+```
 
 ## Team code is now case-insensitive (2026-08-05)
 
@@ -488,15 +526,22 @@ dashes, so the history moved to
 `~/.claude/projects/-Users-mackvinton-Desktop-Home-Projects-locker-room-music-nosync/`.
 The pre-rename transcript is still at the old slug (same path minus `-nosync`).
 
-## The code has no second copy — unresolved
+## The code now has a second copy (2026-08-05)
 
-Leaving iCloud removed the only offsite copy this repo had. There is **no git
-remote** (`git remote -v` is empty) and **no Time Machine destination**
-(`tmutil destinationinfo` → none). The working tree now exists on exactly one
-SSD.
+Leaving iCloud removed the only offsite copy this repo had, so the code went to
+GitHub: **`git@github.com:MMV17/locker-room-music.git`, private**. Both `main`
+and `phase5-voting-site` are pushed.
 
-That is a worse story than the D1 data, which has two backup paths. A private
-GitHub remote or a Time Machine target would fix it; neither is set up yet.
+Commits are authored as `Mack Vinton <MMV17@users.noreply.github.com>`, set
+**repo-local** — git could not auto-detect an identity once the hostname
+started resolving as `Mac.(none)`, and the noreply address keeps a real email
+out of permanent history. Other repos on this machine still have no identity
+set and will hit the same wall.
+
+Still **no Time Machine destination** (`tmutil destinationinfo` → none). Git
+covers the source; it does not cover `backend/.secrets.local`, which is
+gitignored and remains the only copy of `MAC_SALT`. That one still needs to
+live somewhere off this laptop.
 
 ## Reaching the Pi
 
