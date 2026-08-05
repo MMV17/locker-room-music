@@ -429,6 +429,44 @@ ENERGY NEVER DIES)*. Both exact, both 200 image/jpeg.
 `{"all":true}` redoes every track, which is what a matcher improvement needs,
 since spec 6.4 caches a bad result as permanently as a good one.
 
+## Why the site felt laggy (2026-08-05)
+
+Reported as "sooo laggy", with pauses not matching the phone and skips
+arriving late. Measured first: the network is **not** the problem (105 ms
+round trip to the Worker), assets are small (175 KB JS, 32 KB font), the
+progress bar already ticks locally every second, and votes were already
+optimistic. So none of the obvious suspects.
+
+The real cause was **the beacon running at a flat 60 s**. It is the only way
+the server learns a song was paused, resumed or skipped:
+
+| step | was | now |
+|---|---|---|
+| Pi notices (AVRCP) | instant | instant |
+| Pi tells the server | **up to 60 s** | **~1 s** |
+| phone polls `/api/now` | up to 10 s | up to 10 s |
+| **total** | **up to 70 s** | **~5–11 s** |
+
+`beacon_loop` now waits in one-second steps and breaks early when
+`play_signature()` changes — song id or play status. `open_play_state()` is an
+in-memory read, so watching it costs nothing, and only a real change triggers
+an extra request. Between changes it settles at 10 s while playing and 60 s
+when idle. Position is deliberately excluded from the signature: it moves
+every millisecond and would make a busy loop.
+
+**Spec 8's 10-second floor on the now-playing poll was NOT changed.** That rule
+is about per-player cost and multiplies by everyone in the room. The beacon is
+one device, so its cost is fixed however many people are voting.
+
+Separately, `sync_interval_s` went **15 s → 5 s**. A *new* song reaches the
+site through the outbox, not the beacon, so that interval was the "skips are
+late" term. It is free when idle — a drain pass with an empty outbox makes no
+network call.
+
+Still bounded below by the 10 s poll, so ~5–11 s is the floor for a phone to
+notice anything. Going lower means changing spec 8, which is a cost decision,
+not a technical one.
+
 ## Deploys take up to ~2 minutes to propagate
 
 Measured 2026-08-05: a `wrangler deploy` reporting success was still serving

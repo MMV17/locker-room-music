@@ -3,7 +3,10 @@
 api_base_url = "https://locker-room-music.example.workers.dev"
 device_key = "REPLACE_ME"
 speaker_name = "Locker Room Speaker"
-sync_interval_s = 15
+# How often the outbox drains. This is how quickly a NEW song reaches the
+# site, so it is felt directly as "skips are late". Costs nothing when idle:
+# a drain pass with an empty outbox makes no network call at all.
+sync_interval_s = 5
 db_path = "/var/lib/lockerroom/lockerroom.db"
 log_path = "/var/log/lockerroom/listener.log"
 

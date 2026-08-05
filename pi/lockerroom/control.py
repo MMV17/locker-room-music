@@ -68,10 +68,49 @@ def _run(name: str) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
+def play_signature(sessions) -> tuple | None:
+    """
+    The part of the open play that the site *renders*: which song, and whether
+    it is playing. Position is excluded on purpose — it changes every
+    millisecond, and beaconing on that would be a busy loop.
+    """
+    if sessions is None:
+        return None
+    try:
+        state = sessions.open_play_state()
+    except Exception:
+        log.exception("could not read open play state")
+        return None
+    if state is None:
+        return None
+    return (state.get("id"), state.get("status"))
+
+
 async def beacon_loop(
-    config: Config, sessions=None, interval_s: float = 60.0
+    config: Config,
+    sessions=None,
+    interval_s: float = 60.0,
+    active_interval_s: float = 10.0,
+    watch_interval_s: float = 1.0,
 ) -> None:
-    """POST liveness, carry back the last result, pick up the next command."""
+    """
+    POST liveness, carry back the last result, pick up the next command.
+
+    Cadence matters more than it looks. This beacon is the ONLY way the server
+    learns that a song was paused, resumed, or changed, and at a flat 60s a
+    pause took up to a minute to reach the server and another poll interval to
+    reach a phone — well over a minute of the site disagreeing with the music
+    in the room, with the progress bar ticking on past a paused track.
+
+    So the wait is interruptible. `open_play_state()` is an in-memory read, so
+    checking it every second costs nothing, and a real change beacons at once.
+    Between changes the loop settles to `active_interval_s` while something is
+    playing and `interval_s` when the speaker is idle.
+
+    This does NOT touch spec 8's 10-second floor on the now-playing poll. That
+    rule is about per-player cost and multiplies by everyone in the room; this
+    is one device, so its cost is fixed no matter how many people are voting.
+    """
     pending_result: dict | None = None
 
     async with httpx.AsyncClient(
@@ -125,4 +164,16 @@ async def beacon_loop(
             except Exception:
                 log.exception("beacon loop failed unexpectedly")
 
-            await asyncio.sleep(interval_s)
+            # Wait, but wake early if what the site shows has changed.
+            before = play_signature(sessions)
+            delay = active_interval_s if before is not None else interval_s
+            waited = 0.0
+            while waited < delay:
+                await asyncio.sleep(min(watch_interval_s, delay - waited))
+                waited += watch_interval_s
+                after = play_signature(sessions)
+                if after != before:
+                    # Paused, resumed, skipped, or a new song started. The room
+                    # can see it; the site should not be the last to know.
+                    log.debug("play state changed %s -> %s, beaconing", before, after)
+                    break
