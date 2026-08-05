@@ -1,10 +1,23 @@
 # Project state — resume here
 
-Last worked: **2026-08-04**. Spec is `docs/spec.md`.
+Last worked: **2026-08-05**. Spec is `docs/spec.md`. Repo lives at
+`~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
+deliberate, see "Why `.nosync`" below.
 
-**Live at `https://hc.auxgoat.com`.** All seven build-order phases are done and
-deployed. The product is beta-ready; what remains is real-session UX, not
-plumbing.
+**Live at `https://hc.auxgoat.com`** (reachable again as of 2026-08-05 — the
+campus filter block appears to have lapsed; `lockerroom.finestkindfarms.com` is
+still bound and is what the Pi points at). All seven build-order phases are done
+and deployed. Code is backed up to a **private GitHub repo**,
+`git@github.com:MMV17/locker-room-music.git`, branch `phase5-voting-site`.
+
+**2026-08-05 was the first day it met real use, and everything below the
+"first real UX walkthrough" heading came out of that.** The product now works
+end to end with real songs, real artwork and real voting. What remains is a
+session with actual teammates, not plumbing.
+
+**Deploys take up to ~2 minutes to propagate — verifying immediately after
+`wrangler deploy` tests the OLD worker.** This wasted real time twice; see the
+section on it below before concluding a fix failed.
 
 Build order status (spec section 10):
 
@@ -25,8 +38,8 @@ Build order status (spec section 10):
 | Thing | Value |
 |---|---|
 | Worker | `locker-room-music` |
-| **Use this URL** | `https://lockerroom.finestkindfarms.com` — the only one reachable on campus |
-| Product URL, **BLOCKED on campus** | `https://hc.auxgoat.com` — see "auxgoat.com is filtered" below |
+| Product URL | `https://hc.auxgoat.com` — **reachable again as of 2026-08-05**, the filter block appears to have lapsed. Re-test on campus before relying on it; see "auxgoat.com is filtered" below |
+| Always-worked fallback | `https://lockerroom.finestkindfarms.com` — what the Pi points at. Keep it bound |
 | Fallback | `https://locker-room-music.mmvinton17.workers.dev` — also unblocked |
 | Fallback URL | `https://locker-room-music.mmvinton17.workers.dev` |
 | D1 database | `lockerroom` / `d8e68dc0-5eab-42a3-b54c-441b1f79627c`, region ENAM |
@@ -74,21 +87,38 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Debug the real user experience.** Everything is deployed and the database is
-a clean slate on purpose, so the next session is about what it feels like on a
-phone in a locker room — not about infrastructure.
+**Run it with actual teammates.** 2026-08-05 closed out every bug a single
+person could find alone; what is left needs more than one phone in a room.
 
-Nothing has been exercised at scale: **zero votes have ever been cast**, no
-leaderboard has ever rendered with real data, and the results reveal has never
-fired for a real audience. Those are the untested paths.
+Still never exercised with a real audience, and the highest-value thing to do
+next:
 
-Open questions that only a real session answers:
+- **The results reveal has never fired for anyone.** It is the one moment the
+  product is built around and nobody has seen it land.
+- **No leaderboard has rendered from a real session's votes.** The AuxGoat card
+  and the damped scores have only ever been checked against seeded data.
+- **Vote volume is untested.** Production holds a handful of votes from one
+  person. The 7.5s poll is sized for 75 players × 2 hours; nothing has stressed
+  it.
 
-- Is the vote control actually usable one-handed, at arm's length, in 4
-  seconds (spec §9.1)?
-- Does the results reveal land as a moment, or go unnoticed?
-- What does the screen look like between songs, and when the speaker is off?
-- Does anything about the join flow confuse someone doing it once, fast?
+Answered on 2026-08-05, so do not re-litigate these:
+
+- *Is the vote control usable one-handed?* Yes — ~96px thumbs, low on screen,
+  optimistic fill. Checked at 393×852.
+- *What does the screen look like between songs and when the speaker is off?*
+  Both states exist and read correctly; "Speaker offline" is now unambiguous.
+- *Does the join flow confuse someone doing it once, fast?* It did, badly, in
+  three separate ways. All three are fixed — see the walkthrough section.
+
+### Smaller things still open
+
+- **Tab switches flash a spinner every time.** Songs/DJs/History refetch on
+  mount with no client cache, so going back and forth re-spins on data that is
+  seconds old. Measured but not fixed; the fix is keeping the last result and
+  revalidating behind it.
+- **No Time Machine destination.** Git covers the source now, but not
+  `backend/.secrets.local`. Mack confirmed `MAC_SALT` is saved off-laptop.
+- **`TEAM_CODE` is still `CRUSADERS`** and is still the only gate.
 
 ### Beta pre-flight — all closed as of 2026-08-04
 
@@ -857,31 +887,24 @@ a Google Fonts CDN link, because campus wifi is unpredictable and the type is
 the identity. `unicode-range` means the 15KB latin-ext subset only downloads if
 a track title actually needs it.
 
-### Header: the logo, and what "Live" meant (2026-08-05)
+### "Live" meant something much narrower than it sounded (2026-08-05)
 
-**"Live" is gone; it now reads "Speaker online / Speaker offline".** The old
-label was read as "music is playing", which it never meant. `speaker_online` is
-only whether the Pi has beaconed within three minutes — the box is powered up
-and has a network. It says nothing about a phone being connected over Bluetooth
-or anything coming out of the speaker. Playing/paused is its own line under the
-progress bar now, so the header can name its actual subject.
+**The header now reads "Speaker online / Speaker offline".** "Live" was being
+read as "music is playing", which it never meant. `speaker_online` is only
+whether the Pi has beaconed within three minutes — the box is powered up and
+has a network. It says nothing about a phone being connected over Bluetooth or
+about anything coming out of the speaker. Playing/paused is its own line under
+the progress bar now, so the header can name its actual subject.
 
-The **AuxGoat mark leads the header**, with the team name small underneath as
-secondary — the product is AuxGoat, the school is who is using it.
-
-The logo is cream and gold on solid black; **87% of the artwork is the black
-field**, measured. So it cannot be dropped onto the pale page, and the black
-cannot be knocked out either — what remains would be white marks invisible on
-white. It is presented as a dark rounded tile, which reads as a deliberate
-brand badge rather than an image that failed to composite. Source is
-`docs/AUXGOAT logo.png` (960×720 RGBA, transparent margin around a 688×688
-opaque square); `web/src/assets/auxgoat.png` is that square cropped to 256px.
-At 44px the wordmark inside the lockup was about 7px tall and unreadable — 54px
-is the smallest that still reads.
-
-`web/src/vite-env.d.ts` was added so `tsc` accepts the PNG import. Without it
-asset imports type-error, which is the first thing anyone adding an image will
-hit.
+**The AuxGoat logo was tried in the header and rejected by Mack. Do not
+re-add it.** Recorded because the constraint is real and someone will try
+again: the mark is cream and gold on solid black, and **87% of the artwork is
+that black field** (measured). It cannot sit on the pale page, and the black
+cannot be knocked out either — what survives is white marks, invisible on
+white. The only honest presentation is a dark tile, which was built, looked
+fine, and was still not wanted. `web/src/vite-env.d.ts` is left behind from
+that attempt: standard Vite boilerplate, costs nothing, and means the next
+image import will not type-error.
 
 ### Known: a tab that mounts while hidden shows a spinner until it is focused
 

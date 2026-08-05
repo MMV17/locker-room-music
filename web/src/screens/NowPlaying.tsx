@@ -5,7 +5,6 @@ import { Artwork, Empty, Spinner, formatClock } from "./../components";
 import { ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
-import auxgoatLogo from "./../assets/auxgoat.png";
 
 /**
  * Spec 8. Polling is still the only thing that could blow the request budget,
@@ -143,10 +142,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               Speaker {now?.speaker_online ? "online" : "offline"}
             </span>
           </span>
-          <span className="brand">
-            <img className="brand-mark" src={auxgoatLogo} alt="AuxGoat" />
-            <span className="t-label brand-team">{teamName}</span>
-          </span>
+          <span className="t-label">{teamName}</span>
           <button
             className="jersey is-sm"
             onClick={() => navigate("/join")}
