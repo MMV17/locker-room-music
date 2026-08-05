@@ -393,24 +393,127 @@ input {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 18px;
+  /* Tightened from 18px. Six gaps stack up on this screen, and the thumbs
+     were landing under the tab bar. See .np-art. */
+  gap: 13px;
 }
 
+/* Two rows, not one. The old header was a space-between flex row holding
+   status, team name and jersey — and space-between only centres its middle
+   item when the two flanking it happen to be the same width, which they never
+   are. "HOLY CROSS" sat 45px right of centre.
+
+   A single centred grid row fixes the maths but not the fit: "Speaker
+   offline" plus "Holy Cross" plus the jersey is wider than a 375px phone, and
+   a longer team name overruns even 393. Measured, they collided outright —
+   "SPEAKER OFFLINEHOLY CROSS".
+
+   Stacking is what actually holds up. The team name centres on its own line,
+   the status centres under it, and the jersey spans both on the right. It is
+   exact at every width and immune to team-name length — which matters,
+   because the name comes from the settings table and a second school could
+   have a much longer one. Costs 2px of height: the 30px jersey already set
+   the old row's height, and two 14px lines plus a 3px gap is 31.
+
+   minmax(0, ...) on all three columns, not auto: a track refuses to go below
+   its content's min-width by default, so a long string would widen its column
+   and shove the centre off again — the exact bug this replaces. */
 .np-head {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  grid-template-rows: auto auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 3px 8px;
+}
+
+.np-head-team {
+  grid-area: 1 / 2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Spans the full width rather than sitting in a column, so it centres on the
+   screen and not on whatever the columns worked out to. */
+.np-head > .status {
+  grid-area: 2 / 1 / 3 / -1;
+  justify-self: center;
+}
+
+.np-head > .jersey {
+  grid-area: 1 / 3 / 3 / 4;
+  justify-self: end;
+  align-self: center;
+}
+
+/* One step quieter than the body labels. Both lines here are captions; the
+   team name keeps the emphasis by being on top, not by being louder. nowrap
+   because a wrapped "SPEAKER / ONLINE" was the first thing that went wrong
+   when the header got tighter. */
+.np-head .t-label {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  white-space: nowrap;
 }
 
 .np-art {
-  width: min(62vw, 268px);
+  /* The svh term is what makes the page fit. Width alone cannot know how much
+     vertical room is left, so on a short viewport the art kept its 62vw and
+     pushed the thumbs off the bottom. Height-relative, it gives up exactly the
+     space that is scarce, and on a tall phone the vw cap still governs. */
+  width: min(58vw, 244px, 29svh);
   aspect-ratio: 1;
   border-radius: var(--r-art);
   box-shadow: var(--shadow-lift);
   object-fit: cover;
   display: block;
+}
+
+/* Short viewports — an iPhone SE at 375x667, or any small phone once Safari's
+   URL bar is showing. Shrinking only the artwork is not enough there: what
+   does not fit is the fixed furniture, so all of it gives a little. Measured
+   at 375x667 the thumbs sat 33px behind the tab bar; with this they clear it
+   by 58px and nothing scrolls.
+
+   Below roughly 600px of height it does scroll again, and that is the right
+   answer — there is no honest way to fit artwork, three lines of metadata, a
+   DJ chip, a progress bar, a status line and two 84px targets into less. */
+@media (max-height: 700px) {
+  .np {
+    gap: 10px;
+  }
+
+  .np-art {
+    width: min(46vw, 184px, 27svh);
+  }
+
+  .t-title {
+    font-size: 21px;
+  }
+
+  .t-sub {
+    font-size: 14px;
+  }
+
+  .np-album {
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  .dj-chip {
+    padding: 5px 12px 5px 5px;
+  }
+
+  .vote {
+    width: 84px;
+    height: 84px;
+  }
+
+  .vote svg {
+    width: 34px;
+    height: 34px;
+  }
 }
 
 .np-meta {
@@ -507,14 +610,17 @@ input {
 
 .votes {
   display: flex;
-  gap: 26px;
+  gap: 22px;
   justify-content: center;
-  padding: 6px 0 2px;
+  padding: 2px 0 0;
 }
 
+/* 96px, down from 104. Spec 9.1 wants these huge and they still are — the
+   floor is Apple's 44pt touch target and this is more than double it. A
+   control you have to scroll to reach is worse than one 8px smaller. */
 .vote {
-  width: 104px;
-  height: 104px;
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
   background: var(--surface);
   box-shadow: var(--shadow);
@@ -559,7 +665,7 @@ input {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 6px;
   min-height: 18px;
 }
 

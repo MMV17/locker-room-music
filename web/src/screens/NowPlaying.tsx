@@ -142,7 +142,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               Speaker {now?.speaker_online ? "online" : "offline"}
             </span>
           </span>
-          <span className="t-label">{teamName}</span>
+          <span className="t-label np-head-team">{teamName}</span>
           <button
             className="jersey is-sm"
             onClick={() => navigate("/join")}

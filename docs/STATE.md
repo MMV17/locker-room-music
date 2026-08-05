@@ -979,6 +979,16 @@ network loss recorded earlier in this file, but the journal does not reach back
 that far and there is nothing to recover them from. Reconstructing them would
 be fabrication.
 
+### Verified on real hardware, 2026-08-05
+
+Eight plays, three pauses. All eight carry an `ended_at`. No duplicate pairs.
+Two `pause_timeout` closes reached D1 — the exact case that used to vanish.
+One pause-then-resume stayed a single play. **Zero `transport_idle` closes:
+the 5s grace absorbed every one of them**, which is the whole point. The site
+showed **PAUSED** with the bar frozen at 0:18 against a `played_ms` of 18465.
+
+`docs/` also holds the pre-fix evidence if any of this ever regresses.
+
 ### The bar also ran past the end of the song
 
 Client-side, and separate: `useElapsed` froze on `paused` but not on
@@ -1046,6 +1056,52 @@ image import will not type-error.
 recovers on `visibilitychange`, so a real user never sees it — they are looking
 at the page. It bit repeatedly while screenshotting in automation, where the
 window is unfocused. Worth knowing before mistaking it for a broken build.
+
+### The header, and getting the thumbs above the fold (2026-08-05)
+
+Two complaints, one screenshot: the top row looked messy, and the vote buttons
+sat behind the tab bar.
+
+**The header was a `space-between` flex row** holding status, team name and
+jersey. That only centres the middle item when the two flanking it are the
+same width, which they never are — "HOLY CROSS" measured **45px right of
+centre**. A single centred grid row fixes the arithmetic but not the fit:
+"Speaker offline" + "Holy Cross" + jersey is wider than a 375px phone, and a
+longer team name overruns even 393. It collided outright:
+`SPEAKER OFFLINEHOLY CROSS`.
+
+**It is two rows now.** Team name centred on its own line, status centred
+under it, jersey spanning both on the right. Exact at every width and immune
+to team-name length — which matters, because the name comes from the settings
+table and a second school could have a much longer one. It costs 2px: the
+30px jersey already set the old row's height.
+
+**For the fold**, the artwork gained an `svh` term. Width alone cannot know
+how much vertical room is left, so on a short viewport the art kept its 62vw
+and pushed the thumbs off the bottom. Height-relative it yields exactly the
+scarce dimension. Plus a `max-height: 700px` query that tightens *everything*
+— on an SE the problem is the sum of the furniture, not the art alone.
+
+Measured clearance from the thumbs to the tab bar, nothing scrolling:
+
+| viewport | before | after |
+|---|---|---|
+| 393×852 | fits | 142px |
+| 393×740 (Safari chrome showing) | behind the bar | 43px |
+| 375×667 (iPhone SE) | 33px behind | 38px |
+| 360×780 (Pixel) | behind the bar | 89px |
+| 430×932 | fits | 206px |
+
+Below ~600px of height it scrolls again, and that is the honest answer —
+artwork, three metadata lines, a DJ chip, a progress bar, a status line and
+two 84px targets do not fit in less.
+
+**How this was measured.** Not by eye: a static harness reproducing the
+NowPlaying DOM against the built CSS, loaded into fixed-size iframes, printing
+the centre offset and the thumb-to-tabbar clearance at each size. Auth-free,
+so it iterates in seconds. `.vote` also came down 104px → 96px; the floor is
+Apple's 44pt touch target and this is still more than double it. A control you
+have to scroll to reach is worse than one 8px smaller.
 
 ### Playback state and the voting countdown (2026-08-05)
 
