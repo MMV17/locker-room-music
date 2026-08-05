@@ -4,10 +4,16 @@ import "@fontsource-variable/outfit";
 import "./styles.css";
 import { App } from "./App";
 import { applyTheme, cachedTheme } from "./theme";
+import { watchForStaleBuild } from "./staleBuild";
 
 // Paint in team colours on the very first frame. The network copy lands a
 // moment later in App and overwrites this if the admin has changed it.
 applyTheme(cachedTheme());
+
+// A tab left open across a deploy is running a bundle the server no longer
+// has, and unknown asset paths come back as index.html with a 200 — so it
+// would try to execute HTML as JavaScript. Reload once instead.
+watchForStaleBuild();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -3,10 +3,49 @@ import type { Env } from "./types";
 import { normalize } from "./trackKey";
 import { PI_COMMANDS, isPiCommand } from "./piControl";
 import { runBackup, listBackups } from "./backup";
+import { lookupArtwork } from "./artwork";
 
 export const admin = new Hono<{ Bindings: Env }>();
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * Re-run artwork lookup for tracks that came back empty.
+ *
+ * Artwork is cached forever per spec 6.4, which is right — but it means a
+ * track that failed once shows a colour block for the rest of the season even
+ * after the cause is fixed. "Imma Be" resolved to nothing because the artist
+ * matcher could not see past a leading "The"; without this, fixing the matcher
+ * would not have healed the row it broke.
+ *
+ * Only retries `artwork_state = 'none'`. A track that already has a cover is
+ * left alone, so this can never churn a good result into a worse one.
+ */
+admin.post("/api/admin/artwork/retry", async (c) => {
+  // `all` redoes tracks that already have a cover too. Needed after the
+  // matcher itself improves: "Imma Be" was state='found' pointing at a
+  // compilation, which no amount of retrying the failures would have fixed.
+  const body = await c.req
+    .json<{ all?: boolean }>()
+    .catch((): { all?: boolean } => ({}));
+  const { results } = await c.env.DB.prepare(
+    body.all
+      ? `SELECT id, title, artist, album FROM tracks`
+      : `SELECT id, title, artist, album FROM tracks WHERE artwork_state = 'none'`,
+  ).all<{ id: string; title: string; artist: string | null; album: string | null }>();
+
+  let found = 0;
+  for (const t of results) {
+    await lookupArtwork(c.env, t.id, t.title, t.artist ?? "", t.album);
+    const after = await c.env.DB.prepare(
+      "SELECT artwork_state FROM tracks WHERE id = ?",
+    )
+      .bind(t.id)
+      .first<{ artwork_state: string }>();
+    if (after?.artwork_state === "found") found++;
+  }
+  return c.json({ retried: results.length, found });
+});
 
 /* Roster CRUD */
 

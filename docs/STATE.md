@@ -398,6 +398,48 @@ Not yet addressed, seen on the same pass:
 - The **NUMBER field is unlabelled as optional** even though `ready` only
   requires first and last name.
 
+## Artwork: search BY album, don't just rank by it (2026-08-05)
+
+"Imma Be" showed a colour block, then the wrong cover. Two separate faults,
+both now fixed, and between them they undo the pessimism in the Artwork
+section above — the album hint does work, it was just being applied too late.
+
+**The artist filter could not see past a leading "The".** AVRCP reported
+`Black Eyed Peas`; Deezer lists `The Black Eyed Peas`. `pick()` required an
+exact match after `normalize()`, which does not strip articles, so all four
+correct results were discarded and the track cached as `none` forever.
+`artistKey()` now drops a leading article on both sides. That is the **only**
+loosening — matching on "contains" or a prefix would let *Lullaby Versions of
+Paramore* back in, which is what the filter exists to stop.
+
+**The album was only used for ranking, never for searching.** Filtering after
+the fact cannot help when the right release is not in the results at all:
+`artist + track` for "Imma Be" returns a best-of and three remixes, and none of
+them is THE E.N.D. So ranking could only pick the least wrong one — a
+compilation cover. `fromDeezer` now puts the album **in the query**
+(`album:"…"`), which returns exactly one result: the correct release. It falls
+back to the wider artist+track search when the album is absent or the catalogue
+spells it differently, because a compilation cover still beats a colour block.
+
+Verified in production, comparing stored cover hashes against Deezer:
+`POWER` → *My Beautiful Dark Twisted Fantasy*, `Imma Be` → *THE E.N.D. (THE
+ENERGY NEVER DIES)*. Both exact, both 200 image/jpeg.
+
+`POST /api/admin/artwork/retry` re-runs lookup for tracks stuck on `none`;
+`{"all":true}` redoes every track, which is what a matcher improvement needs,
+since spec 6.4 caches a bad result as permanently as a good one.
+
+## Deploys take up to ~2 minutes to propagate
+
+Measured 2026-08-05: a `wrangler deploy` reporting success was still serving
+the previous code 80 seconds later, and only flipped at ~100s. An earlier probe
+during the same window returned a mix of new 204s and stale 404s from
+successive requests to the same URL.
+
+**So a verification run immediately after a deploy tests the OLD worker.** Two
+different bugs looked real for several minutes because of this. Wait ~2 minutes,
+or poll for a known new behaviour before concluding anything.
+
 ## Known issues, not yet addressed
 
 **~~Heartbeats dominate the outbox.~~ FIXED 2026-08-04.** It peaked at 98.5%

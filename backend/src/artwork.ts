@@ -42,6 +42,23 @@ export async function lookupArtwork(
 type Candidate = { artist: string; album: string; art: string | null };
 
 /**
+ * Artist name reduced to what two catalogues can be expected to agree on.
+ *
+ * A leading article is the one difference that is never meaningful and is
+ * routinely disagreed about: AVRCP reported "Black Eyed Peas" while Deezer
+ * lists "The Black Eyed Peas", so an exact match dropped all four correct
+ * results and the song showed a colour block for the rest of the season.
+ * Same trap for The Weeknd, The Killers, The Strokes.
+ *
+ * Deliberately the ONLY loosening. Matching on "contains" or on a prefix
+ * would let *Lullaby Versions of Paramore* and *Karaoke Night* back in, which
+ * is the exact failure the artist filter was added to prevent.
+ */
+function artistKey(value: string | null | undefined): string {
+  return normalize(value).replace(/^the\s+/, "");
+}
+
+/**
  * Pick the best candidate: the artist must match, and among those an album
  * matching what the phone reported wins. Falls back to the provider's own
  * ranking, which is a reasonable "most popular release" proxy.
@@ -49,12 +66,16 @@ type Candidate = { artist: string; album: string; art: string | null };
  * Returning null rather than a weak match is deliberate — the colour block
  * is a better outcome than confidently showing the wrong cover.
  */
-function pick(candidates: Candidate[], artist: string, album?: string | null): string | null {
-  const wantArtist = normalize(artist);
+export function pick(
+  candidates: Candidate[],
+  artist: string,
+  album?: string | null,
+): string | null {
+  const wantArtist = artistKey(artist);
   const wantAlbum = normalize(album);
 
   const byArtist = wantArtist
-    ? candidates.filter((c) => normalize(c.artist) === wantArtist)
+    ? candidates.filter((c) => artistKey(c.artist) === wantArtist)
     : candidates;
   if (!byArtist.length) return null;
 
@@ -65,21 +86,14 @@ function pick(candidates: Candidate[], artist: string, album?: string | null): s
   return byArtist.find((c) => c.art)?.art ?? null;
 }
 
-async function fromDeezer(
-  title: string,
+/** Quotes delimit fields in Deezer's query language — a stray one widens the search. */
+const field = (name: string, value: string) => `${name}:"${value.replace(/"/g, "")}"`;
+
+async function deezerSearch(
+  q: string,
   artist: string,
   album?: string | null,
 ): Promise<string | null> {
-  // Quotes are the field delimiter in Deezer's query language, so a title
-  // containing one would break out of the scope and silently widen the search.
-  const q = [
-    artist ? `artist:"${artist.replace(/"/g, "")}"` : "",
-    title ? `track:"${title.replace(/"/g, "")}"` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  if (!q) return null;
-
   try {
     const res = await fetch(
       "https://api.deezer.com/search?limit=10&q=" + encodeURIComponent(q),
@@ -101,6 +115,37 @@ async function fromDeezer(
   } catch {
     return null;
   }
+}
+
+async function fromDeezer(
+  title: string,
+  artist: string,
+  album?: string | null,
+): Promise<string | null> {
+  const artistQ = artist ? field("artist", artist) : "";
+  const titleQ = title ? field("track", title) : "";
+  const base = [artistQ, titleQ].filter(Boolean).join(" ");
+  if (!base) return null;
+
+  // Ask for the album the phone reported, FIRST and as part of the query.
+  //
+  // Filtering by album after the fact is not enough: a popular song's top
+  // results are compilations and remix EPs, and the original release may not
+  // be in them at all. "Imma Be" searched by artist+track returns four rows —
+  // a best-of and three remixes — and none of them is THE E.N.D., so ranking
+  // could only ever pick the least wrong one. Scoping the query by album
+  // returns exactly the right release.
+  //
+  // AVRCP gives us the album the DJ is actually playing from, which is the
+  // whole reason it is worth passing down here.
+  if (album) {
+    const scoped = await deezerSearch(`${base} ${field("album", album)}`, artist, album);
+    if (scoped) return scoped;
+  }
+
+  // No album, or the catalogue spells it differently. Fall back to the wider
+  // search rather than giving up — a compilation cover beats a colour block.
+  return deezerSearch(base, artist, album);
 }
 
 async function fromItunes(
