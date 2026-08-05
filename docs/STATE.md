@@ -25,8 +25,9 @@ Build order status (spec section 10):
 | Thing | Value |
 |---|---|
 | Worker | `locker-room-music` |
-| Primary URL | `https://hc.auxgoat.com` (`hc` = the school; see wrangler.toml) |
-| Old URL, kept | `https://lockerroom.finestkindfarms.com` — the Pi's fallback, do not remove |
+| **Use this URL** | `https://lockerroom.finestkindfarms.com` — the only one reachable on campus |
+| Product URL, **BLOCKED on campus** | `https://hc.auxgoat.com` — see "auxgoat.com is filtered" below |
+| Fallback | `https://locker-room-music.mmvinton17.workers.dev` — also unblocked |
 | Fallback URL | `https://locker-room-music.mmvinton17.workers.dev` |
 | D1 database | `lockerroom` / `d8e68dc0-5eab-42a3-b54c-441b1f79627c`, region ENAM |
 | Cloudflare account | `7db3c13ee0073570030cac33d8c9f0dc` |
@@ -229,6 +230,60 @@ content.
 `SHA-256(mac + salt)`, so restoring against a different salt orphans every
 claim and every DJ attribution. It exists only in `backend/.secrets.local`.
 Back it up separately, off this laptop.
+
+## auxgoat.com is filtered on the school network (2026-08-04)
+
+**The product domain is unusable on campus.** `hc.auxgoat.com` and
+`auxgoat.com` are blocked by the school's web filter **by SNI** — the same
+mechanism that blocks Tailscale. Measured: DNS resolves correctly to the right
+Cloudflare IPs, TCP connects, then the TLS handshake dies with `no peer
+certificate available`. Meanwhile github.com and captive.apple.com return 200
+from the same machine, and `lockerroom.finestkindfarms.com` and the
+`workers.dev` host both return 200.
+
+Almost certainly because the domain was registered that morning — filters
+routinely block newly-registered, uncategorised domains. It worked for about
+4½ hours after cutover, then the filter caught up.
+
+**The Pi has been reverted to `lockerroom.finestkindfarms.com`** and is beaconing
+normally. Keeping that hostname bound is what made the recovery a one-line
+config change instead of a trip to the school; do not remove it.
+
+To fix: ask IT which filter they run (Lightspeed, Securly, GoGuardian, Cisco
+Umbrella are the usual ones) and file a recategorisation request. New-domain
+blocks often lapse in a week or two, but that is not something to plan a
+season around.
+
+**This is structural, not a one-off.** Any future school onboards onto a brand
+new subdomain and hits the same wall on day one. Build allowlisting into the
+rollout, not into the debugging.
+
+## Do not leave the ethernet cable plugged in
+
+The Pi keeps two default routes and prefers the wrong one:
+
+```
+default via 192.168.2.1  dev eth0  metric 100   <-- preferred
+default via 10.104.224.1 dev wlan0 metric 600
+```
+
+Lower metric wins, so all traffic goes out eth0. When macOS Internet Sharing
+is off — or the Mac itself has no internet — that is a dead route the Pi will
+keep using rather than failing over to working wifi. Linux does not switch away
+from a route that exists but does not work.
+
+Cable in only while actively working on the Pi, out afterwards.
+
+## HCGuest reliability — watch this
+
+On 2026-08-04 the Pi and the Mac both lost egress on HCGuest for ~15 minutes on
+a weekday evening. Separately the Pi was seen **associated with an IP but unable
+to reach its own gateway** — zombie wifi that a `nmcli` reconnect did not fix.
+A headless box sits in that state indefinitely.
+
+Not yet built: a watchdog that verifies real egress (not just association) and
+bounces the connection when it has been dead for a few minutes. Worth doing
+before the season if this recurs.
 
 ## Known issues, not yet addressed
 
