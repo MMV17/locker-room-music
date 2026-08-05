@@ -467,6 +467,37 @@ Still bounded below by the 10 s poll, so ~5–11 s is the floor for a phone to
 notice anything. Going lower means changing spec 8, which is a cost decision,
 not a technical one.
 
+**The bar then sat a steady ~6 s behind the phone.** Not drift — a constant
+offset, because `played_ms` is measured on the Pi at its last beacon and the
+client treated that reading as current. `/api/now` now returns
+`played_ms_age_ms`, and the client adds it while playing (never while paused,
+where the position is not advancing). It is in the effect's deps on purpose, so
+the bar re-anchors to the Pi every poll rather than free-running on the phone's
+clock for the length of a song. An age rather than a timestamp, so neither side
+needs a synchronised clock.
+
+## Featured artists were losing their artwork (2026-08-05)
+
+"90210" and "Homecoming" showed colour blocks while single-artist tracks on the
+same albums resolved fine. AVRCP reports every credited artist comma-joined —
+`Travis Scott, Kacy Hill`, `Kanye West, Chris Martin` — and catalogues file the
+track under the lead alone, with the guest in the title.
+
+The search was never the problem: Deezer finds those tracks perfectly well with
+the full credit string. `pick()`'s exact artist filter was discarding the
+correct results afterwards.
+
+`pick()` now tries an exact artist match **first** and only falls back to the
+lead artist when nothing matched, so precision is never given up when it was
+available. The reduction is applied to both sides, which is what makes it safe
+for names that really do contain a separator — "Simon & Garfunkel" and "Earth,
+Wind & Fire" reduce identically on the phone and in the catalogue, so they
+still match themselves. Karaoke records are still excluded: "Lullaby Versions
+of Paramore" reduces to itself and never equals "paramore".
+
+All five production tracks now resolve to the exact album the phone reported,
+verified by comparing cover hashes, all images HTTP 200.
+
 ## Deploys take up to ~2 minutes to propagate
 
 Measured 2026-08-05: a `wrangler deploy` reporting success was still serving

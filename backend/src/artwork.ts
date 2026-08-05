@@ -59,6 +59,23 @@ function artistKey(value: string | null | undefined): string {
 }
 
 /**
+ * Just the lead artist, for when a credit lists collaborators.
+ *
+ * AVRCP reports every credited artist comma-joined — "Travis Scott, Kacy
+ * Hill", "Kanye West, Chris Martin" — while catalogues file the track under
+ * the lead alone and put the guest in the title. Both of those showed a colour
+ * block while single-artist tracks on the same album resolved fine.
+ *
+ * Applied to BOTH sides, which is what makes it safe for names that genuinely
+ * contain a separator: "Simon & Garfunkel" reduces to "simon" on the phone and
+ * on Deezer alike, so it still matches itself.
+ */
+function primaryArtist(value: string | null | undefined): string {
+  const first = String(value ?? "").split(/,|&|\bfeat\.?\b|\bft\.?\b|\bwith\b/i)[0];
+  return artistKey(first);
+}
+
+/**
  * Pick the best candidate: the artist must match, and among those an album
  * matching what the phone reported wins. Falls back to the provider's own
  * ranking, which is a reasonable "most popular release" proxy.
@@ -74,9 +91,18 @@ export function pick(
   const wantArtist = artistKey(artist);
   const wantAlbum = normalize(album);
 
-  const byArtist = wantArtist
-    ? candidates.filter((c) => artistKey(c.artist) === wantArtist)
-    : candidates;
+  // Exact first, so precision is never traded away when it was available.
+  // Only when nothing matches do we fall back to the lead artist — that keeps
+  // "Lullaby Versions of Paramore" out, since its lead reduces to itself and
+  // still will not equal "paramore".
+  let byArtist = candidates;
+  if (wantArtist) {
+    const exactArtist = candidates.filter((c) => artistKey(c.artist) === wantArtist);
+    const leadArtist = candidates.filter(
+      (c) => primaryArtist(c.artist) === primaryArtist(artist),
+    );
+    byArtist = exactArtist.length ? exactArtist : leadArtist;
+  }
   if (!byArtist.length) return null;
 
   if (wantAlbum) {

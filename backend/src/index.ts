@@ -551,6 +551,15 @@ app.get("/api/now", requireSession, async (c) => {
       // straight through a pause.
       play_status: play.play_status ?? "playing",
       played_ms: play.played_ms ?? null,
+      // How stale played_ms is, in ms. The Pi measured it at its last beacon,
+      // which is up to a beacon interval before this response — and the client
+      // was treating the reading as current, so the bar ran a steady few
+      // seconds behind the phone. Sending the age lets the client correct for
+      // it without either side needing a synchronised clock.
+      played_ms_age_ms:
+        play.played_ms != null && play.keepalive_at
+          ? Math.max(0, Date.now() - Date.parse(play.keepalive_at))
+          : 0,
       my_vote: myVote?.value ?? null,
       // Deliberately absent while open: up/down counts. See spec 6.3.
     },

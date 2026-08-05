@@ -24,6 +24,41 @@ describe("pick", () => {
     expect(pick(candidates, "The Weeknd", "After Hours")).toBe(ART);
   });
 
+  it("matches when the phone lists collaborators and the catalogue does not", () => {
+    // AVRCP sends every credited artist comma-joined; Deezer files the track
+    // under the lead. Both of these showed a colour block in production.
+    expect(
+      pick([{ artist: "Travis Scott", album: "Rodeo", art: ART }],
+        "Travis Scott, Kacy Hill", "Rodeo"),
+    ).toBe(ART);
+    expect(
+      pick([{ artist: "Kanye West", album: "Graduation", art: ART }],
+        "Kanye West, Chris Martin", "Graduation"),
+    ).toBe(ART);
+  });
+
+  it("keeps an artist whose real name contains a separator", () => {
+    // The reduction is applied to both sides, so these still match themselves.
+    expect(
+      pick([{ artist: "Simon & Garfunkel", album: "Bookends", art: ART }],
+        "Simon & Garfunkel", "Bookends"),
+    ).toBe(ART);
+    expect(
+      pick([{ artist: "Earth, Wind & Fire", album: "That's the Way of the World", art: ART }],
+        "Earth, Wind & Fire", "That's the Way of the World"),
+    ).toBe(ART);
+  });
+
+  it("prefers an exact artist match over a lead-artist one", () => {
+    const exact = "https://example.test/exact.jpg";
+    const candidates = [
+      { artist: "Travis Scott", album: "Rodeo", art: ART },
+      { artist: "Travis Scott, Kacy Hill", album: "Rodeo", art: exact },
+    ];
+    // Precision is not traded away when it was actually available.
+    expect(pick(candidates, "Travis Scott, Kacy Hill", "Rodeo")).toBe(exact);
+  });
+
   it("still refuses a karaoke record", () => {
     // The reason the artist filter is there at all.
     const candidates = [

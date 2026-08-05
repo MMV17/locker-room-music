@@ -87,6 +87,13 @@ export interface NowPlay {
   play_status: string;
   /** True playback position from the Pi, excluding paused time. */
   played_ms: number | null;
+  /**
+   * How old `played_ms` is. The Pi measured it at its last beacon, so treating
+   * it as current left the bar a few seconds behind the phone. Add this when
+   * the track is playing; when it is paused the position is not moving, so
+   * adding it would overshoot.
+   */
+  played_ms_age_ms: number;
   vote_closes_at: string;
   my_vote: 1 | -1 | null;
   /* No tallies here while the window is open. Spec 6.3 — the single most

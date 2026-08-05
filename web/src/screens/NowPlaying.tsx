@@ -250,8 +250,14 @@ function Progress({ play }: { play: NowPlay }) {
   // Anchor on the Pi's played_ms when we have it: it counts playback time and
   // excludes pauses, where wall-clock-since-started_at does not. Pausing a
   // song used to make this bar run on past the end of the track.
+  // played_ms was measured on the Pi at its last beacon, not at this instant,
+  // so it arrives already stale — which showed up as the bar sitting a steady
+  // few seconds behind the phone. Add that age back, but only while playing:
+  // a paused track's position is not advancing, so adding it would overshoot.
   const anchor = () =>
-    play.played_ms != null ? play.played_ms : Date.now() - Date.parse(play.started_at);
+    play.played_ms != null
+      ? play.played_ms + (paused ? 0 : (play.played_ms_age_ms ?? 0))
+      : Date.now() - Date.parse(play.started_at);
 
   const [elapsed, setElapsed] = useState(anchor);
 
@@ -269,7 +275,16 @@ function Progress({ play }: { play: NowPlay }) {
     );
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [play.started_at, play.vote_window_open, paused, play.played_ms]);
+    // played_ms_age_ms is included deliberately: it changes on every poll, so
+    // the bar re-anchors to the Pi's reading each time instead of drifting on
+    // the client's own clock for the life of the song.
+  }, [
+    play.started_at,
+    play.vote_window_open,
+    paused,
+    play.played_ms,
+    play.played_ms_age_ms,
+  ]);
 
   const duration = play.duration_ms ?? null;
   const shown = duration ? Math.min(elapsed, duration) : elapsed;
