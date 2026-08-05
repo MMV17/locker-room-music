@@ -56,6 +56,38 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" \
   -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"\",\"last_name\":\"\"}")
 [ "$code" = "400" ] && ok "signup requires a name" || bad "signup requires a name" "got $code"
 
+# The team code is typed by a teenager on a phone. Case and stray whitespace
+# must not be the thing standing between them and the product.
+for variant in "$(echo "$TEAM_CODE" | tr '[:lower:]' '[:upper:]')" "  $TEAM_CODE  "; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session/check-code" \
+    -H 'content-type: application/json' -d "{\"team_code\":\"$variant\"}")
+  [ "$code" = "204" ] && ok "check-code accepts '$variant'" || bad "check-code '$variant'" "got $code"
+done
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session/check-code" \
+  -H 'content-type: application/json' -d '{"team_code":"definitely-not-it"}')
+[ "$code" = "403" ] && ok "check-code rejects a wrong code" || bad "check-code wrong" "got $code"
+
+# The two 403s on this route mean completely different things, and the client
+# branches on `code` to decide whether to send someone back to the code screen.
+# Collapsing them told a removed player their correct code was wrong.
+BODY=$(curl -s -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"nope\",\"first_name\":\"$FIRST\",\"last_name\":\"$LAST\"}")
+echo "$BODY" | grep -q '"code":"wrong_team_code"' \
+  && ok "wrong code is tagged wrong_team_code" || bad "wrong_team_code tag" "$BODY"
+
+DEACT_LAST="Removed$SUFFIX"
+DEACT=$(curl -s -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Gone\",\"last_name\":\"$DEACT_LAST\"}")
+DEACT_ID=$(echo "$DEACT" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+curl -s -o /dev/null -X PATCH "$BASE/api/admin/users/$DEACT_ID" \
+  -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d '{"active":false}'
+BODY=$(curl -s -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Gone\",\"last_name\":\"$DEACT_LAST\"}")
+echo "$BODY" | grep -q '"code":"player_removed"' \
+  && ok "removed player is tagged player_removed, not a code error" \
+  || bad "player_removed tag" "$BODY"
+
 echo "== play ingest =="
 # Fixture ids are unique per run. They used to be hardcoded, which made the
 # suite pass only against a freshly-created database: on a second run the play

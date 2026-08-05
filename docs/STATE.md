@@ -369,6 +369,26 @@ input is `text-transform: uppercase`, so a lowercase entry *displays* as
 tappable button — tapping did nothing, with no feedback. Disabled now drops the
 brand colour entirely for `--hairline`/`--muted`, no shadow, `not-allowed`.
 
+**A deactivated player was told their team code was wrong.** The real cause of
+the 2026-08-05 "CRUSADERS doesn't work" report, and it was not the casing bug —
+that was a separate, genuine problem fixed earlier the same day.
+
+`POST /api/session` returns **403 for two unrelated reasons**: a wrong team
+code, and a player an admin has deactivated. `Join.tsx` branched on the status
+alone, so both rendered as "That team code isn't right." Mack had deactivated
+two `test test` rows, then kept signing up as `test test` and being told a
+correct code was wrong. Signing up as a new name worked instantly — which is
+what finally identified it.
+
+Both responses now carry a machine-readable `code` (`wrong_team_code` /
+`player_removed`), `ApiError` exposes it, and Join branches on that. Only a
+real code failure sends someone back to step one; a removed player is told so,
+in place. Verified against production using the actual deactivated row.
+
+**Anything reading a 403 from this route must branch on `code`, never the
+status.** Two more 403 reasons would fit here naturally and the next one will
+be just as invisible.
+
 Not yet addressed, seen on the same pass:
 
 - **Artwork that 404s shows a broken image**, alt text and all, rather than

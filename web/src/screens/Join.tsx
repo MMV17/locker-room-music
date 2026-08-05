@@ -38,9 +38,12 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
       navigate("/", true);
       onJoined();
     } catch (err) {
-      // The code is only checked here, so a wrong one surfaces at the very
-      // last step. Send them back rather than leaving them stuck on a form.
-      if (err instanceof ApiError && err.status === 403) {
+      // Branch on `code`, not the status. This endpoint returns 403 both for a
+      // wrong team code and for a player an admin removed, and treating them
+      // alike told someone their code was wrong when it was correct — which
+      // cost a real debugging session. Only a code failure goes back to step
+      // one; anything else belongs here, in the player's own words.
+      if (err instanceof ApiError && err.code === "wrong_team_code") {
         setStep("code");
         setError("That team code isn't right.");
       } else if (err instanceof ApiError) {
@@ -76,7 +79,7 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
               await post("/api/session/check-code", { team_code: code.trim() });
               setStep("name");
             } catch (err) {
-              if (err instanceof ApiError && err.status === 403) {
+              if (err instanceof ApiError && err.code === "wrong_team_code") {
                 setError("That team code isn't right.");
               } else {
                 setError("Could not check that code. Try again.");

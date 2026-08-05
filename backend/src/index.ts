@@ -357,7 +357,7 @@ app.post("/api/session/check-code", async (c) => {
       normalizeTeamCode(c.env.TEAM_CODE),
     )
   ) {
-    return c.json({ error: "Wrong team code" }, 403);
+    return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
   }
   return c.body(null, 204);
 });
@@ -370,13 +370,19 @@ app.post("/api/session", async (c) => {
     jersey_number?: string;
   }>();
   // Matched case-insensitively and whitespace-trimmed — see normalizeTeamCode.
+  //
+  // `code` matters as much as the status here. This route returns 403 for two
+  // completely different reasons, and the client used to show "wrong team
+  // code" for both — so a player an admin had removed was told, repeatedly,
+  // that a correct code was wrong. Anything reading this must branch on
+  // `code`, never on the status alone.
   if (
     !safeEqual(
       normalizeTeamCode(body.team_code ?? ""),
       normalizeTeamCode(c.env.TEAM_CODE),
     )
   ) {
-    return c.json({ error: "Wrong team code" }, 403);
+    return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
   }
 
   const first = (body.first_name ?? "").trim();
@@ -406,7 +412,10 @@ app.post("/api/session", async (c) => {
   // Deactivated by an admin — reactivating on a fresh signup would make the
   // admin's only corrective tool useless.
   if (!user.active) {
-    return c.json({ error: "This player has been removed by an admin" }, 403);
+    return c.json(
+      { error: "This player has been removed by an admin", code: "player_removed" },
+      403,
+    );
   }
 
   const token = newToken();

@@ -7,6 +7,13 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * Machine-readable discriminator, when the endpoint sends one. A status
+     * alone is not enough: signup returns 403 both for a wrong team code and
+     * for a player an admin removed, and treating those the same told someone
+     * their code was wrong when it was not.
+     */
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -25,7 +32,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const body = await res.json().catch(() => ({}) as Record<string, unknown>);
   if (!res.ok) {
     const message = typeof (body as any).error === "string" ? (body as any).error : "Something went wrong";
-    throw new ApiError(res.status, message);
+    const code = typeof (body as any).code === "string" ? (body as any).code : undefined;
+    throw new ApiError(res.status, message, code);
   }
   return body as T;
 }
