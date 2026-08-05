@@ -808,6 +808,14 @@ ssh pi@192.168.1.6 "sudo tail -f /var/log/lockerroom/listener.log"
 # for; this dump is for damage older than that.
 ./backend/scripts/backup.sh
 
+# Deploy the Worker. The `cd backend` is NOT optional and NOT cosmetic.
+# Run `npx wrangler deploy` from the repo root and wrangler finds no config,
+# silently scaffolds a wrangler.jsonc, and creates a SECOND Worker named after
+# the directory — locker-room-music-nosync — serving web/ as static assets.
+# It does not touch the real Worker, so hc.auxgoat.com keeps serving the old
+# build and it looks like slow propagation. Done by accident 2026-08-05.
+cd backend && npx wrangler deploy
+
 # Backend unit tests (15)
 cd backend && npx vitest run
 
