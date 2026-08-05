@@ -1,7 +1,15 @@
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, PlayRow } from "./types";
-import { hashMac, macHint, hashToken, newToken, safeEqual, fallbackColor } from "./crypto";
+import {
+  hashMac,
+  macHint,
+  hashToken,
+  newToken,
+  safeEqual,
+  normalizeTeamCode,
+  fallbackColor,
+} from "./crypto";
 import { trackKey, normalize } from "./trackKey";
 import { isVoteWindowOpen, voteWindowClosesAt } from "./voteWindow";
 import { trackScore } from "./scoring";
@@ -335,7 +343,13 @@ app.post("/api/session", async (c) => {
     last_name: string;
     jersey_number?: string;
   }>();
-  if (!safeEqual(body.team_code ?? "", c.env.TEAM_CODE)) {
+  // Matched case-insensitively and whitespace-trimmed — see normalizeTeamCode.
+  if (
+    !safeEqual(
+      normalizeTeamCode(body.team_code ?? ""),
+      normalizeTeamCode(c.env.TEAM_CODE),
+    )
+  ) {
     return c.json({ error: "Wrong team code" }, 403);
   }
 

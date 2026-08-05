@@ -285,6 +285,27 @@ Not yet built: a watchdog that verifies real egress (not just association) and
 bounces the connection when it has been dead for a few minutes. Worth doing
 before the season if this recurs.
 
+## Team code is now case-insensitive (2026-08-05)
+
+First real-world failure: `CRUSADERS` came back "incorrect team code". The
+secret in Cloudflare was never wrong — probing production proved exact
+`CRUSADERS` passed while `crusaders`, `Crusaders`, and any padded variant were
+all rejected. `safeEqual` was comparing raw bytes.
+
+The Join input already sets `autoCapitalize="characters"`, but that is only an
+**iOS keyboard hint** — it does nothing on desktop, nothing on paste, and
+nothing on many third-party keyboards. So the gate was one shift key away from
+locking a player out of the whole product.
+
+`normalizeTeamCode()` in `crypto.ts` now trims and upper-cases both sides.
+Internal whitespace is deliberately preserved, so "CRUS ADERS" still fails and
+the error message stays honest. **Applied only to the team code** — `DEVICE_KEY`
+and `ADMIN_PASSWORD` are real secrets and remain byte-exact.
+
+Verified live against production: every casing and padding of `CRUSADERS` is
+accepted; `KNIGHTS`, `CRUSADER`, `CRUS ADERS`, and empty are still 403.
+Covered by `backend/test/teamcode.test.ts` (6 tests).
+
 ## Known issues, not yet addressed
 
 **~~Heartbeats dominate the outbox.~~ FIXED 2026-08-04.** It peaked at 98.5%
@@ -380,8 +401,47 @@ to be missing certificates on an undeployed hostname, not filtering.
 
 ---
 
+## The repo directory ends in `.nosync` — do not rename it (2026-08-04)
+
+The checkout lives at
+`~/Desktop/Home_Projects/locker-room-music.nosync`. **The suffix is
+load-bearing.** iCloud Drive skips anything whose name ends in `.nosync`, and
+that is the only thing keeping this repo out of iCloud.
+
+It matters because the Desktop is iCloud-managed on this Mac
+(`com.apple.Dataclass.CloudDesktop` is active), which had two consequences:
+
+1. **Intermittent `EPERM`.** Terminal's `kTCCServiceFileProviderDomain` is
+   denied. Files are fine until iCloud *evicts* one; reading it back then goes
+   through the FileProvider and fails. That is why it worked for weeks and then
+   broke — it only fires on evicted files. The workaround reached for in the
+   moment was granting Terminal **Full Disk Access**, which bypasses the check
+   but is a far bigger grant than the problem deserves. Desktop access, granted
+   back in 2022, is all this actually needs.
+2. **420 MB of `node_modules` churning through iCloud sync**, next to a `.git`
+   directory. A corruption and thrash hazard on its own merits.
+
+Renaming the folder back — or moving it anywhere under Desktop or Documents
+without the suffix — silently reintroduces both.
+
+If the path ever does change, two things break and neither is obvious:
+
+- **`.venv/` hardcodes absolute paths** (29 files). Recreate it, do not move
+  it: `python3 -m venv .venv && .venv/bin/pip install httpx pytest-asyncio pytest`.
+- **Claude Code keys session history off the cwd**, slugified with `/`, `.`,
+  and `_` all becoming `-`. This path maps to
+  `~/.claude/projects/-Users-mackvinton-Desktop-Home-Projects-locker-room-music-nosync`.
+  Pre-rename history is preserved under the old `...-locker-room-music` slug;
+  both were kept deliberately.
+
+`node_modules` survived the rename untouched, and git needed nothing — it
+resolves its worktree path at runtime.
+
 ## Environment
 
+- **Repo location:** `~/Desktop/Home_Projects/locker-room-music.nosync`. The
+  `.nosync` suffix is load-bearing — see "Why `.nosync`" below. Do not rename it
+  back.
 - **Pi:** Pi 4B, Debian 13 (trixie), Python 3.13, MAC `e4:5f:01:c2:6e:a9`,
   passwordless via `~/.ssh/id_ed25519`. **Its address is not stable** — it has
   been moved off the home network, so `192.168.1.6` is dead. See "Reaching the
@@ -391,7 +451,52 @@ to be missing certificates on an undeployed hostname, not filtering.
   in older notes. That install was x86_64 under Rosetta, so `backend/node_modules`
   had to be rebuilt for arm64 (`rm -rf node_modules && npm install`). If tests
   ever die with a rollup `MODULE_NOT_FOUND`, that is this, recurring.
-- **Local venv** for the Pi tests: `.venv/` in the repo root.
+- **Local venv** for the Pi tests: `.venv/` in the repo root. Python 3.9.6 from
+  CommandLineTools; only `httpx` and `pytest-asyncio` are needed. Rebuilt
+  2026-08-04 after the `.nosync` rename.
+
+## Why `.nosync` — and do not give Terminal Full Disk Access (2026-08-05)
+
+The Desktop is iCloud-synced (`com.apple.Dataclass.CloudDesktop` is active), so
+this repo used to live inside an iCloud FileProvider domain. Terminal's
+`kTCCServiceFileProviderDomain` is set to **0 (denied)**. When iCloud evicts a
+file and something reads it back, that read goes through the FileProvider and
+fails with **EPERM** — intermittently, which is why it worked for weeks first.
+
+Full Disk Access makes the symptom vanish because it bypasses the check
+entirely. That is a sledgehammer for a laptop that holds production secrets in
+`backend/.secrets.local`; it was granted 2026-08-04 21:02 and should be **off**.
+Terminal has had plain Desktop access since 2022, which is all this needs.
+
+Renaming to `locker-room-music.nosync` takes the repo out of iCloud's scope
+entirely — iCloud skips anything ending in `.nosync`. That fixes the EPERM at
+the source rather than papering over it, and stops 420 MB of `node_modules`
+churning through sync.
+
+Verified after the rename: git intact on `phase5-voting-site`, 19 Pi tests pass,
+19 backend tests pass, no stale absolute paths in rc files, launchd, cron, or
+git config. `.venv/` **had** to be rebuilt — a venv hardcodes absolute paths in
+29 files. If it ever breaks again:
+
+```bash
+rm -rf .venv && python3 -m venv .venv
+.venv/bin/pip install httpx pytest-asyncio pytest
+```
+
+Claude Code keys its chat history on the cwd with separators flattened to
+dashes, so the history moved to
+`~/.claude/projects/-Users-mackvinton-Desktop-Home-Projects-locker-room-music-nosync/`.
+The pre-rename transcript is still at the old slug (same path minus `-nosync`).
+
+## The code has no second copy — unresolved
+
+Leaving iCloud removed the only offsite copy this repo had. There is **no git
+remote** (`git remote -v` is empty) and **no Time Machine destination**
+(`tmutil destinationinfo` → none). The working tree now exists on exactly one
+SSD.
+
+That is a worse story than the D1 data, which has two backup paths. A private
+GitHub remote or a Time Machine target would fix it; neither is set up yet.
 
 ## Reaching the Pi
 

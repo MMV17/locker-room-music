@@ -35,6 +35,28 @@ export function newToken(): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Fold a typed team code to the shape we compare on.
+ *
+ * The team code is not a password. It is a word the whole team already knows,
+ * typed once, on a phone, in a locker room — and it is the ONLY gate, so a
+ * player who cannot get past it cannot use the product at all. Case
+ * sensitivity defends nothing here (anyone guessing "crusaders" guesses
+ * "CRUSADERS" on the next try) and reliably locks someone out, because
+ * `autoCapitalize="characters"` is only an iOS keyboard hint: it does nothing
+ * on desktop, nothing on paste, and nothing on many third-party keyboards.
+ *
+ * Deliberately NOT applied to DEVICE_KEY or ADMIN_PASSWORD. Those are real
+ * secrets, machine-entered or typed once by one person, and they stay exact.
+ *
+ * Internal whitespace is left alone on purpose — "CRUS ADERS" is a typo, not a
+ * formatting artifact, and silently accepting it would make the error message
+ * lie about what went wrong.
+ */
+export function normalizeTeamCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
 /** Constant-time-ish comparison, to avoid leaking secrets by timing. */
 export function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;

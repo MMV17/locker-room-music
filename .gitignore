@@ -12,6 +12,9 @@ backend/.dev.vars
 backend/.secrets.local
 backend/node_modules/
 backend/.wrangler/
+# Wrangler's local cache — machine state, not source. It also carries the
+# Cloudflare account id and account name, which do not belong in git.
+.wrangler/
 
 # The frontend build output. Source lives in web/; this is where `npm run
 # build` in web/ writes, and where the Worker's [assets] binding reads from.
