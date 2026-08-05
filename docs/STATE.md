@@ -1065,16 +1065,22 @@ sat behind the tab bar.
 **The header was a `space-between` flex row** holding status, team name and
 jersey. That only centres the middle item when the two flanking it are the
 same width, which they never are — "HOLY CROSS" measured **45px right of
-centre**. A single centred grid row fixes the arithmetic but not the fit:
-"Speaker offline" + "Holy Cross" + jersey is wider than a 375px phone, and a
-longer team name overruns even 393. It collided outright:
+centre**. A centred grid row fixes the arithmetic but not the fit: "Speaker
+offline" + "Holy Cross" + jersey is wider than a 375px phone, and a longer
+team name overruns even 393. It collided outright:
 `SPEAKER OFFLINEHOLY CROSS`.
 
-**It is two rows now.** Team name centred on its own line, status centred
-under it, jersey spanning both on the right. Exact at every width and immune
-to team-name length — which matters, because the name comes from the settings
-table and a second school could have a much longer one. It costs 2px: the
-30px jersey already set the old row's height.
+Stacking it onto two rows worked and was rejected on sight — correct geometry,
+still the wrong emphasis. **The status is an icon now**, a 30px square in the
+corner opposite the jersey. That fixes both problems at once: the rails are
+balanced by construction, so the centre is exact for free, and the row is back
+to 30px. Measured, the gaps either side of the team name are now *identical*
+to a tenth of a pixel at every width, including a long team name.
+
+The full sentence survives in `aria-label` and `title` — spelled out on screen
+it cost a whole line of header and pulled the eye to the least important thing
+there. The waves versus the strike-through carry the state, so colour says it
+a second time and is never the only thing saying it.
 
 **For the fold**, the artwork gained an `svh` term. Width alone cannot know
 how much vertical room is left, so on a short viewport the art kept its 62vw
@@ -1086,11 +1092,11 @@ Measured clearance from the thumbs to the tab bar, nothing scrolling:
 
 | viewport | before | after |
 |---|---|---|
-| 393×852 | fits | 142px |
-| 393×740 (Safari chrome showing) | behind the bar | 43px |
-| 375×667 (iPhone SE) | 33px behind | 38px |
-| 360×780 (Pixel) | behind the bar | 89px |
-| 430×932 | fits | 206px |
+| 393×852 | fits | 144px |
+| 393×740 (Safari chrome showing) | behind the bar | 45px |
+| 375×667 (iPhone SE) | 33px behind | 40px |
+| 360×780 (Pixel) | behind the bar | 91px |
+| 430×932 | fits | 208px |
 
 Below ~600px of height it scrolls again, and that is the honest answer —
 artwork, three metadata lines, a DJ chip, a progress bar, a status line and

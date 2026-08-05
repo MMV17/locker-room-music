@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get, post } from "./../api";
 import type { MyDj, NowPlay, NowResponse } from "./../api";
 import { Artwork, Empty, Spinner, formatClock } from "./../components";
-import { ThumbDown, ThumbUp } from "./../icons";
+import { IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
@@ -130,17 +130,24 @@ export function NowPlaying({ teamName }: { teamName: string }) {
 
       <main className="screen np">
         <header className="np-head">
-          {/* "Live" used to sit here, and it was read as "music is playing".
-              It never meant that: speaker_online is only whether the Pi has
-              beaconed in the last three minutes — the box is powered up and
-              has a network. It says nothing about a phone being connected or
-              anything coming out of the speaker. Playing/paused is its own
-              line under the progress bar now, so this can name its subject. */}
-          <span className="status">
-            <span className={"dot" + (now?.speaker_online ? " is-live" : "")} />
-            <span className="t-label">
-              Speaker {now?.speaker_online ? "online" : "offline"}
-            </span>
+          {/* "Live" used to sit here as a word, and it was read as "music is
+              playing". It never meant that: speaker_online is only whether the
+              Pi has beaconed in the last three minutes — the box is powered up
+              and has a network. It says nothing about a phone being connected
+              or anything coming out of the speaker.
+
+              It is an icon now, in the corner opposite the jersey. Spelling it
+              out cost a whole second line of header and still pulled the eye
+              to the least important thing on the screen. The full sentence
+              survives in the label, which is what a screen reader announces
+              and what a long-press shows. */}
+          <span
+            className={"np-speaker" + (now?.speaker_online ? " is-live" : "")}
+            role="img"
+            aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}`}
+            title={`Speaker ${now?.speaker_online ? "online" : "offline"}`}
+          >
+            <IconSpeaker muted={!now?.speaker_online} />
           </span>
           <span className="t-label np-head-team">{teamName}</span>
           <button

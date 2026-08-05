@@ -95,6 +95,21 @@ export const IconSettings = ({ className }: P) => (
   </svg>
 );
 
+/* Speaker liveness, in the corner opposite the jersey.
+   The waves are the whole signal: present means the Pi has beaconed, struck
+   through means it has not. Colour says the same thing a second time and is
+   never the only thing saying it — a red-green blind player sees the slash. */
+export const IconSpeaker = ({ className, muted }: P & { muted?: boolean }) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path {...stroke} d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z" />
+    {muted ? (
+      <path {...stroke} d="M16 9.5l4.5 5M20.5 9.5l-4.5 5" />
+    ) : (
+      <path {...stroke} d="M15.5 9.2a4 4 0 0 1 0 5.6M18.4 6.8a8 8 0 0 1 0 10.4" />
+    )}
+  </svg>
+);
+
 export const IconRefresh = ({ className }: P) => (
   <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
     <path {...stroke} d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5" />

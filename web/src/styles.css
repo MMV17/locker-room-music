@@ -398,63 +398,59 @@ input {
   gap: 13px;
 }
 
-/* Two rows, not one. The old header was a space-between flex row holding
-   status, team name and jersey — and space-between only centres its middle
-   item when the two flanking it happen to be the same width, which they never
-   are. "HOLY CROSS" sat 45px right of centre.
+/* Three columns, not space-between. space-between only centres its middle
+   item when the two flanking it happen to be the same width — "HOLY CROSS"
+   sat 45px right of centre because "Speaker online" is far wider than a
+   jersey badge. Equal rails put it on the true centre line.
 
-   A single centred grid row fixes the maths but not the fit: "Speaker
-   offline" plus "Holy Cross" plus the jersey is wider than a 375px phone, and
-   a longer team name overruns even 393. Measured, they collided outright —
-   "SPEAKER OFFLINEHOLY CROSS".
+   That word was also what made this row impossible to fit: "Speaker offline"
+   plus "Holy Cross" plus the jersey is wider than a 375px phone, and a longer
+   team name overran even 393 — measured colliding as "SPEAKER OFFLINEHOLY
+   CROSS". As an icon it is a 30px square mirroring the jersey, so the rails
+   are balanced by construction and the centre has the whole row to itself.
 
-   Stacking is what actually holds up. The team name centres on its own line,
-   the status centres under it, and the jersey spans both on the right. It is
-   exact at every width and immune to team-name length — which matters,
-   because the name comes from the settings table and a second school could
-   have a much longer one. Costs 2px of height: the 30px jersey already set
-   the old row's height, and two 14px lines plus a 3px gap is 31.
-
-   minmax(0, ...) on all three columns, not auto: a track refuses to go below
-   its content's min-width by default, so a long string would widen its column
-   and shove the centre off again — the exact bug this replaces. */
+   minmax(0, ...) on all three, not auto: a track refuses to go below its
+   content's min-width by default, so a long team name would widen its column
+   and shove the centre off again — the exact bug this replaces. It ellipsises
+   instead. */
 .np-head {
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
-  grid-template-rows: auto auto;
   align-items: center;
-  gap: 3px 8px;
+  gap: 8px;
 }
 
 .np-head-team {
-  grid-area: 1 / 2;
+  justify-self: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Spans the full width rather than sitting in a column, so it centres on the
-   screen and not on whatever the columns worked out to. */
-.np-head > .status {
-  grid-area: 2 / 1 / 3 / -1;
-  justify-self: center;
-}
-
 .np-head > .jersey {
-  grid-area: 1 / 3 / 3 / 4;
   justify-self: end;
-  align-self: center;
 }
 
-/* One step quieter than the body labels. Both lines here are captions; the
-   team name keeps the emphasis by being on top, not by being louder. nowrap
-   because a wrapped "SPEAKER / ONLINE" was the first thing that went wrong
-   when the header got tighter. */
-.np-head .t-label {
-  font-size: 10px;
-  letter-spacing: 0.09em;
-  white-space: nowrap;
+/* Matches the jersey's footprint exactly so the row reads as balanced, but
+   stays flat — no fill, no badge. Two solid squares in the corners would
+   compete, and only one of them is a control. */
+.np-speaker {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  justify-self: start;
+  color: var(--muted);
+}
+
+.np-speaker svg {
+  width: 20px;
+  height: 20px;
+}
+
+.np-speaker.is-live {
+  color: var(--up);
 }
 
 .np-art {
