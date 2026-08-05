@@ -87,8 +87,15 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Run it with actual teammates.** 2026-08-05 closed out every bug a single
-person could find alone; what is left needs more than one phone in a room.
+**Run it with actual teammates.** What is left needs more than one phone in a
+room.
+
+**First, though: verify the three lifecycle fixes on real hardware.** They
+landed late on 2026-08-05 and have only been proven by unit test. Play three
+songs, pause one mid-track for over a minute, and let one run to its natural
+end. Then check that D1 holds exactly three plays, all with a non-null
+`ended_at`, and that the site showed **Paused** rather than jumping to Ended.
+See "Three lifecycle bugs found from one screenshot".
 
 Still never exercised with a real audience, and the highest-value thing to do
 next:
@@ -852,6 +859,124 @@ bugs, none visible from reading code. The four that would have been worst:
 *currently playing* song, back-to-back with nothing in between) is covered by
 unit tests but was never exercised on real hardware. Android was skipped
 entirely by decision — expect its own surprises.
+
+---
+
+## Three lifecycle bugs found from one screenshot (2026-08-05)
+
+A pause at 1:00 showed on the site as **ENDED · VOTING CLOSES IN 0:07**, with
+the progress bar reading 1:30. Reading the D1 `plays` table and the listener
+journal together turned that one symptom into three separate bugs, all now
+fixed and all with a test that fails without the fix.
+
+The lesson worth keeping: **the journal and the D1 table disagreed**, and the
+disagreement was the whole diagnosis. The Pi logged closes that D1 never
+received, and D1 held plays the Pi had no record of opening. Neither source
+alone showed anything wrong.
+
+### 1. The A2DP transport idle raced the AVRCP pause, and won
+
+BlueZ delivers the transport's `State` and the player's `Status` as two
+independent `PropertiesChanged` signals, and `BluezWatcher` fires each into its
+own `asyncio` task. There is no ordering guarantee between them. On a pause,
+whichever lands first wins.
+
+`on_transport_state_changed` guarded against this by checking
+`play.status == "paused"` — which is useless when the idle arrives *before* the
+status that would have set it. Production caught it doing exactly that:
+
+```
+14:27:55,540 play closed (transport_idle): It's Up ... played=60987ms
+```
+
+60987ms is 1:00.987 — the instant of the pause, with no `play paused` line
+anywhere before it. The play went playing → closed, skipping paused entirely.
+That is the screenshot.
+
+**Fix:** transport idle no longer closes anything directly. It arms a 5s
+`TRANSPORT_IDLE_GRACE` watchdog, and any AVRCP status in the meantime cancels
+it (so does the transport going active again). If nothing contradicts the idle,
+the play closes — dated to the *idle*, not to the decision, so the grace is
+never banked as playback and can never push a play over the 30s counted
+threshold it did not earn.
+
+Note this is the same failure surface as AVRCP quirk #2 above, which was
+"fixed" by checking `play.status`. That fix was correct for the case where the
+signals arrive in order, and silently wrong the rest of the time.
+
+### 2. Watchdog closes cancelled themselves before they could be written
+
+`_close_play` cancels the play's timers. When it is called *from inside* one of
+those timers, it cancels the task it is running on — and the `CancelledError`
+is delivered at the next `await`, which is the outbox enqueue three lines
+later. The play closed on the Pi, logged as closed, and **the PATCH was never
+enqueued**. In D1 the row stays open forever: no `ended_at`, no `played_ms`,
+`counted` stuck at its insert default of 1.
+
+Two production rows were in exactly this state, and the correlation was total —
+*every* play closed by a watchdog, and *only* those, was missing from D1:
+
+```
+12:47:12 play closed (pause_timeout): 90210 ... played=28341ms   -> ended_at NULL
+14:23:51 play closed (pause_timeout): Circadian Rhythm ... 18240 -> ended_at NULL
+```
+
+This is not a rare path. `_duration_watchdog` fires on every song the phone
+lets run out without queueing another — the last song before someone unplugs.
+
+**Fix:** `_close_play` skips `asyncio.current_task()` when cancelling.
+
+### 3. Two track changes in one tick opened two plays
+
+`on_track_changed` read `session.current_play`, awaited the close of the
+outgoing play, and only then wrote the new one back. Nothing serialised the
+handlers, so two `Track` signals in the same tick both passed the "is this the
+same track?" check and both opened a play. The loser is orphaned: never
+closed, never keepalived, no `played_ms`.
+
+It gets worse. The orphan captured `moment = now()` *before* its await, so it
+carries the **later** `started_at` — and `/api/now` selects
+`ORDER BY started_at DESC LIMIT 1`. **The site was showing the phantom.** It
+can never pause, never end, and never receive a keepalive, and votes cast on it
+land on a row the Pi has never heard of. One thumbs-up on "Recognize" did
+exactly that.
+
+Four such pairs landed in eleven minutes on 2026-08-05, 15ms apart each time.
+
+**Fix:** a single `asyncio.Lock` in `SessionManager`. Every sink entry point
+takes it and delegates to a `_`-prefixed internal that assumes it is held.
+Internals call internals — calling a public method from inside one deadlocks.
+
+### The test suite could not have caught #3, and that was fixable
+
+`FakeStore.enqueue` was `async def` with no `await` inside, so it never
+suspended, so every handler ran start to finish and no test could observe an
+interleaving. The real `Store.enqueue` goes through `asyncio.to_thread` and
+always yields. Adding one `await asyncio.sleep(0)` to the fake makes the
+duplicate-play race reproduce on demand — verified by neutering the lock and
+watching the new test fail with `['Come and See Me', 'No Face', 'No Face']`.
+
+**A fake that cannot yield cannot model a concurrency bug.**
+
+### Data repaired
+
+The phantom rows are `voided = 1` rather than deleted, so the pairs stay
+inspectable; the misplaced vote was re-pointed to its real twin first. The two
+watchdog casualties were closed using the `played_ms` and timestamps from the
+journal — recovered values, not invented ones.
+
+**Left alone:** `ee1e30b9` (Imma Be) and `08485fa7` (POWER), both open since
+2026-08-04. They are almost certainly the same watchdog bug rather than the
+network loss recorded earlier in this file, but the journal does not reach back
+that far and there is nothing to recover them from. Reconstructing them would
+be fabrication.
+
+### The bar also ran past the end of the song
+
+Client-side, and separate: `useElapsed` froze on `paused` but not on
+`ended_at`, so it kept ticking through the whole 30s vote grace. A play that
+closed at 1:00 read 1:30 under an "Ended" label. `played_ms` is final once the
+Pi closes a play, so the anchor is now exact and the tick stops.
 
 ---
 

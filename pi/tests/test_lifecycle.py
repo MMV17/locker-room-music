@@ -19,14 +19,23 @@ from lockerroom.lifecycle import SessionManager  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def fast_grace(monkeypatch):
-    """Shrink the create-grace so tests don't sleep 2s each."""
+    """Shrink the graces so tests don't sleep out the real timers."""
     from datetime import timedelta
     monkeypatch.setattr(lifecycle_mod, "MIN_PLAY_GRACE", timedelta(seconds=0.02))
+    monkeypatch.setattr(lifecycle_mod, "TRANSPORT_IDLE_GRACE", timedelta(seconds=0.05))
+    # PAUSE_GRACE is deliberately NOT shrunk here: several tests pause and then
+    # assert the play is still open, and a 50ms pause timeout would close it
+    # out from under them. The one test that needs it short patches it itself.
 
 
 async def settle():
     """Let the deferred create-enqueue fire."""
     await asyncio.sleep(0.06)
+
+
+async def settle_watchdogs():
+    """Let a transport-idle or pause watchdog run to its decision."""
+    await asyncio.sleep(0.12)
 
 DEV = "/org/bluez/hci0/dev_5C_AD_BA_F0_B2_61"
 
@@ -38,6 +47,12 @@ class FakeStore:
         self.rows: list[dict] = []
 
     async def enqueue(self, outbox_id, method, endpoint, payload):
+        # The real Store hands the write to asyncio.to_thread, so an enqueue
+        # always yields to the event loop. Without this sleep the fake never
+        # suspends, every handler runs start-to-finish uninterrupted, and no
+        # test here can see an interleaving — which is how the duplicate-play
+        # race lived in production while these tests stayed green.
+        await asyncio.sleep(0)
         self.rows.append(
             {"id": outbox_id, "method": method, "endpoint": endpoint, "payload": payload}
         )
@@ -225,7 +240,138 @@ async def test_transport_idle_while_playing_still_ends_the_play():
     await settle()
     await mgr.on_transport_state_changed(DEV, "idle")
 
+    assert store.closed() == [], "must wait for AVRCP to contradict it"
+    await settle_watchdogs()
     assert len(store.closed()) == 1
+
+
+@pytest.mark.asyncio
+async def test_transport_idle_arriving_before_the_pause_status_is_not_a_stop():
+    """Regression from production, 2026-08-05. BlueZ delivers the transport's
+    State and the player's Status as two independent signals, and the watcher
+    fires each into its own task, so on a pause the idle can land first. The
+    old code checked play.status at that instant, saw "playing", and closed
+    the play — "It's Up" was ended at played=60987ms, the exact second it was
+    paused, and the site jumped from playing straight to ended."""
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("It's Up", "Drake"), 0)
+    await settle()
+
+    await mgr.on_transport_state_changed(DEV, "idle")  # arrives first
+    await mgr.on_status_changed(DEV, "paused")  # ...and is corrected
+    await settle_watchdogs()
+
+    assert store.closed() == [], "a pause must not end the play"
+
+    await mgr.on_status_changed(DEV, "playing")
+    await settle_watchdogs()
+    assert len(store.opened()) == 1, "resume must continue the same play"
+    assert store.closed() == []
+
+
+@pytest.mark.asyncio
+async def test_transport_going_active_again_cancels_the_pending_close():
+    """Audio flowing again is proof the idle was not a stop."""
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await mgr.on_transport_state_changed(DEV, "idle")
+    await mgr.on_transport_state_changed(DEV, "active")
+    await settle_watchdogs()
+
+    assert store.closed() == []
+
+
+@pytest.mark.asyncio
+async def test_transport_idle_close_is_dated_to_the_idle_not_the_decision(monkeypatch):
+    """The grace is deliberation time, not playback. Banking it would push
+    plays over the 30s counted threshold that never earned it."""
+    from datetime import timedelta
+    monkeypatch.setattr(lifecycle_mod, "TRANSPORT_IDLE_GRACE", timedelta(seconds=0.4))
+
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()  # ~60ms of actual playback
+    await mgr.on_transport_state_changed(DEV, "idle")
+    await asyncio.sleep(0.5)
+
+    played = store.closed()[0]["payload"]["played_ms"]
+    assert played < 400, f"the 400ms grace was counted as playback: {played}ms"
+
+
+@pytest.mark.asyncio
+async def test_pause_timeout_close_actually_reaches_the_outbox(monkeypatch):
+    """Regression from production, 2026-08-05. _close_play cancels the play's
+    timers — including, when called from inside _pause_watchdog, the task it is
+    running on. The CancelledError landed on the very next await, the outbox
+    enqueue, so the play closed on the Pi and stayed open forever in D1: the
+    log said "play closed (pause_timeout)" and no PATCH was ever written. Two
+    rows in production ended up that way, both watchdog closes."""
+    from datetime import timedelta
+    monkeypatch.setattr(lifecycle_mod, "PAUSE_GRACE", timedelta(seconds=0.05))
+
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Circadian Rhythm", "Drake"), 0)
+    await settle()
+    await mgr.on_status_changed(DEV, "paused")
+    await settle_watchdogs()
+
+    assert len(store.closed()) == 1, "the pause timeout must be written, not just logged"
+
+
+@pytest.mark.asyncio
+async def test_duration_watchdog_close_actually_reaches_the_outbox():
+    """Same self-cancellation bug, via the other watchdog. This one fires on
+    every song the phone lets run out without queueing another."""
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore", duration=10), 0)
+    await settle()
+    await asyncio.sleep(lifecycle_mod.DURATION_BUFFER.total_seconds() + 0.1)
+
+    assert len(store.closed()) == 1, "the duration timeout must be written, not just logged"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_track_changes_open_only_one_play():
+    """Regression from production, 2026-08-05. BluezWatcher fires every
+    PropertiesChanged into its own task. on_track_changed read current_play,
+    awaited the close of the outgoing play, and only then wrote the new one
+    back — so two Track signals in the same tick both opened a play. The loser
+    was orphaned: never closed, never keepalived, and carrying the later
+    started_at, which is the row /api/now selects. Four such pairs landed in
+    production in eleven minutes."""
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Come and See Me", "PARTYNEXTDOOR"), 0)
+    await settle()
+
+    # Two signals for the same new track, dispatched together the way the
+    # watcher dispatches them.
+    await asyncio.gather(
+        mgr.on_track_changed(DEV, track("No Face", "Drake"), 0),
+        mgr.on_track_changed(DEV, track("No Face", "Drake"), 0),
+    )
+    await settle()
+
+    titles = [r["payload"]["title"] for r in store.opened()]
+    assert titles.count("No Face") == 1, f"one play per track change, got {titles}"
 
 
 @pytest.mark.asyncio

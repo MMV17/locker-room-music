@@ -326,6 +326,13 @@ function voteRemainingMs(play: NowPlay, elapsed: number): number | null {
  */
 function useElapsed(play: NowPlay): number {
   const paused = play.play_status === "paused";
+  // A finished play is as still as a paused one. Without this the bar kept
+  // running for the whole 30s grace after the song ended: a play that closed
+  // at 1:00 was reading 1:30 under an "Ended" label, which is not a rounding
+  // error, it is the screen contradicting itself. played_ms is final once the
+  // Pi has closed the play, so the anchor is exact rather than extrapolated.
+  const ended = !!play.ended_at;
+  const frozen = paused || ended;
 
   // Anchor on the Pi's played_ms when we have it: it counts playback time and
   // excludes pauses, where wall-clock-since-started_at does not. Pausing a
@@ -333,18 +340,18 @@ function useElapsed(play: NowPlay): number {
   // played_ms was measured on the Pi at its last beacon, not at this instant,
   // so it arrives already stale — which showed up as the bar sitting a steady
   // few seconds behind the phone. Add that age back, but only while playing:
-  // a paused track's position is not advancing, so adding it would overshoot.
+  // a stopped track's position is not advancing, so adding it would overshoot.
   const anchor = () =>
     play.played_ms != null
-      ? play.played_ms + (paused ? 0 : (play.played_ms_age_ms ?? 0))
+      ? play.played_ms + (frozen ? 0 : (play.played_ms_age_ms ?? 0))
       : Date.now() - Date.parse(play.started_at);
 
   const [elapsed, setElapsed] = useState(anchor);
 
   useEffect(() => {
     setElapsed(anchor());
-    // Frozen while paused - the music is not moving, so neither is this.
-    if (paused || !play.vote_window_open) return;
+    // Frozen while paused or ended - the music is not moving, so neither is this.
+    if (frozen || !play.vote_window_open) return;
     // Tick forward from the anchor rather than recomputing from started_at,
     // so time accumulated during a pause is never counted.
     const startedTicking = Date.now();
@@ -361,7 +368,7 @@ function useElapsed(play: NowPlay): number {
   }, [
     play.started_at,
     play.vote_window_open,
-    paused,
+    frozen,
     play.played_ms,
     play.played_ms_age_ms,
   ]);
