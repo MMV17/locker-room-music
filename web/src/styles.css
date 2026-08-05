@@ -404,6 +404,41 @@ input {
   gap: 12px;
 }
 
+/* The logo is cream and gold on solid black — 87% of the artwork is the black
+   field, so it cannot be dropped onto a pale page and it cannot have its
+   background removed (what is left would be white marks on white). Presented
+   as a dark rounded tile instead, which reads as a deliberate brand badge
+   rather than as a picture that failed to knock out. */
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.brand-mark {
+  /* 44px left the "auxgoat" wordmark inside the lockup about 7px tall, which
+     is a smudge rather than a word. 54 is the smallest that still reads. */
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  display: block;
+  /* The source is a square lockup; nothing to crop, just scale it down. */
+  object-fit: cover;
+}
+
+/* Secondary to the mark, per the brief: the product is AuxGoat, the school is
+   who is using it. */
+.brand-team {
+  font-size: 10px;
+  color: var(--muted);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .np-art {
   width: min(62vw, 268px);
   aspect-ratio: 1;

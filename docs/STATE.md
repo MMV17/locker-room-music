@@ -857,6 +857,40 @@ a Google Fonts CDN link, because campus wifi is unpredictable and the type is
 the identity. `unicode-range` means the 15KB latin-ext subset only downloads if
 a track title actually needs it.
 
+### Header: the logo, and what "Live" meant (2026-08-05)
+
+**"Live" is gone; it now reads "Speaker online / Speaker offline".** The old
+label was read as "music is playing", which it never meant. `speaker_online` is
+only whether the Pi has beaconed within three minutes — the box is powered up
+and has a network. It says nothing about a phone being connected over Bluetooth
+or anything coming out of the speaker. Playing/paused is its own line under the
+progress bar now, so the header can name its actual subject.
+
+The **AuxGoat mark leads the header**, with the team name small underneath as
+secondary — the product is AuxGoat, the school is who is using it.
+
+The logo is cream and gold on solid black; **87% of the artwork is the black
+field**, measured. So it cannot be dropped onto the pale page, and the black
+cannot be knocked out either — what remains would be white marks invisible on
+white. It is presented as a dark rounded tile, which reads as a deliberate
+brand badge rather than an image that failed to composite. Source is
+`docs/AUXGOAT logo.png` (960×720 RGBA, transparent margin around a 688×688
+opaque square); `web/src/assets/auxgoat.png` is that square cropped to 256px.
+At 44px the wordmark inside the lockup was about 7px tall and unreadable — 54px
+is the smallest that still reads.
+
+`web/src/vite-env.d.ts` was added so `tsc` accepts the PNG import. Without it
+asset imports type-error, which is the first thing anyone adding an image will
+hit.
+
+### Known: a tab that mounts while hidden shows a spinner until it is focused
+
+`NowPlaying`'s poll does `if (document.hidden) return;` **before** the first
+`load()`, so `loading` never clears and the screen sits on a spinner. It
+recovers on `visibilitychange`, so a real user never sees it — they are looking
+at the page. It bit repeatedly while screenshotting in automation, where the
+window is unfocused. Worth knowing before mistaking it for a broken build.
+
 ### Playback state and the voting countdown (2026-08-05)
 
 A line under the progress bar: **Playing / Paused / Ended**, then how long is

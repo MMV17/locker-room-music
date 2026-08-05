@@ -5,6 +5,7 @@ import { Artwork, Empty, Spinner, formatClock } from "./../components";
 import { ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
+import auxgoatLogo from "./../assets/auxgoat.png";
 
 /**
  * Spec 8. Polling is still the only thing that could blow the request budget,
@@ -130,11 +131,22 @@ export function NowPlaying({ teamName }: { teamName: string }) {
 
       <main className="screen np">
         <header className="np-head">
+          {/* "Live" used to sit here, and it was read as "music is playing".
+              It never meant that: speaker_online is only whether the Pi has
+              beaconed in the last three minutes — the box is powered up and
+              has a network. It says nothing about a phone being connected or
+              anything coming out of the speaker. Playing/paused is its own
+              line under the progress bar now, so this can name its subject. */}
           <span className="status">
             <span className={"dot" + (now?.speaker_online ? " is-live" : "")} />
-            <span className="t-label">{now?.speaker_online ? "Live" : "Offline"}</span>
+            <span className="t-label">
+              Speaker {now?.speaker_online ? "online" : "offline"}
+            </span>
           </span>
-          <span className="t-label">{teamName}</span>
+          <span className="brand">
+            <img className="brand-mark" src={auxgoatLogo} alt="AuxGoat" />
+            <span className="t-label brand-team">{teamName}</span>
+          </span>
           <button
             className="jersey is-sm"
             onClick={() => navigate("/join")}
