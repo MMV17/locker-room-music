@@ -6,8 +6,28 @@ import { ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
-/** Spec 8: never faster. Polling is the only thing that could blow the budget. */
-const POLL_MS = 10_000;
+/**
+ * Spec 8. Polling is still the only thing that could blow the request budget,
+ * so this number is a cost decision, not a taste one. Sized 2026-08-05 against
+ * **75 players × 2 hours of use a day** = 150 player-hours:
+ *
+ *   interval   polls/day   + overhead   % of the 100k/day free tier
+ *      10s        54,000       57,920         58%
+ *     7.5s        72,000       75,920         76%   <- here
+ *       7s        77,143       81,063         81%
+ *       6s        90,000       93,920         94%
+ *
+ * Overhead is ~3,900/day: the Pi's beacon (~2,040), votes, first loads and the
+ * outbox. It is rounding error next to the polls.
+ *
+ * 7.5s leaves roughly a quarter of the tier spare for a longer session or a
+ * bigger squad. Going to 6s spends 94% of it, which is not a margin — one
+ * unusually long practice and the whole thing 500s.
+ *
+ * If the roster or session length grows, redo the arithmetic before touching
+ * this. polls/day = players x hours x 3600 / interval_seconds.
+ */
+const POLL_MS = 7_500;
 
 export function NowPlaying({ teamName }: { teamName: string }) {
   const navigate = useNavigate();

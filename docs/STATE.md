@@ -473,9 +473,25 @@ site through the outbox, not the beacon, so that interval was the "skips are
 late" term. It is free when idle — a drain pass with an empty outbox makes no
 network call.
 
-Still bounded below by the 10 s poll, so ~5–11 s is the floor for a phone to
-notice anything. Going lower means changing spec 8, which is a cost decision,
-not a technical one.
+**The poll then went 10 s → 7.5 s (2026-08-05), and spec 8 was updated to
+match.** A deliberate spend of request budget, sized against **75 players × 2
+hours a day** = 150 player-hours:
+
+| interval | polls/day | + overhead | % of the 100k/day tier |
+|---|---|---|---|
+| 10 s | 54,000 | 57,920 | 58% |
+| **7.5 s** | **72,000** | **75,920** | **76%** |
+| 7 s | 77,143 | 81,063 | 81% |
+| 6 s | 90,000 | 93,920 | 94% |
+
+Overhead is ~3,900/day — the Pi's beacon (~2,040), votes, first loads, outbox —
+rounding error next to the polls. 7.5 s keeps about a quarter of the tier spare
+for a longer session or a bigger squad; 6 s would spend 94%, which is not a
+margin. **Redo the arithmetic before changing it:**
+`polls/day = players × hours × 3600 / interval_seconds`.
+
+Worst case for a phone to notice a pause is now ~1 s (beacon) + 7.5 s (poll)
+≈ 9 s, typically half that.
 
 **The bar then sat a steady ~6 s behind the phone.** Not drift — a constant
 offset, because `played_ms` is measured on the Pi at its last beacon and the

@@ -139,7 +139,12 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
           </label>
 
           <label className="field">
-            <span className="t-label">Number</span>
+            {/* Only first and last name gate `ready`, so say so — a first-timer
+                doing this once, fast, should not stall hunting for a number
+                they may not have been given yet. */}
+            <span className="t-label">
+              Number <span className="t-optional">optional</span>
+            </span>
             <input
               className="input"
               value={jersey}

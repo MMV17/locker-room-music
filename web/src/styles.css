@@ -122,6 +122,15 @@ input {
   margin: 0;
 }
 
+/* Rides inside a .t-label. Lighter and un-tracked so it reads as an aside to
+   the field name rather than part of it. */
+.t-optional {
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  opacity: 0.75;
+}
+
 .num {
   font-variant-numeric: tabular-nums;
 }

@@ -292,7 +292,11 @@ Troll detection (users whose votes anticorrelate with everyone else) and any per
 Cloudflare's free tier is 100,000 Worker requests/day and 100,000 D1 rows written/day. Votes are trivial against this. **Polling is what would blow it.**
 
 Rules:
-- The now-playing view polls at **10 seconds**, never faster
+- The now-playing view polls at **7.5 seconds**, never faster (was 10s; lowered
+  2026-08-05 after a real session felt laggy — sized against 75 players × 2
+  hours/day = 150 player-hours, which lands at ~76,000 requests/day, 76% of the
+  tier. Redo this arithmetic before changing it:
+  `polls/day = players × hours × 3600 / interval_seconds`)
 - Polling stops entirely when the tab is backgrounded (`visibilitychange`) and when no play is active
 - Leaderboards are fetched on load and on manual pull-to-refresh only, never polled
 - Cache leaderboard responses at the edge for 60 seconds
