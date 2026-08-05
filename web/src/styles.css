@@ -510,6 +510,12 @@ input {
     width: 34px;
     height: 34px;
   }
+
+  /* Half the separation rather than none — a short screen still needs the
+     break between reading and acting, it just cannot afford all of it. */
+  .votes {
+    padding: 6px 0 0;
+  }
 }
 
 .np-meta {
@@ -608,7 +614,11 @@ input {
   display: flex;
   gap: 22px;
   justify-content: center;
-  padding: 2px 0 0;
+  /* Breathing room above the thumbs, on purpose. They are the only controls
+     on the screen and everything above them is information — the gap is what
+     separates reading from acting. Squeezed to 2px while chasing the fold and
+     it read as one continuous column. */
+  padding: 12px 0 0;
 }
 
 /* 96px, down from 104. Spec 9.1 wants these huge and they still are — the
