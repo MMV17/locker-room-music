@@ -857,6 +857,53 @@ a Google Fonts CDN link, because campus wifi is unpredictable and the type is
 the identity. `unicode-range` means the 15KB latin-ext subset only downloads if
 a track title actually needs it.
 
+### Playback state and the voting countdown (2026-08-05)
+
+A line under the progress bar: **Playing / Paused / Ended**, then how long is
+left to vote. It says how long the door is open and never what is behind it —
+non-negotiable #2 is untouched.
+
+**It does not count down to `vote_closes_at`, and must not.** While a song is
+live the Pi's beacon keeps rolling that timestamp forward (keepalive + 150s +
+30s) — which is exactly what holds the window open through a pause — so
+rendering it raw would tick down and then visibly jump *up* every time a beacon
+landed. Instead it counts down to `duration - elapsed + VOTE_GRACE_MS`, which
+decreases smoothly and is correct in the normal case, and switches to the exact
+`ended_at + grace` once the song genuinely ends.
+
+Three states worth knowing:
+
+- **Paused** shows "Voting stays open" rather than a number. The window really
+  does stay open while the Pi says the song is on the speaker, so any countdown
+  there would be a lie.
+- **Ended** is its own state. A closed play keeps whatever `play_status` it last
+  had, so a finished song still claims to be playing — found by testing, where
+  it read "PLAYING · VOTING CLOSES IN 0:01". `ended_at` is the authority once
+  it exists.
+- **Under 30s** turns red, the same semantic red as the down vote. It is a
+  deadline, not a brand moment.
+
+`useElapsed()` is shared with the progress bar deliberately — two readings of
+the same clock computed separately is how they end up a second apart on screen.
+`VOTE_GRACE_MS` is duplicated from the Worker's `voteWindow.ts`; if spec 6.3's
+30s ever changes, both move.
+
+**The 30s grace does NOT block voting on the next song.** Worth writing down,
+because it looks like it should. Measured directly with song A ended 5s ago and
+song B started 5s ago:
+
+- `/api/now` immediately returns **song B**, `vote_window_open: true`
+- a vote on song B → **200**. Votable from the instant it starts, which is when
+  people react hardest to hearing it
+- a vote on song A → also **200**. The server honours the tail of A's window
+
+The windows overlap rather than queue: `isVoteWindowOpen` is evaluated per play,
+and B's opens at B's `started_at`. What is genuinely lost is the *tail* of A's
+grace, because the screen has moved to B and A's reveal has fired — the server
+would still accept it, but nothing in the UI offers it. That only matters for
+back-to-back songs; with any gap between them the grace works as spec 6.3
+intended.
+
 ### The AuxGoat (2026-08-05)
 
 The DJs board leads with a card reading **"{name} is the AuxGoat"** — the top

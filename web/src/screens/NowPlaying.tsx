@@ -167,6 +167,8 @@ export function NowPlaying({ teamName }: { teamName: string }) {
 
             <Progress play={play} />
 
+            <VoteWindow play={play} />
+
             {!play.vote_window_open ? (
               <div className="vote-locked">
                 <p className="t-label">Voting closed</p>
@@ -275,7 +277,46 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
  * not hypothetical: production already holds plays that opened and never
  * closed when the Pi lost its network mid-session.
  */
-function Progress({ play }: { play: NowPlay }) {
+/** Spec 6.3. Must match VOTE_GRACE_MS in the Worker's voteWindow.ts. */
+const VOTE_GRACE_MS = 30_000;
+
+/**
+ * How long is left to vote, and whether that number can be trusted.
+ *
+ * The obvious implementation — count down to `vote_closes_at` — produces a
+ * timer that ticks down and then jumps back up. While a song is live the Pi's
+ * beacon keeps rolling that timestamp forward (keepalive + 150s + 30s), which
+ * is exactly what holds the window open through a pause. Rendering it raw
+ * would look broken every time a beacon landed.
+ *
+ * So this counts down to the thing a player actually cares about: the end of
+ * the song, plus the grace. That decreases smoothly and is right in the normal
+ * case. Once the song really has ended the server gives a fixed `ended_at` and
+ * we switch to counting down to that, which is both exact and the moment the
+ * countdown matters most.
+ *
+ * Returns null when there is no honest number to show — paused (the window
+ * stays open as long as the Pi says the song is still on the speaker, so any
+ * countdown would be a lie) or no duration reported.
+ */
+function voteRemainingMs(play: NowPlay, elapsed: number): number | null {
+  if (!play.vote_window_open) return null;
+  if (play.ended_at) {
+    return Math.max(0, Date.parse(play.ended_at) + VOTE_GRACE_MS - Date.now());
+  }
+  if (play.play_status === "paused") return null;
+  if (play.duration_ms == null) return null;
+  return Math.max(0, play.duration_ms - elapsed + VOTE_GRACE_MS);
+}
+
+/**
+ * Playback position, ticking locally between polls.
+ *
+ * Shared by the progress bar and the voting countdown deliberately — they are
+ * two readings of the same clock, and computing it twice is how they end up
+ * disagreeing on screen by a second.
+ */
+function useElapsed(play: NowPlay): number {
   const paused = play.play_status === "paused";
 
   // Anchor on the Pi's played_ms when we have it: it counts playback time and
@@ -317,6 +358,66 @@ function Progress({ play }: { play: NowPlay }) {
     play.played_ms_age_ms,
   ]);
 
+  return elapsed;
+}
+
+/**
+ * Playing/paused, and how long is left to vote.
+ *
+ * Deliberately never a tally or a hint of one — spec non-negotiable #2. This
+ * says how long the door is open, never what is behind it.
+ */
+function VoteWindow({ play }: { play: NowPlay }) {
+  const elapsed = useElapsed(play);
+  // A closed play keeps whatever play_status it last had, so a finished song
+  // still claims to be "playing". Found by testing the last-30-seconds state:
+  // it read "PLAYING · VOTING CLOSES IN 0:01", which is two contradictory
+  // things at once. ended_at is the authority once it exists.
+  const ended = !!play.ended_at;
+  const paused = !ended && play.play_status === "paused";
+  const remaining = voteRemainingMs(play, elapsed);
+
+  // Nothing here once the window shuts: the panel below already says "Voting
+  // closed" where the thumbs were, and saying it twice on one screen reads as
+  // a bug. A finished song has no meaningful playing/paused state either.
+  if (!play.vote_window_open) return null;
+
+  return (
+    <div className={"vote-window" + (paused ? " is-paused" : "")}>
+      <span className="vw-state">
+        <span
+          className={
+            "vw-icon" + (ended ? " is-ended" : paused ? " is-paused" : "")
+          }
+          aria-hidden="true"
+        />
+        <span className="t-label">
+          {ended ? "Ended" : paused ? "Paused" : "Playing"}
+        </span>
+      </span>
+
+      <span className="vw-sep" aria-hidden="true" />
+
+      {/* Under a minute is the part people act on, so it gets the urgent
+          treatment. Above that a ticking clock is just noise. */}
+      {remaining == null ? (
+        <span className="t-label vw-time">
+          {paused ? "Voting stays open" : "Voting open"}
+        </span>
+      ) : (
+        <span className={"vw-time" + (remaining <= 30_000 ? " is-soon" : "")}>
+          {/* No literal space between these — .vw-time is a flex row and its
+              gap does the spacing. Both would apply. */}
+          <span className="t-label">Voting closes in</span>
+          <span className="num vw-clock">{formatClock(remaining)}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Progress({ play }: { play: NowPlay }) {
+  const elapsed = useElapsed(play);
   const duration = play.duration_ms ?? null;
   const shown = duration ? Math.min(elapsed, duration) : elapsed;
 

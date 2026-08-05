@@ -551,6 +551,104 @@ input {
   box-shadow: none;
 }
 
+/* Playback state and the voting deadline, on one quiet line under the bar.
+   Quiet is the point: the thumbs are what this screen is for, and a status
+   line that competes with them would be a step backwards. */
+.vote-window {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 14px;
+  min-height: 18px;
+}
+
+.vw-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+}
+
+.vw-state .t-label {
+  line-height: 1;
+}
+
+/* Drawn in CSS rather than added to icons.tsx: two shapes this small do not
+   earn an SVG each, and no emoji anywhere is a standing rule. */
+.vw-icon {
+  width: 0;
+  height: 0;
+  border-left: 7px solid var(--muted);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.vw-icon.is-paused {
+  width: 9px;
+  height: 10px;
+  border: none;
+  border-left: 3px solid var(--muted);
+  border-right: 3px solid var(--muted);
+}
+
+/* The song is over but the grace period is not. A stop square rather than a
+   play triangle, because "Playing · voting closes in 0:01" said two
+   contradictory things at once. */
+.vw-icon.is-ended {
+  width: 9px;
+  height: 9px;
+  border: none;
+  border-radius: 2px;
+  background: var(--muted);
+}
+
+.vw-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--hairline);
+}
+
+/* Flex, not inline text. The label is 11px and the clock 12px, and left as
+   inline spans their baselines sat a pixel apart — which is exactly the kind
+   of misalignment that reads as broken rather than as styling. Matching
+   line-height on both children is what actually holds them level. */
+.vw-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.vw-time .t-label,
+.vw-clock {
+  line-height: 1;
+}
+
+.vw-clock {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* The last thirty seconds are the only part anyone acts on. Semantic red,
+   like the down vote — this is a deadline, not a brand moment. */
+.vote-window .vw-time.is-soon .vw-clock,
+.vote-window .vw-time.is-soon .t-label {
+  color: var(--down);
+}
+
+.vote-window.is-paused .vw-icon {
+  border-left-color: var(--ink-2);
+  border-right-color: var(--ink-2);
+}
+
+.vote-window.is-shut {
+  opacity: 0.75;
+}
+
 .vote-locked {
   padding: 26px 0 10px;
 }
