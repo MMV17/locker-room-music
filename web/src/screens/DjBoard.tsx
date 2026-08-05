@@ -21,6 +21,10 @@ export function DjBoard() {
       .catch(() => setMine(null));
   }, []);
 
+  // Scores come back sorted descending, so the leader is [0]. A shared top
+  // score is not a tiebreak to invent — it is a tie, and saying so is honest.
+  const tiedAtTop = !!djs && djs.length > 1 && djs[1].score === djs[0].score;
+
   return (
     <main className="screen">
       <header className="screen-head">
@@ -39,6 +43,43 @@ export function DjBoard() {
             {mine.plays_until_qualified} more{" "}
             {mine.plays_until_qualified === 1 ? "song" : "songs"} to qualify for this board.
           </p>
+        </div>
+      )}
+
+      {/* The one moment this board gets to be loud. Everything below is a
+          ranked list; this is the only thing anyone will screenshot. */}
+      {djs && djs.length > 0 && !tiedAtTop && (
+        <div className="goat">
+          <span className="jersey">{djs[0].jersey_number || djs[0].name[0]}</span>
+          <span className="stack">
+            <p className="goat-line">
+              <strong>{djs[0].name}</strong> is the{" "}
+              <span className="goat-word">AuxGoat</span>
+            </p>
+            <p className="t-sub goat-sub">
+              {djs[0].plays} {djs[0].plays === 1 ? "song" : "songs"} ·{" "}
+              {formatScore(djs[0].score)}
+            </p>
+          </span>
+        </div>
+      )}
+
+      {/* Crowning one of two people on an identical score would be a coin toss
+          the board presented as a fact. Early on, before many songs have been
+          rated, matching scores are entirely ordinary. */}
+      {djs && tiedAtTop && (
+        <div className="goat is-tied">
+          <span className="stack">
+            <p className="goat-line">
+              Tied for <span className="goat-word">AuxGoat</span>
+            </p>
+            <p className="t-sub goat-sub">
+              {djs
+                .filter((d) => d.score === djs[0].score)
+                .map((d) => d.name)
+                .join(" · ")}
+            </p>
+          </span>
         </div>
       )}
 

@@ -857,6 +857,26 @@ a Google Fonts CDN link, because campus wifi is unpredictable and the type is
 the identity. `unicode-range` means the 15KB latin-ext subset only downloads if
 a track title actually needs it.
 
+### The AuxGoat (2026-08-05)
+
+The DJs board leads with a card reading **"{name} is the AuxGoat"** — the top
+qualified DJ, tying the board to the domain the product lives on. It is the
+only celebratory element in the product, so it gets a card rather than a badge
+on row one; a badge is lost in a list, and this is the thing anyone would
+actually screenshot. No emoji, per the frontend direction — the weight comes
+from the type and one accent word in `--team-ink`, the contrast-corrected
+variant, so an arbitrary school colour still clears 4.5:1 on white.
+
+**A shared top score renders "Tied for AuxGoat" and names everyone on it.**
+Crowning one of two people on an identical score would be a coin toss presented
+as a fact, and early in a season — before many songs have been rated — matching
+`djScore` values are entirely ordinary. Both branches were verified in the
+browser, the tie by intercepting the leaderboard response rather than
+contriving one in the database.
+
+Only ever shows qualified DJs, so it inherits spec 7.2's five-play threshold:
+nobody is crowned off two lucky songs.
+
 ### Decisions made during the build
 
 - **Thumbs up/down only.** A four-level scale (double thumbs) was designed and

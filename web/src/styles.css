@@ -224,6 +224,54 @@ input {
   padding: 20px;
 }
 
+/* The AuxGoat. The only celebratory element in the product, so it earns a
+   card of its own rather than a badge on row one — a badge would be lost in a
+   list, and this is the thing people will actually screenshot.
+
+   No emoji, per the frontend direction. The weight comes from the type and a
+   single accent word, which is also why the accent stays credible everywhere
+   else: --team-ink is the contrast-corrected variant, so an arbitrary school
+   colour still clears 4.5:1 on white here. */
+.goat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+
+.goat.is-tied {
+  /* Nobody to put a number to, so the badge would be an empty hole. */
+  padding-left: 22px;
+}
+
+.goat-line {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--ink-2);
+}
+
+.goat-line strong {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.goat-word {
+  font-weight: 700;
+  color: var(--team-ink);
+  white-space: nowrap;
+}
+
+.goat-sub {
+  font-size: 13px;
+  margin-top: 3px;
+}
+
 .rows {
   background: var(--surface);
   border-radius: var(--r-card);
