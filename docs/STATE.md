@@ -391,12 +391,22 @@ be just as invisible.
 
 Not yet addressed, seen on the same pass:
 
-- **Artwork that 404s shows a broken image**, alt text and all, rather than
-  falling back to the colour block. `artwork_state='found'` is trusted forever
-  once set, and URLs rot. The fallback exists (`artwork_fallback` is in the
-  `/api/now` payload) — nothing wires it to an `onError`.
 - The **NUMBER field is unlabelled as optional** even though `ready` only
   requires first and last name.
+
+**~~Artwork that 404s shows a broken image.~~ FIXED 2026-08-05.** There *was*
+an `onError`, but it cleared the element's `src` — and an `<img>` with no src
+renders its **alt text**, so a dead cover displayed the words "Artwork for
+POWER" across the colour block. Worse than the torn glyph it was avoiding, and
+it mutated an element React owns. `Artwork` now tracks the failure in state and
+renders the colour block instead, resetting on `src` change so one dead cover
+in a list cannot suppress every image after it. Verified by pointing a track at
+a URL serving non-image content: clean colour block, no alt text, no glyph.
+
+Worth knowing: a dead **Deezer** URL does not 404 — it 302s to a generic
+placeholder image, which loads fine and so never triggers `onError`. The
+fallback protects against a URL that stops serving an image, not against Deezer
+quietly substituting one.
 
 ## Artwork: search BY album, don't just rank by it (2026-08-05)
 

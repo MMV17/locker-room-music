@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { IconDjs, IconHistory, IconNow, IconSongs } from "./icons";
 import { useNavigate, useRoute } from "./router";
@@ -19,7 +20,22 @@ export function Artwork({
   className: string;
   alt?: string;
 }) {
-  if (src) {
+  // A cover URL is stored once and trusted forever (spec 6.4), so a CDN that
+  // moves or expires an image leaves a permanently dead link. Render the
+  // colour block instead of the failure.
+  //
+  // This is state rather than a DOM poke on the error event. The previous
+  // version cleared the element's `src`, and an <img> with no src renders its
+  // ALT TEXT — so a dead cover showed the words "Artwork for POWER" sitting on
+  // the colour block, which is worse than the torn glyph it was avoiding. It
+  // also mutated an element React owns.
+  const [failed, setFailed] = useState(false);
+
+  // Reset when the track changes, or the first dead cover in a list would
+  // suppress every image rendered by that component afterwards.
+  useEffect(() => setFailed(false), [src]);
+
+  if (src && !failed) {
     return (
       <img
         className={className}
@@ -27,12 +43,7 @@ export function Artwork({
         alt={alt}
         loading="lazy"
         decoding="async"
-        // A 404 from the artwork CDN would otherwise show a torn-image glyph.
-        onError={(e) => {
-          const el = e.currentTarget;
-          el.style.background = fallback;
-          el.removeAttribute("src");
-        }}
+        onError={() => setFailed(true)}
       />
     );
   }
