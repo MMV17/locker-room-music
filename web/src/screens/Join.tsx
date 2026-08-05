@@ -64,9 +64,26 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
 
       {step === "code" ? (
         <form
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            if (code.trim()) setStep("name");
+            if (!code.trim() || busy) return;
+            // Check the code here rather than letting it fail after the name
+            // form. Getting sent back three fields later is the single most
+            // confusing thing in this flow, and a first-timer does it once.
+            setBusy(true);
+            setError(null);
+            try {
+              await post("/api/session/check-code", { team_code: code.trim() });
+              setStep("name");
+            } catch (err) {
+              if (err instanceof ApiError && err.status === 403) {
+                setError("That team code isn't right.");
+              } else {
+                setError("Could not check that code. Try again.");
+              }
+            } finally {
+              setBusy(false);
+            }
           }}
         >
           <label className="field">
@@ -82,8 +99,11 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
               aria-label="Team code"
             />
           </label>
-          <button className="btn is-primary is-block" disabled={!code.trim()}>
-            Continue
+          <button
+            className="btn is-primary is-block"
+            disabled={!code.trim() || busy}
+          >
+            {busy ? "Checking…" : "Continue"}
           </button>
         </form>
       ) : (

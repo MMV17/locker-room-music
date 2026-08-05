@@ -336,6 +336,32 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
  * cookies or switching phones would split a player's history across two rows
  * and quietly halve their DJ score.
  */
+/**
+ * Check a team code without signing anyone up.
+ *
+ * The Join screen asks for the code first and the player's name second, but
+ * the code used to be validated only when the whole thing submitted — so a
+ * wrong code meant filling in three fields and *then* being sent back to the
+ * start. Observed on a real walkthrough. This lets step one fail at step one.
+ *
+ * Deliberately creates nothing and returns nothing but a status, so it cannot
+ * be used to enumerate players.
+ */
+app.post("/api/session/check-code", async (c) => {
+  const body = await c.req
+    .json<{ team_code?: string }>()
+    .catch((): { team_code?: string } => ({}));
+  if (
+    !safeEqual(
+      normalizeTeamCode(body.team_code ?? ""),
+      normalizeTeamCode(c.env.TEAM_CODE),
+    )
+  ) {
+    return c.json({ error: "Wrong team code" }, 403);
+  }
+  return c.body(null, 204);
+});
+
 app.post("/api/session", async (c) => {
   const body = await c.req.json<{
     team_code: string;

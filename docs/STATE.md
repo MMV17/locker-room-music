@@ -344,6 +344,40 @@ Verified live against production: every casing and padding of `CRUSADERS` is
 accepted; `KNIGHTS`, `CRUSADER`, `CRUS ADERS`, and empty are still 403.
 Covered by `backend/test/teamcode.test.ts` (6 tests).
 
+## First real UX walkthrough (2026-08-05)
+
+Done at 402×874 against a locally seeded database (6 players, 17 plays, 64
+votes, one live play with an open window) — **not** against production, whose
+clean slate is deliberately preserved. Seed generator lives in the session
+scratchpad; regenerate rather than reuse, since the live play ages out of its
+vote window in a few minutes and then the screen legitimately shows OFFLINE
+next to a full progress bar.
+
+Two things were wrong and are now fixed:
+
+**The team code failed three fields too late.** The Join screen asks for the
+code, then the name, but the code was only checked when the whole form
+submitted — so a wrong code meant filling in first name, last name and number
+and *then* being bounced back to step one. Reproduced on the walkthrough. New
+`POST /api/session/check-code` returns 204/403, creates nothing, and Join now
+validates before advancing. This compounded badly with the case bug above: the
+input is `text-transform: uppercase`, so a lowercase entry *displays* as
+`CRUSADERS` and looks obviously correct while being rejected.
+
+**Disabled buttons did not look disabled.** `.btn:disabled` was only
+`opacity: 0.5`, and half-strength team purple still reads as a confident,
+tappable button — tapping did nothing, with no feedback. Disabled now drops the
+brand colour entirely for `--hairline`/`--muted`, no shadow, `not-allowed`.
+
+Not yet addressed, seen on the same pass:
+
+- **Artwork that 404s shows a broken image**, alt text and all, rather than
+  falling back to the colour block. `artwork_state='found'` is trusted forever
+  once set, and URLs rot. The fallback exists (`artwork_fallback` is in the
+  `/api/now` payload) — nothing wires it to an `onError`.
+- The **NUMBER field is unlabelled as optional** even though `ready` only
+  requires first and last name.
+
 ## Known issues, not yet addressed
 
 **~~Heartbeats dominate the outbox.~~ FIXED 2026-08-04.** It peaked at 98.5%

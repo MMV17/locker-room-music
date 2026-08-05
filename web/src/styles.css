@@ -640,8 +640,15 @@ input {
   width: 100%;
 }
 
+/* A tinted team colour still reads as a confident, tappable button — on a
+   walkthrough the disabled "Continue" was indistinguishable from the live one,
+   and tapping it did nothing with no feedback. Drop the brand colour entirely
+   so disabled looks inert rather than merely faded. */
 .btn:disabled {
-  opacity: 0.5;
+  background: var(--hairline);
+  color: var(--muted);
+  box-shadow: none;
+  cursor: not-allowed;
 }
 
 .btn-quiet {
