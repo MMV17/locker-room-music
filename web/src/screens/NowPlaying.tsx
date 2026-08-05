@@ -221,11 +221,16 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
       <span className="dj-chip">
         <span className="jersey is-sm">{play.dj.jersey_number || play.dj.name[0]}</span>
         <span className="stack">
+          {/* Leads rather than trails. A bare "DJ" under a name read as a job
+              title — it never said what the chip is actually telling you,
+              which is whose phone this song came off. The label first makes
+              the whole chip a sentence: now on aux, Jake Moreau.
+
+              Still not "You're DJing" when it is you: the panel below the
+              progress bar already says exactly that, and saying it twice reads
+              as a bug rather than as emphasis. */}
+          <span className="dj-chip-label">Now on aux</span>
           <span className="dj-chip-name">{play.dj.name}</span>
-          {/* Not "You're DJing" when it is you — the panel below the progress
-              bar already says exactly that, and saying it twice reads as a
-              bug rather than as emphasis. */}
-          <span className="dj-chip-sub">DJ</span>
         </span>
       </span>
     );
@@ -237,7 +242,10 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
         <span className="dj-chip is-unclaimed">
           <span className="jersey is-sm">?</span>
           <span className="stack">
+            <span className="dj-chip-label">Now on aux</span>
             <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
+            {/* The hint is what lets someone recognise their own phone in a
+                room where four are connected. Worth the third line here. */}
             <span className="dj-chip-sub">Unclaimed · {play.device.mac_hint}</span>
           </span>
         </span>
@@ -251,7 +259,10 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
   return (
     <span className="dj-chip is-unclaimed">
       <span className="jersey is-sm">?</span>
-      <span className="dj-chip-name">Unknown DJ</span>
+      <span className="stack">
+        <span className="dj-chip-label">Now on aux</span>
+        <span className="dj-chip-name">Unknown phone</span>
+      </span>
     </span>
   );
 }

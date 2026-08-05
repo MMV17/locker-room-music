@@ -398,6 +398,19 @@ input {
   white-space: nowrap;
 }
 
+/* Sits above the name, so the chip reads as a sentence rather than a badge
+   with a job title on it. Same small-caps language as the other labels on the
+   page ("HOLY CROSS", "TEAM CODE") — it should register as a caption and let
+   the name carry the weight. */
+.dj-chip-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .dj-chip-sub {
   font-size: 12px;
   color: var(--muted);
