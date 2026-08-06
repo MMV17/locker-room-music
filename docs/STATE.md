@@ -126,6 +126,20 @@ Answered on 2026-08-05, so do not re-litigate these:
 - **No Time Machine destination.** Git covers the source now, but not
   `backend/.secrets.local`. Mack confirmed `MAC_SALT` is saved off-laptop.
 - **`TEAM_CODE` is still `CRUSADERS`** and is still the only gate.
+- **A routing artifact got in as a real play.** Seen 2026-08-05 20:12 from a
+  MacBook: artist `Listening on MacBook Pro`, title `sdp interlude • Travis
+  Scott`, 187s, `counted = 1`. This is the transitional metadata quirk in
+  "AVRCP quirks found on a real iPhone" #4 — but the 2s create-grace only
+  catches it when it *passes through*, and here the output routing sat in that
+  state for over three minutes, so the artifact was written and will show on
+  the track leaderboard.
+
+  Deliberately not fixed: Mack called it a weird one-off and it came from a
+  laptop, not a phone. If it recurs, the signature is an artist beginning
+  `Listening on` with the real title and artist joined by ` • ` in the title
+  field — but hardcoding an Apple string is fragile, and inverting the title
+  is a better discriminator than matching the vendor text. One row to clean
+  up if it is ever addressed.
 
 ### Beta pre-flight — all closed as of 2026-08-04
 
