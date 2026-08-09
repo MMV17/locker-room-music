@@ -2,23 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiError, post } from "./../api";
 import { navigate } from "./../router";
 import { Spinner } from "./../components";
-
-/**
- * A team code handed over by the front door at auxgoat.com, which already
- * asked for it once. Nobody should type the same word twice in one sitting.
- *
- * It arrives in the URL FRAGMENT rather than the query string, and that is a
- * privacy decision, not a style one: a fragment is never sent to the server
- * and never appears in a Referer header. This app loads artwork via <img>
- * straight from Deezer and iTunes, so a `?code=` would hand the team code to
- * Apple and Deezer with every cover it fetches — and that code is currently
- * the only gate on the whole team's data.
- */
-function codeFromHash(): string | null {
-  if (typeof location === "undefined" || !location.hash) return null;
-  const code = new URLSearchParams(location.hash.replace(/^#/, "")).get("code");
-  return code && code.trim() ? code.trim() : null;
-}
+import { handedTeamCode } from "./../handoff";
 
 /**
  * Team code, then your own name and number. No admin-curated roster and no
@@ -31,7 +15,7 @@ function codeFromHash(): string | null {
  * switching phones does not split your history.
  */
 export function Join({ teamName, onJoined }: { teamName: string; onJoined: () => void }) {
-  const [handed] = useState(codeFromHash);
+  const [handed] = useState(handedTeamCode);
   const [code, setCode] = useState(handed ?? "");
   // Start verifying immediately when a code was handed over, so the code form
   // never flashes on screen before being skipped past.
@@ -54,11 +38,6 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
    */
   useEffect(() => {
     if (handed === null) return;
-
-    // Take it out of the address bar. It has done its job, and leaving a team
-    // code in a URL invites it into a screenshot, a shared link, or the tab
-    // someone hands to a friend.
-    history.replaceState(null, "", location.pathname + location.search);
 
     let cancelled = false;
     (async () => {
