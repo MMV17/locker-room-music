@@ -605,6 +605,56 @@ testable without a Pi, a radio, or a fifteen-minute wait.
 journalctl -u lockerroom-netwatch -f
 ```
 
+### The watchdog has a blind spot, confirmed in production (2026-08-09)
+
+**netwatch watches `wlan0`. The beacon uses the default route. When a cable is
+plugged in those are different paths, and the watchdog cannot see the one that
+matters.**
+
+Measured on the Pi during a real outage:
+
+```
+default via 192.168.2.1 dev eth0   metric 100   <- wins
+default via 192.168.1.1 dev wlan0  metric 600
+
+curl worker over the default route : 000   (dead)
+curl worker --interface wlan0      : 200   (fine)
+```
+
+The beacon had been silent for ~38 minutes. `journalctl -u lockerroom-netwatch`
+over that whole window contained **exactly two lines** — the service starting.
+Not one `no egress on wlan0`. The ladder never ran, because from where netwatch
+was looking nothing was wrong. `/var/lib/lockerroom/netwatch-state.json` does
+not exist, which confirms it has **never** rebooted the box.
+
+Deleting the dead route restored egress instantly and the heartbeat returned
+within one beacon interval:
+
+```bash
+sudo ip route del default via 192.168.2.1 dev eth0
+```
+
+That is a temporary fix — a DHCP renew or a reboot puts the route back. **The
+real fix is to unplug the cable**, which is what "Do not leave the ethernet
+cable plugged in" above has always meant. This is that failure, observed.
+
+**The design gap, and it is worth fixing.** Binding the probe to `wlan0` was a
+deliberate and correct decision for the failure it was written for — with a
+cable in, an unbound probe would leave over ethernet and cheerfully report
+healthy while wifi was dead. But it makes the inverse invisible, and the
+inverse is what happened. The watchdog answers "is wifi healthy?" when the
+question that matters is "can this box reach the server over the route it
+actually uses?"
+
+Suggested shape: probe **both** — bound to `wlan0` *and* unbound over the
+default route. If wlan0 succeeds while the default route fails, that is the
+ethernet trap specifically, and bouncing wifi is the wrong response; the right
+one is to drop or deprioritise the `eth0` default route and log loudly. Bouncing
+wifi would "fix" a wifi problem that does not exist while the beacon stays dead.
+
+**Do not simply unbind the probe.** That reintroduces the original bug the
+binding was added to prevent.
+
 ## Team code is now case-insensitive (2026-08-05)
 
 First real-world failure: `CRUSADERS` came back "incorrect team code". The
