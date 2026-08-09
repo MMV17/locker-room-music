@@ -3,11 +3,28 @@
 # Usage: pi/scripts/deploy.sh [pi-host]
 set -euo pipefail
 
-# 192.168.1.6 was the old home network and is dead. The dependable route is
-# USB-C ethernet with macOS Internet Sharing, which hands the Pi 192.168.2.2.
-# Over HCGuest wifi the Pi is NOT reachable at all - TCP/22 is filtered
-# between guest clients - so this is the only way in. See docs/STATE.md.
-PI_HOST="${1:-pi@192.168.2.2}"
+# Pass the host explicitly. There is no good default any more:
+#
+#   pi/scripts/deploy.sh pi@192.168.1.6     # home wifi (alive again as of
+#                                           # 2026-08-09, despite older notes)
+#   pi/scripts/deploy.sh pi@192.168.2.2     # USB-C ethernet + Internet Sharing
+#
+# 192.168.2.2 used to be the default, and that is now actively wrong to reach
+# for first: the cable creates a `default via ... dev eth0 metric 100` route
+# that beats wlan0, and if Internet Sharing is not actually sharing to that
+# adapter the Pi goes silent while looking perfectly healthy. That cost an hour
+# on 2026-08-09. Prefer wifi; use the cable only when wifi genuinely cannot
+# reach it, and unplug it afterwards.
+#
+# Over HCGuest the Pi is NOT reachable at all - TCP/22 is filtered between
+# guest clients - so on campus the cable is the only way in. See docs/STATE.md,
+# and note there are TWO Pis: identify by MAC (e4:5f:01:*), never by
+# raspberrypi.local, which resolves to the other one.
+if [ $# -lt 1 ]; then
+  echo "usage: $0 pi@<host>   (e.g. pi@192.168.1.6)" >&2
+  exit 2
+fi
+PI_HOST="$1"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 echo "Deploying to ${PI_HOST}..."
@@ -24,9 +41,16 @@ sudo mv /tmp/lockerroom-listener.service /etc/systemd/system/lockerroom-listener
 sudo mv /tmp/lockerroom-netwatch.service /etc/systemd/system/lockerroom-netwatch.service
 sudo systemctl daemon-reload
 sudo systemctl restart lockerroom-listener
-# The watchdog is enabled as well as started: its whole job is to be running
-# after an unattended reboot, which is exactly when nobody is here to start it.
-sudo systemctl enable --now lockerroom-netwatch
+# `enable` so it survives an unattended reboot, which is exactly when nobody is
+# here to start it — and `restart` SEPARATELY, which is the part that matters.
+#
+# This used to be `enable --now`, and that silently never picked up new code:
+# --now only STARTS a stopped unit, so on any box where the watchdog was
+# already running the deploy copied new files into /opt/lockerroom and left the
+# old process running. Caught 2026-08-09 when a freshly deployed fix did
+# nothing and the journal still showed a PID from 49 minutes earlier.
+sudo systemctl enable lockerroom-netwatch
+sudo systemctl restart lockerroom-netwatch
 sleep 3
 systemctl is-active lockerroom-listener
 systemctl is-active lockerroom-netwatch

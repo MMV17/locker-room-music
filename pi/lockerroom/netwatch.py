@@ -46,6 +46,14 @@ NONE = "none"
 BOUNCE = "bounce"
 RESTART_NM = "restart-nm"
 REBOOT = "reboot"
+DROP_ROUTE = "drop-route"
+
+# What the two probes together say about the box. Added 2026-08-09 after the
+# watchdog sat through a 38-minute outage without logging a single failure.
+HEALTHY = "healthy"
+OFFLINE = "offline"              # neither path works — the real outage
+ROUTE_TRAP = "route-trap"        # wifi fine, default route dead (the cable)
+WIFI_DEGRADED = "wifi-degraded"  # default route fine, wifi dead
 
 STATE_PATH = Path("/var/lib/lockerroom/netwatch-state.json")
 
@@ -128,30 +136,129 @@ def _run(argv: list[str], timeout: float) -> tuple[int, str]:
         return 1, str(e)
 
 
-def probe_url(url: str, interface: str, timeout: float) -> bool:
-    """True if `url` is reachable *over `interface`*."""
-    rc, _ = _run(
-        [
-            "curl", "--interface", interface,
-            "--max-time", str(int(timeout)),
-            "-s", "-S", "-o", "/dev/null",
-            url,
-        ],
-        timeout=timeout + 5,
-    )
+def probe_url(url: str, interface: str | None, timeout: float) -> bool:
+    """
+    True if `url` is reachable. Bound to `interface`, or over whatever the
+    default route is when `interface` is None.
+    """
+    argv = ["curl"]
+    if interface:
+        argv += ["--interface", interface]
+    argv += ["--max-time", str(int(timeout)), "-s", "-S", "-o", "/dev/null", url]
+    rc, _ = _run(argv, timeout=timeout + 5)
     return rc == 0
 
 
-def has_egress(api_base_url: str, cfg: WatchConfig) -> bool:
+def _egress_via(api_base_url: str, cfg: WatchConfig, interface: str | None) -> bool:
     """
-    Healthy if EITHER target answers over the wifi interface.
+    Healthy if EITHER target answers over this path.
 
     Cheap path first: the Worker is the thing we actually care about, so when
     it answers we ask nothing else.
+
+    Both probes MUST keep the neutral-host fallback, and this is why they share
+    one implementation. If the default-route probe checked only the Worker, a
+    Cloudflare incident would look like `wifi ok, default route dead` — and the
+    watchdog would respond by deleting the box's default route over somebody
+    else's outage.
     """
-    if probe_url(api_base_url, cfg.interface, cfg.timeout_s):
+    if probe_url(api_base_url, interface, cfg.timeout_s):
         return True
-    return probe_url(NEUTRAL_URL, cfg.interface, cfg.timeout_s)
+    return probe_url(NEUTRAL_URL, interface, cfg.timeout_s)
+
+
+def has_egress(api_base_url: str, cfg: WatchConfig) -> bool:
+    """Egress over the wifi interface specifically."""
+    return _egress_via(api_base_url, cfg, cfg.interface)
+
+
+def has_default_route_egress(api_base_url: str, cfg: WatchConfig) -> bool:
+    """
+    Egress over the default route — the path the beacon and the outbox use.
+
+    This is the probe whose absence caused the 2026-08-09 blind spot: wlan0
+    answered 200 while the default route via eth0 answered nothing, so the
+    watchdog reported perfect health for 38 minutes while the Pi was invisible
+    to the server.
+    """
+    return _egress_via(api_base_url, cfg, None)
+
+
+def classify(wifi_ok: bool, default_ok: bool) -> str:
+    """Pure. Which of the four situations the box is in."""
+    if wifi_ok and default_ok:
+        return HEALTHY
+    if not wifi_ok and not default_ok:
+        return OFFLINE
+    if wifi_ok:
+        return ROUTE_TRAP
+    return WIFI_DEGRADED
+
+
+def permitted(action: str, situation: str) -> str:
+    """
+    Gate the reboot rung on the box having no egress at all.
+
+    Rebooting is justified when nothing can reach us and the failure survived a
+    reconnect — that is what it was written for. It is NOT justified to fix
+    wifi the box is not currently using: power-cycling a speaker that is
+    working and reachable is strictly worse than leaving it alone. Downgrade to
+    the strongest non-destructive rung instead.
+    """
+    if action == REBOOT and situation != OFFLINE:
+        return RESTART_NM
+    return action
+
+
+def other_default_routes(interface: str) -> list[tuple[str, str]]:
+    """
+    Default routes that do NOT leave via `interface`, as (gateway, device).
+    Gateway is "" for a scope-link route with no via.
+
+    These are the candidates for the ethernet trap: a route that wins on metric
+    and goes nowhere.
+    """
+    rc, out = _run(["ip", "route", "show", "default"], timeout=15)
+    if rc != 0:
+        return []
+
+    routes: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        parts = line.split()
+        if not parts or parts[0] != "default":
+            continue
+        gw = dev = ""
+        for i, tok in enumerate(parts):
+            if tok == "via" and i + 1 < len(parts):
+                gw = parts[i + 1]
+            elif tok == "dev" and i + 1 < len(parts):
+                dev = parts[i + 1]
+        if dev and dev != interface:
+            routes.append((gw, dev))
+    return routes
+
+
+def do_drop_route(cfg: WatchConfig) -> None:
+    """
+    Delete the dead non-wifi default route so traffic falls back to wifi.
+
+    Deliberately a delete rather than a metric change: DHCP will hand the route
+    back on renew, and having it re-dropped a minute later is the correct
+    behaviour while the cable is still in. The permanent fix is unplugging it.
+    """
+    for gw, dev in other_default_routes(cfg.interface):
+        argv = ["ip", "route", "del", "default"]
+        if gw:
+            argv += ["via", gw]
+        argv += ["dev", dev]
+        logging.error(
+            "netwatch: default route via %s dev %s is dead while %s is healthy "
+            "— dropping it (unplug the cable to fix this properly)",
+            gw or "(no gateway)", dev, cfg.interface,
+        )
+        rc, out = _run(argv, timeout=30)
+        if rc != 0:
+            logging.error("netwatch: could not drop that route: %s", out.strip())
 
 
 def active_connection(interface: str) -> str | None:
@@ -195,7 +302,9 @@ def do_reboot() -> None:
 
 def act(action: str, cfg: WatchConfig, now: float, state: dict) -> dict:
     """Carry out one rung. Returns the state dict to persist."""
-    if action == BOUNCE:
+    if action == DROP_ROUTE:
+        do_drop_route(cfg)
+    elif action == BOUNCE:
         do_bounce(cfg)
     elif action == RESTART_NM:
         do_restart_nm()
@@ -228,16 +337,41 @@ def watch_loop(api_base_url: str, cfg: WatchConfig) -> None:
     )
 
     while True:
-        if has_egress(api_base_url, cfg):
+        wifi_ok = has_egress(api_base_url, cfg)
+
+        # Only worth asking when a route exists that ISN'T wifi. With no cable
+        # in, the default route IS wlan0, so the unbound probe would be the
+        # same request down the same wire — and asking would also turn "no
+        # default route at all" into a phantom route trap with nothing to drop.
+        if other_default_routes(cfg.interface):
+            default_ok = has_default_route_egress(api_base_url, cfg)
+        else:
+            default_ok = wifi_ok
+
+        situation = classify(wifi_ok, default_ok)
+
+        if situation == HEALTHY:
             if fails:
                 logging.info("netwatch: egress restored after %d failed probes", fails)
             fails = 0
+
+        elif situation == ROUTE_TRAP:
+            # Not a wifi fault, so it must not feed the wifi ladder — bouncing
+            # wlan0 here would "repair" a link that is already working while
+            # the beacon stayed dead. Wifi is demonstrably healthy, so any
+            # accumulated count is stale.
+            fails = 0
+            state = act(DROP_ROUTE, cfg, time.time(), state)
+
         else:
             fails += 1
-            logging.warning("netwatch: no egress on %s (%d)", cfg.interface, fails)
-            action = decide(fails, cfg)
+            logging.warning(
+                "netwatch: %s — no egress on %s (%d)", situation, cfg.interface, fails
+            )
+            action = permitted(decide(fails, cfg), situation)
             if action != NONE:
                 state = act(action, cfg, time.time(), state)
+
         time.sleep(cfg.probe_interval_s)
 
 

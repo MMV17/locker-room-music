@@ -148,3 +148,142 @@ class TestActiveConnection:
         out = "wlan0:--\n"
         monkeypatch.setattr(netwatch, "_run", lambda argv, timeout: (0, out))
         assert netwatch.active_connection("wlan0") is None
+
+
+# ---------------------------------------------------------------------------
+# The blind spot found in production 2026-08-09.
+#
+# netwatch probed only wlan0 and asked "is wifi healthy?". The beacon uses the
+# DEFAULT ROUTE. With a cable plugged in those are different paths: the Pi had
+# `default via 192.168.2.1 dev eth0 metric 100` which was dead, while wlan0
+# reached the Worker fine. The beacon was down 38 minutes and the netwatch
+# journal for that window held two lines — the service starting. The ladder
+# never ran, because from where it was looking nothing was wrong.
+# ---------------------------------------------------------------------------
+
+from lockerroom.netwatch import (  # noqa: E402
+    DROP_ROUTE,
+    HEALTHY,
+    OFFLINE,
+    ROUTE_TRAP,
+    WIFI_DEGRADED,
+    classify,
+    has_default_route_egress,
+    other_default_routes,
+    permitted,
+)
+
+
+class TestClassify:
+    def test_both_paths_working_is_healthy(self):
+        assert classify(wifi_ok=True, default_ok=True) == HEALTHY
+
+    def test_neither_path_working_is_a_real_outage(self):
+        assert classify(wifi_ok=False, default_ok=False) == OFFLINE
+
+    def test_wifi_fine_but_default_route_dead_is_the_ethernet_trap(self):
+        # Exactly the production failure. Bouncing wifi here would "fix" a
+        # problem that does not exist while the beacon stayed dead.
+        assert classify(wifi_ok=True, default_ok=False) == ROUTE_TRAP
+
+    def test_default_route_fine_but_wifi_dead_is_only_degraded(self):
+        # The box can still reach us, over ethernet. Worth repairing wifi,
+        # never worth power-cycling a speaker that is working.
+        assert classify(wifi_ok=False, default_ok=True) == WIFI_DEGRADED
+
+
+class TestDefaultRouteProbe:
+    def test_the_default_route_probe_is_not_bound_to_an_interface(self, monkeypatch):
+        seen = []
+
+        def fake_run(argv, timeout):
+            seen.append(argv)
+            return 0, ""
+
+        monkeypatch.setattr(netwatch, "_run", fake_run)
+        has_default_route_egress("https://example.test", CFG)
+        assert seen, "no probe was issued"
+        assert "--interface" not in seen[0], "must follow the default route, not wlan0"
+
+    def test_a_worker_outage_is_not_mistaken_for_a_route_trap(self, monkeypatch):
+        # If only the Worker is down, BOTH probes fall back to the neutral host
+        # and both report healthy. Without this, a Cloudflare incident would
+        # make the watchdog delete the box's default route.
+        def fake(url, interface, timeout):
+            return "captive.apple.com" in url
+
+        monkeypatch.setattr(netwatch, "probe_url", fake)
+        wifi = netwatch.has_egress("https://worker.test", CFG)
+        default = has_default_route_egress("https://worker.test", CFG)
+        assert classify(wifi_ok=wifi, default_ok=default) == HEALTHY
+
+
+class TestOtherDefaultRoutes:
+    IP_ROUTE = (
+        "default via 192.168.2.1 dev eth0 proto dhcp src 192.168.2.2 metric 100 \n"
+        "default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.6 metric 600 \n"
+    )
+
+    def test_finds_the_non_wifi_default_route(self, monkeypatch):
+        monkeypatch.setattr(netwatch, "_run", lambda argv, timeout: (0, self.IP_ROUTE))
+        assert other_default_routes("wlan0") == [("192.168.2.1", "eth0")]
+
+    def test_never_offers_to_delete_the_wifi_route(self, monkeypatch):
+        only_wifi = "default via 192.168.1.1 dev wlan0 proto dhcp metric 600 \n"
+        monkeypatch.setattr(netwatch, "_run", lambda argv, timeout: (0, only_wifi))
+        assert other_default_routes("wlan0") == []
+
+    def test_handles_a_route_with_no_gateway(self, monkeypatch):
+        out = "default dev usb0 scope link metric 100 \n"
+        monkeypatch.setattr(netwatch, "_run", lambda argv, timeout: (0, out))
+        assert other_default_routes("wlan0") == [("", "usb0")]
+
+    def test_survives_ip_route_failing(self, monkeypatch):
+        monkeypatch.setattr(netwatch, "_run", lambda argv, timeout: (1, "boom"))
+        assert other_default_routes("wlan0") == []
+
+
+class TestRebootGate:
+    def test_reboot_is_allowed_when_there_is_no_egress_at_all(self):
+        assert permitted(REBOOT, OFFLINE) == REBOOT
+
+    def test_reboot_is_downgraded_while_the_box_can_still_reach_us(self):
+        # Rebooting a speaker that is working, to fix wifi it is not using,
+        # is strictly worse than leaving it alone.
+        assert permitted(REBOOT, WIFI_DEGRADED) == RESTART_NM
+
+    def test_gentler_rungs_are_untouched(self):
+        for situation in (OFFLINE, WIFI_DEGRADED):
+            assert permitted(BOUNCE, situation) == BOUNCE
+            assert permitted(RESTART_NM, situation) == RESTART_NM
+            assert permitted(NONE, situation) == NONE
+
+
+class TestDropRoute:
+    def test_deletes_the_dead_default_route_by_gateway_and_device(self, monkeypatch):
+        calls = []
+
+        def fake_run(argv, timeout):
+            calls.append(argv)
+            if argv[:3] == ["ip", "route", "show"]:
+                return 0, "default via 192.168.2.1 dev eth0 metric 100 \n"
+            return 0, ""
+
+        monkeypatch.setattr(netwatch, "_run", fake_run)
+        netwatch.act(DROP_ROUTE, CFG, now=0.0, state={})
+        assert ["ip", "route", "del", "default", "via", "192.168.2.1", "dev", "eth0"] in calls
+
+    def test_never_uses_a_shell(self, monkeypatch):
+        calls = []
+
+        def fake_run(argv, timeout):
+            calls.append(argv)
+            if argv[:3] == ["ip", "route", "show"]:
+                return 0, "default via 10.0.0.1 dev eth0 metric 100 \n"
+            return 0, ""
+
+        monkeypatch.setattr(netwatch, "_run", fake_run)
+        netwatch.act(DROP_ROUTE, CFG, now=0.0, state={})
+        for argv in calls:
+            assert isinstance(argv, list)
+            assert not any("&&" in part or ";" in part for part in argv)

@@ -646,14 +646,63 @@ inverse is what happened. The watchdog answers "is wifi healthy?" when the
 question that matters is "can this box reach the server over the route it
 actually uses?"
 
-Suggested shape: probe **both** — bound to `wlan0` *and* unbound over the
-default route. If wlan0 succeeds while the default route fails, that is the
-ethernet trap specifically, and bouncing wifi is the wrong response; the right
-one is to drop or deprioritise the `eth0` default route and log loudly. Bouncing
-wifi would "fix" a wifi problem that does not exist while the beacon stays dead.
+**FIXED and verified on hardware, same day.** netwatch now probes both paths —
+bound to `wlan0` *and* unbound over the default route — and classifies:
 
-**Do not simply unbind the probe.** That reintroduces the original bug the
-binding was added to prevent.
+| wlan0 | default route | situation | action |
+|---|---|---|---|
+| ✅ | ✅ | `healthy` | nothing |
+| ❌ | ❌ | `offline` | the original ladder, unchanged |
+| ✅ | ❌ | `route-trap` | **drop the dead non-wifi default route** |
+| ❌ | ✅ | `wifi-degraded` | repair wifi, but **never reboot** |
+
+Two subtleties that are easy to get wrong later:
+
+- **Both probes keep the neutral-host fallback**, which is why they share one
+  implementation (`_egress_via`). If the default-route probe checked only the
+  Worker, a Cloudflare incident would look like `wifi ok, default route dead`
+  and the watchdog would delete the box's default route over someone else's
+  outage.
+- **The reboot rung is gated on `offline`.** Power-cycling a speaker that is
+  working and reachable, to repair wifi it is not currently using, is strictly
+  worse than leaving it alone. It downgrades to `restart-nm`.
+- **Do not simply unbind the probe.** That reintroduces the original bug the
+  binding was added to prevent.
+
+The default-route probe only runs when a non-wifi default route actually
+exists, so with no cable in there is no extra network cost — and "no default
+route at all" cannot become a phantom trap with nothing to drop.
+
+Verified on the real Pi by manufacturing the trap with a dummy interface
+(`ip link add dummy0 type dummy`, then a dead default route at metric 50).
+21 seconds later:
+
+```
+ERROR netwatch: default route via 10.99.99.254 dev dummy0 is dead while wlan0
+is healthy — dropping it (unplug the cable to fix this properly)
+```
+
+Route gone, egress back to 200. 33 tests in `pi/tests/test_netwatch.py`.
+
+### `deploy.sh` never restarted the watchdog — every deploy until now
+
+Found while verifying the above: the fix was deployed and did nothing, and the
+journal still showed a PID from 49 minutes earlier.
+
+```bash
+sudo systemctl restart lockerroom-listener       # restarts
+sudo systemctl enable --now lockerroom-netwatch  # does NOTHING if running
+```
+
+`--now` only *starts* a stopped unit. On any box where the watchdog was already
+running — which is every box, since it is enabled and `Restart=always` — a
+deploy copied new files into `/opt/lockerroom` and left the old process
+running. **Every netwatch change before 2026-08-09 should be assumed never to
+have taken effect** unless the Pi was rebooted afterwards.
+
+Now `enable` and `restart` are separate lines. If a Pi-side fix ever appears to
+do nothing, check `systemctl show -p MainPID lockerroom-netwatch` before
+doubting the code.
 
 ## Team code is now case-insensitive (2026-08-05)
 
