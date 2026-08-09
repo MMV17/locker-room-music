@@ -1016,6 +1016,42 @@ covers the source; it does not cover `backend/.secrets.local`, which is
 gitignored and remains the only copy of `MAC_SALT`. That one still needs to
 live somewhere off this laptop.
 
+## There are TWO Raspberry Pis and both answer to `raspberrypi` (2026-08-09)
+
+**`raspberrypi.local` resolves to the WRONG box.** Cost real time on 2026-08-09
+during an outage, which is exactly when you cannot afford it.
+
+| | AuxGoat Pi | the other one |
+|---|---|---|
+| Model | **Pi 4B** | **Pi 5 Model B Rev 1.1** |
+| `wlan0` | `e4:5f:01:c2:6e:ab` | `88:a2:9e:28:8e:e8` |
+| `eth0` | `e4:5f:01:c2:6e:a9` | `88:a2:9e:28:8e:e7` |
+| hostname | `raspberrypi` | `raspberrypi` ← same |
+| tell-tale | `/etc/lockerroom` exists | `docker0` + `tailscale0`, no lockerroom units |
+
+On 2026-08-09 `raspberrypi.local` resolved to **192.168.1.73**, which is the
+**Pi 5 and NOT the speaker**. It answers SSH on the home network, looks
+plausible, and has none of this project on it.
+
+**Identify by MAC, never by hostname or mDNS.** The OUI is enough: the AuxGoat
+Pi is `e4:5f:01:*`, the other is `88:a2:9e:*`. To find the real one:
+
+```bash
+# sweep the LAN, then look for the OUI
+for i in $(seq 1 254); do ping -c1 -W200 -t1 192.168.1.$i >/dev/null 2>&1 & done; wait
+arp -a | grep -i "e4:5f:1"
+```
+
+If that prints nothing, the speaker is not on that network — do not go hunting
+through `raspberrypi.local`, it will hand you the Pi 5 again.
+
+Two quick confirmations once connected:
+
+```bash
+tr -d '\0' < /proc/device-tree/model     # must say "Raspberry Pi 4 Model B"
+ls /etc/lockerroom                        # must exist
+```
+
 ## Reaching the Pi
 
 Wifi is unreliable for this now — the Pi's stored credentials are for the old
