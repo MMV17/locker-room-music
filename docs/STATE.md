@@ -145,21 +145,43 @@ confusion `check-code` exists to prevent.
 
 ### Still open
 
-- **`/go` is throttled in the Worker, not by the WAF.** Cloudflare's rate
-  limiting rules are a paid add-on on this plan, so `apex/wrangler.toml` binds
-  the Workers rate-limit API instead: 10 per 60s, keyed on `CF-Connecting-IP`.
-  This is *better* than the WAF rule would have been — it also covers the
-  `workers.dev` hostname, which a zone-level rule cannot, and that is the
-  hostname actually in use on campus.
+- **THE `/go` THROTTLE DOES NOT WORK. It is written, deployed, and inert.**
 
-  **Only WRONG codes are counted.** A whole school shares one public IP on
-  campus wifi, so throttling every `/go` would let players arriving at the
-  start of practice lock each other out. Legitimate players type a code that
-  works; a brute-forcer generates misses by definition.
+  **In plain terms:** anyone can sit and guess team codes at the front door as
+  fast as they like, and nothing stops them. A correct guess lets them sign up
+  as anybody on that team. Not urgent — nobody is attacking a high-school aux
+  cord — but do not believe the code comments that say it is protected.
 
-  Still a stopgap: 10/min from one IP is 14,400 a day, and a mascot wordlist
-  is not much longer. The real fix is the QR path, which removes the apex's
-  need to validate anything.
+  Measured 2026-08-09: 72 wrong codes from one IP in three minutes, zero 429s.
+  The code is live (committed 14 hours before the deploy), it just never runs,
+  because `env.RATE_LIMITER` is never populated. `wrangler deploy --dry-run`
+  calls it "Unsafe Metadata" instead of a binding and the runtime does not turn
+  that into one.
+
+  It looked healthy for a day because the binding was made *optional*, so a
+  missing one degraded silently. That was the wrong trade for a security
+  control. `src/index.ts` now logs an error on every unthrottled miss, so
+  `cd apex && npx wrangler tail` answers it in one request.
+
+  **Do not try `[[ratelimits]]` on wrangler 3.** It is the correct modern form
+  and is worse here — 3.114 ignores it silently, giving neither a throttle nor
+  a warning ("No bindings found"). It needs wrangler 4, which needs a
+  `@cloudflare/workers-types` bump.
+
+  **Three options, in the order to try them:**
+  1. `wrangler tail` while hitting `/go` with a wrong code — 30 seconds,
+     confirms the binding is truly absent rather than misbehaving.
+  2. Upgrade wrangler to 4 **in `apex/` only** and switch to `[[ratelimits]]`.
+     Contained: apex has no D1, no cron, and one font.
+  3. Skip it and do the QR path instead, which removes the apex's need to
+     validate codes at all. That was always the real fix; the throttle was a
+     holding action.
+
+  The design itself is right and worth keeping: **only WRONG codes count**
+  against the limit. A whole school shares one public IP on campus wifi, so
+  throttling every `/go` would let players arriving at the start of practice
+  lock each other out. Legitimate players type a code that works; a
+  brute-forcer generates misses by definition.
 - The teams map has one hardcoded entry in `apex/src/teams.ts`. `resolveTeam`
   is async and takes `env` specifically so it can become a D1 query without a
   signature change.
@@ -266,22 +288,30 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**FIRST: `auxgoat.com` currently resolves to nothing.** The team Worker was
-deployed with its apex routes removed, which deleted those DNS records, and the
-apex Worker has never been deployed. Two commands close it:
+**Everything is deployed and working. Go use it.** As of 2026-08-09 15:10 EDT:
+front door live, team code typed once, stale "now on aux" fixed, Pi healthy on
+wifi and beaconing, watchdog fixed and verified on hardware. There is no
+plumbing left to do before a real session.
 
-```bash
-cd apex && npx wrangler deploy                    # claims auxgoat.com + www
-cd web && npm run build && cd ../backend && npx wrangler deploy
-```
+Open the front door at **`https://auxgoat.mmvinton17.workers.dev`**, type
+`CRUSADERS`, and you land in the app. (Use that hostname, not `auxgoat.com`,
+anywhere the school filter is active.)
 
-The second is needed because `Join.tsx` changed (the fragment handoff) and
-production is still running the build from before it. `hc.auxgoat.com` and the
-Pi are unaffected by either — neither is reachable on campus regardless, see
-the filter section.
+**The whole remaining list is product, not code:**
 
-**Then: run it with actual teammates.** What is left needs more than one phone
-in a room.
+- **Verify the three lifecycle fixes on real hardware.** Oldest open item, from
+  2026-08-05, still only proven by unit test. Play three songs, pause one
+  mid-track for over a minute, let one run to its natural end. Then check D1
+  holds exactly three plays, all with a non-null `ended_at`, and that the site
+  showed **Paused** rather than jumping to Ended. ~15 minutes.
+- **The results reveal has never fired for anyone.** It is the moment the
+  product is built around and nobody has seen it land.
+- **No leaderboard has ever rendered from real votes.**
+- **Vote volume is untested.** The 7.5s poll is sized for 75 players × 2 hours;
+  nothing has stressed it.
+
+Known and deliberately not blocking: the `/go` throttle is inert (see above),
+and the speaker cannot yet report who is connected over Bluetooth.
 
 **First, though: verify the three lifecycle fixes on real hardware.** They
 landed late on 2026-08-05 and have only been proven by unit test. Play three
