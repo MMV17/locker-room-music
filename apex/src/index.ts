@@ -28,13 +28,17 @@ function redirect(location: string): Response {
   return new Response(null, { status: 302, headers: { location } });
 }
 
-function html(body: string): Response {
+function html(body: string, status = 200): Response {
   return new Response(body, {
+    status,
     headers: {
       "content-type": "text/html; charset=utf-8",
       // The page is identical for everyone and changes only on deploy. A short
       // edge cache absorbs a burst without making a fix take an hour to show.
-      "cache-control": "public, max-age=60",
+      //
+      // A throttle response must never be cached: a cached 429 would keep
+      // locking someone out long after the window passed.
+      "cache-control": status === 200 ? "public, max-age=60" : "no-store",
     },
   });
 }
@@ -70,6 +74,26 @@ export default {
         // reviving the "sent back three fields later" bug that cost a real
         // debugging session.
         return redirect(`${team.url}#code=${encodeURIComponent(normalizeTeamCode(code))}`);
+      }
+
+      // Past this point the code was WRONG, and only wrong codes are counted.
+      //
+      // The apex answers "is this a valid team code?" to anyone who asks, and
+      // that code is currently the only gate on a school's data. Cloudflare's
+      // WAF rate limiting is a paid add-on on this plan, so the throttle lives
+      // here instead, on the Workers rate-limit binding.
+      //
+      // Counting only failures is what makes a low limit safe. A whole school
+      // shares one public IP on campus wifi, so throttling every /go would let
+      // 75 players arriving at the start of practice lock each other out.
+      // Legitimate players type a code that works; a brute-forcer is, by
+      // definition, generating misses.
+      if (env.RATE_LIMITER) {
+        const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
+        const { success } = await env.RATE_LIMITER.limit({ key: ip });
+        if (!success) {
+          return html(renderLanding(code, "Too many tries. Wait a minute and try again."), 429);
+        }
       }
 
       // Back to the form with what they typed, so it can be corrected rather

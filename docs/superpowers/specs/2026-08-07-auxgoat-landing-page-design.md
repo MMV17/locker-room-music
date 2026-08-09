@@ -483,6 +483,11 @@ Other things that bite:
   which is what changed the answer.
 - Any second school. The map has one entry and that is honest.
 - `/d/:serial`, device binding, and everything else in the provisioning design.
-- A rate-limiting rule on `/go`. Required before this is advertised, but it is
-  dashboard configuration rather than code — Security → WAF → Rate limiting,
-  matching `hostname eq "auxgoat.com" and http.request.uri.path eq "/go"`.
+- ~~A rate-limiting rule on `/go`.~~ **Built**, but not as planned: WAF rate
+  limiting turned out to be a paid add-on on this plan, so it lives in the
+  Worker on the rate-limit binding (10 per 60s, keyed on `CF-Connecting-IP`).
+  That is the better outcome — a zone-level WAF rule would not have covered the
+  `workers.dev` hostname, which is the one actually reachable on campus, and it
+  could not have counted **only failed** lookups. Counting failures alone is
+  what makes a low limit safe with a whole school behind one NAT: legitimate
+  players type a code that works, a brute-forcer generates misses.

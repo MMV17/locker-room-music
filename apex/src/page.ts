@@ -185,11 +185,13 @@ body {
  *   An empty string still counts as a rejection — it means someone reached
  *   /go with nothing in the field.
  */
-export function renderLanding(rejected: string | null): string {
+export function renderLanding(rejected: string | null, message?: string): string {
   const error =
     rejected === null
       ? ""
-      : `<p class="error" role="alert">We don&rsquo;t recognise that code.</p>`;
+      : `<p class="error" role="alert">${
+          message ? escapeAttr(message) : "We don&rsquo;t recognise that code."
+        }</p>`;
 
   return `<!doctype html>
 <html lang="en">

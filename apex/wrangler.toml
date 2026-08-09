@@ -63,3 +63,26 @@ routes = [
 [assets]
 directory = "./public"
 not_found_handling = "none"
+
+# Throttles guesses at /go.
+#
+# This exists because the apex answers "is this a valid team code?" to anyone
+# who asks, and that code is currently the only gate on a school's data.
+# Cloudflare's WAF rate limiting is a paid add-on on this plan, so the throttle
+# lives in the Worker instead. It also covers the workers.dev hostname, which a
+# zone-level WAF rule would NOT have — and that hostname is the one actually in
+# use on campus.
+#
+# Only WRONG codes are counted; see the comment in src/index.ts. That is what
+# makes a limit this low safe with a whole school behind one NAT.
+#
+# `simple.period` accepts only 10 or 60.
+#
+# Deliberately a stopgap. Ten guesses a minute from one IP is still 14,400 a
+# day, and a mascot wordlist is not much longer than that. The real fix is the
+# QR path, which removes the apex's need to validate anything at all.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }

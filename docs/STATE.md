@@ -145,10 +145,21 @@ confusion `check-code` exists to prevent.
 
 ### Still open
 
-- **No rate-limiting rule on `/go`.** The apex answers "is this a valid team
-  code?" to anyone who asks, and the team code is the only gate on a school's
-  data. Dashboard-only: Security → WAF → Rate limiting, matching
-  `hostname eq "auxgoat.com" and http.request.uri.path eq "/go"`.
+- **`/go` is throttled in the Worker, not by the WAF.** Cloudflare's rate
+  limiting rules are a paid add-on on this plan, so `apex/wrangler.toml` binds
+  the Workers rate-limit API instead: 10 per 60s, keyed on `CF-Connecting-IP`.
+  This is *better* than the WAF rule would have been — it also covers the
+  `workers.dev` hostname, which a zone-level rule cannot, and that is the
+  hostname actually in use on campus.
+
+  **Only WRONG codes are counted.** A whole school shares one public IP on
+  campus wifi, so throttling every `/go` would let players arriving at the
+  start of practice lock each other out. Legitimate players type a code that
+  works; a brute-forcer generates misses by definition.
+
+  Still a stopgap: 10/min from one IP is 14,400 a day, and a mascot wordlist
+  is not much longer. The real fix is the QR path, which removes the apex's
+  need to validate anything.
 - The teams map has one hardcoded entry in `apex/src/teams.ts`. `resolveTeam`
   is async and takes `env` specifically so it can become a D1 query without a
   signature change.

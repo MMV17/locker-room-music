@@ -13,4 +13,10 @@
 export interface Env {
   /** Reserved for the cross-school teams registry. See resolveTeam(). */
   DB?: D1Database;
+  /**
+   * Throttles guesses at /go. Optional on purpose: a local `wrangler dev`
+   * without the binding, or a rollback, must degrade to no throttling rather
+   * than a 500 on every wrong code.
+   */
+  RATE_LIMITER?: RateLimit;
 }

@@ -157,6 +157,86 @@ describe("/go resolves a team code", () => {
   });
 });
 
+describe("brute-force throttling", () => {
+  /**
+   * The apex answers "is this a valid team code?" to anyone who asks, and that
+   * code is currently the only gate on a school's data. Cloudflare's WAF rate
+   * limiting is a paid add-on on this plan, so the throttle lives in the
+   * Worker via the rate-limit binding instead.
+   */
+  function limiterEnv(success: boolean) {
+    const keys: string[] = [];
+    const env = {
+      RATE_LIMITER: {
+        limit: async ({ key }: { key: string }) => {
+          keys.push(key);
+          return { success };
+        },
+      },
+    } as unknown as Env;
+    return { env, keys };
+  }
+
+  const go = (code: string, e: Env, ip = "203.0.113.9") =>
+    worker.fetch(
+      new Request(`https://auxgoat.com/go?code=${encodeURIComponent(code)}`, {
+        headers: { "cf-connecting-ip": ip },
+      }),
+      e,
+    );
+
+  it("throttles a wrong code once the limit is hit", async () => {
+    const { env } = limiterEnv(false);
+    const res = await go("KNIGHTS", env);
+    expect(res.status).toBe(429);
+  });
+
+  it("never consults the limiter for a correct code", async () => {
+    // A whole school shares one public IP on campus wifi. Legitimate players
+    // produce successes and must never be throttled by each other — only
+    // guesses count, which is what makes this safe to run at a low limit.
+    const { env, keys } = limiterEnv(false);
+    const res = await go("CRUSADERS", env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("locker-room-music");
+    expect(keys).toEqual([]);
+  });
+
+  it("keys the limit on the client IP", async () => {
+    const { env, keys } = limiterEnv(true);
+    await go("KNIGHTS", env, "198.51.100.4");
+    expect(keys).toEqual(["198.51.100.4"]);
+  });
+
+  it("lets a wrong code through normally while under the limit", async () => {
+    const { env } = limiterEnv(true);
+    const res = await go("KNIGHTS", env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?e=KNIGHTS");
+  });
+
+  it("still works with no limiter bound at all", async () => {
+    // The binding is optional so a local `wrangler dev` without it, or a
+    // rollback, degrades to no throttling rather than a 500 on every miss.
+    const res = await go("KNIGHTS", {} as Env);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?e=KNIGHTS");
+  });
+
+  it("explains the throttle instead of showing a bare error code", async () => {
+    const { env } = limiterEnv(false);
+    const html = await (await go("KNIGHTS", env)).text();
+    expect(html).toMatch(/too many/i);
+  });
+
+  it("does not let a throttled response be cached", async () => {
+    // A cached 429 would keep locking someone out after the window passed.
+    const { env } = limiterEnv(false);
+    const res = await go("KNIGHTS", env);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+});
+
 describe("www is not canonical", () => {
   it("redirects www to the bare apex", async () => {
     const res = await get("https://www.auxgoat.com/");
