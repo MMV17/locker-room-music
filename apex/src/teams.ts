@@ -37,10 +37,26 @@ import type { Env } from "./types";
 import { normalizeTeamCode } from "../../backend/src/crypto";
 
 export interface Team {
-  /** The subdomain label. `hc` means hc.auxgoat.com. */
+  /** Short label for the school. Identity only — the URL is not derived from it. */
   slug: string;
   /** Display name. */
   name: string;
+  /**
+   * Absolute destination. Deliberately NOT computed as
+   * `https://${slug}.auxgoat.com/`.
+   *
+   * The obvious derived form is wrong on the only network that matters. The
+   * whole auxgoat.com zone is SNI-filtered on the school's wired network —
+   * measured 2026-08-08: to the same Cloudflare IP, SNI `hc.auxgoat.com` gets
+   * "no peer certificate available" while `example.com` and
+   * `lockerroom.finestkindfarms.com` are served normally. A derived URL would
+   * hand someone a blocked destination from a front door that had just worked,
+   * which is a worse failure than not having a front door.
+   *
+   * So every team names where it actually lives, and switching a school back
+   * to its pretty hostname once a filter lapses is a one-line change here.
+   */
+  url: string;
 }
 
 /**
@@ -52,7 +68,25 @@ export interface Team {
  * Keys are the output of normalizeTeamCode(): trimmed and upper case. Adding a
  * school is one line here plus a route on that school's own Worker.
  */
-const TEAMS = new Map<string, Team>([["CRUSADERS", { slug: "hc", name: "Holy Cross" }]]);
+const TEAMS = new Map<string, Team>([
+  [
+    "CRUSADERS",
+    {
+      slug: "hc",
+      name: "Holy Cross",
+      // NOT hc.auxgoat.com, which is filtered on the school's network. The
+      // workers.dev hostname returned 200 from that same network at the exact
+      // moment the whole auxgoat.com zone was refused, so it is the one that
+      // reaches players where they actually are.
+      //
+      // lockerroom.finestkindfarms.com is the other proven-unfiltered option
+      // and is what the Pi points at; prefer it if workers.dev is ever turned
+      // off. Move this back to https://hc.auxgoat.com/ once the filter lapses
+      // or IT recategorises the domain.
+      url: "https://locker-room-music.mmvinton17.workers.dev/",
+    },
+  ],
+]);
 
 /**
  * Async and taking `env` though it currently needs neither. That is the point:

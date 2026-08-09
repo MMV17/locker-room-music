@@ -17,7 +17,24 @@ const env = {} as Env;
 
 describe("resolveTeam", () => {
   it("resolves the configured code to its school", async () => {
-    expect(await resolveTeam(env, "CRUSADERS")).toEqual({ slug: "hc", name: "Holy Cross" });
+    const team = await resolveTeam(env, "CRUSADERS");
+    expect(team?.slug).toBe("hc");
+    expect(team?.name).toBe("Holy Cross");
+  });
+
+  it("carries an explicit destination rather than deriving one from the slug", async () => {
+    // The obvious `https://<slug>.auxgoat.com/` is wrong on the network that
+    // matters. The whole auxgoat.com zone is SNI-filtered on campus, so a
+    // derived URL would hand someone a blocked destination from a front door
+    // that worked. Every team names where it actually lives.
+    const team = await resolveTeam(env, "CRUSADERS");
+    expect(team?.url).toBe("https://locker-room-music.mmvinton17.workers.dev/");
+  });
+
+  it("points every team at an absolute https URL", async () => {
+    // A relative or scheme-less value would redirect within the apex and loop.
+    const team = await resolveTeam(env, "CRUSADERS");
+    expect(team?.url).toMatch(/^https:\/\//);
   });
 
   it("resolves regardless of casing", async () => {

@@ -386,8 +386,47 @@ is the only ordering that does not have both Workers claiming one hostname.
 `hc.auxgoat.com` is unaffected throughout — no step here touches it.
 
 `apex/wrangler.toml` sets `workers_dev = true`, so a deploy can be verified at
-`auxgoat-apex.<subdomain>.workers.dev` **before** the custom domains are moved.
-Worth doing: it turns the ordering above from a leap into a check.
+`auxgoat.mmvinton17.workers.dev` **before** the custom domains are moved. Worth
+doing: it turns the ordering above from a leap into a check.
+
+### The campus filter came back, and it changes the destination
+
+Measured 2026-08-08, mid-deploy. To the same Cloudflare IP:
+
+| SNI presented | result |
+|---|---|
+| `hc.auxgoat.com` | CONNECTED, then **no peer certificate available** |
+| `auxgoat.com` | same |
+| `example.com` | `subject=CN=example.com` |
+| `lockerroom.finestkindfarms.com` | `subject=CN=finestkindfarms.com` |
+
+The **entire `auxgoat.com` zone** is refused at the TLS layer on the school's
+wired network — not just the apex, the team's own site too. The same hostnames
+return 200 from a phone hotspot, with a valid `CN=auxgoat.com`. This is the
+block STATE.md recorded on 2026-08-04 and marked lapsed on 08-05, returned.
+
+It is unrelated to any deploy: SNI rejection happens before a route or Worker
+is consulted, and the same Worker served 200 on `workers.dev` and
+`lockerroom.finestkindfarms.com` throughout.
+
+Two consequences for this design:
+
+**`Team` now carries an explicit `url`.** The redirect target was
+`https://${slug}.auxgoat.com/`, derived. Derived is wrong here — it would hand
+a player a blocked destination from a front door that had just worked, which is
+worse than no front door. Holy Cross points at
+`https://locker-room-music.mmvinton17.workers.dev/` until the filter lapses,
+and moving it back is one line.
+
+**The workers.dev hostname is the real front door for now**, which is why the
+Worker is named `auxgoat` rather than `auxgoat-apex`.
+
+**And it undermines the QR path in the provisioning spec.** A QR encoding
+`auxgoat.com/d/<serial>` is filtered, and so is the `hc.auxgoat.com` it would
+redirect to. The QR has to encode a hostname the school's filter permits —
+which argues against a fresh subdomain of a newly-registered domain, since that
+is exactly the pattern filters block on sight. Carry this into that spec before
+anything is printed on a case.
 
 Other things that bite:
 

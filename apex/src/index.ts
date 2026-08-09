@@ -53,7 +53,9 @@ export default {
     if (url.pathname === "/go") {
       const code = url.searchParams.get("code") ?? "";
       const team = await resolveTeam(env, code);
-      if (team) return redirect(`https://${team.slug}.${APEX}/`);
+      // team.url, not a URL built from the slug — see the comment on Team.url.
+      // The school's pretty hostname is filtered on its own campus.
+      if (team) return redirect(team.url);
 
       // Back to the form with what they typed, so it can be corrected rather
       // than retyped. encodeURIComponent is load-bearing, not tidiness: this

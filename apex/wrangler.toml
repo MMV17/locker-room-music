@@ -1,4 +1,9 @@
-name = "auxgoat-apex"
+# The name is load-bearing: it becomes the workers.dev hostname, and that
+# hostname is currently the ONLY front door that works on the school's network.
+# "auxgoat" gives auxgoat.mmvinton17.workers.dev, which is at least sayable out
+# loud in a locker room. Renaming this Worker later creates a new hostname and
+# abandons the old one, so treat it as fixed.
+name = "auxgoat"
 main = "src/index.ts"
 compatibility_date = "2024-12-18"
 
@@ -28,8 +33,17 @@ compatibility_date = "2024-12-18"
 # every other school, which is the whole point of an apex once there is more
 # than one.
 
-# Kept as a testable hostname that needs no DNS change. Verify a deploy here
-# before pointing the custom domains at it.
+# NOT just a test hostname — this is the working front door right now.
+#
+# The whole auxgoat.com zone is SNI-filtered on the school's wired network.
+# Measured 2026-08-08 against the same Cloudflare IP: SNI hc.auxgoat.com gets
+# "no peer certificate available" while example.com and
+# lockerroom.finestkindfarms.com are served normally, and workers.dev returned
+# 200 throughout. So auxgoat.mmvinton17.workers.dev is what a player on campus
+# can actually open, and /go sends them on to a hostname chosen the same way
+# (see Team.url in src/teams.ts).
+#
+# It doubles as the way to verify a deploy before moving the custom domains.
 workers_dev = true
 
 # ORDERING MATTERS. A custom domain belongs to exactly one Worker, so these

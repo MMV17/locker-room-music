@@ -93,15 +93,15 @@ describe("/go resolves a team code", () => {
   const go = (code: string) =>
     get(`https://auxgoat.com/go?code=${encodeURIComponent(code)}`);
 
-  it("redirects a known code to that school's subdomain", async () => {
+  it("redirects a known code to that school's site", async () => {
     const res = await go("CRUSADERS");
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("https://hc.auxgoat.com/");
+    expect(res.headers.get("location")).toBe("https://locker-room-music.mmvinton17.workers.dev/");
   });
 
   it("redirects regardless of casing or padding", async () => {
     for (const typed of ["crusaders", "  Crusaders  "]) {
-      expect((await go(typed)).headers.get("location")).toBe("https://hc.auxgoat.com/");
+      expect((await go(typed)).headers.get("location")).toBe("https://locker-room-music.mmvinton17.workers.dev/");
     }
   });
 
