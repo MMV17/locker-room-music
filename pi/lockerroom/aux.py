@@ -37,17 +37,6 @@ ENV_PATH = Path("/run/lockerroom/aux.env")
 RESTART_ARGV = ["systemctl", "restart", "bluealsa-aplay"]
 RESTART_TIMEOUT_S = 15.0
 
-# "Route nobody."
-#
-# Deliberately NOT 00:00:00:00:00:00 — bluealsa-aplay documents that as
-# meaning ANY device, so using the obvious placeholder for "silence" would
-# have produced everybody-at-once instead.
-#
-# The second-least-significant bit of the first octet is the
-# locally-administered flag. Phone Bluetooth addresses are manufacturer
-# assigned, so that bit is clear on every one of them and no real device can
-# collide with this.
-NOBODY = "02:00:00:00:00:00"
 
 
 async def _systemctl_restart() -> None:
@@ -80,11 +69,38 @@ class AuxRouter:
         self._restart = restart
         # What the audio player is believed to be running with. Only updated
         # after a restart actually succeeds; see route().
-        self._live: str | None = None
+        #
+        # Read off disk rather than assumed, because a listener restart must
+        # not look like a change. Assuming "unknown" here meant the first
+        # route() after every restart re-pointed a player that was already
+        # correct - and a needless restart is not free, it destroys the A2DP
+        # transport of any phone that happens to be connecting at the time.
+        self._live: str | None = self._read_live()
+
+    def _read_live(self) -> str:
+        """The filter the audio player is currently running with.
+
+        Absent file or absent key both mean no filter, which is exactly what
+        the systemd drop-in falls back to.
+        """
+        try:
+            text = self._env_path.read_text()
+        except OSError:
+            return ""
+        for line in text.splitlines():
+            if line.startswith("AUX_MAC="):
+                return line.split("=", 1)[1].strip()
+        return ""
 
     async def route(self, mac: str | None) -> None:
-        """Make `mac` the only phone the speaker plays. None means nobody."""
-        target = NOBODY if mac is None else mac.upper()
+        """Make `mac` the only phone the speaker plays.
+
+        None means no filter at all — play whatever is connected. That is the
+        right answer whenever fewer than two phones are connected, because one
+        phone cannot mix with anything, and it is what keeps the common case
+        free of restarts entirely. See SessionManager._aux_target.
+        """
+        target = "" if mac is None else mac.upper()
         if target == self._live:
             return
 
@@ -102,4 +118,4 @@ class AuxRouter:
             return
 
         self._live = target
-        log.info("speaker routed to %s", "nobody" if mac is None else target)
+        log.info("speaker routed to %s", target or "anything connected")

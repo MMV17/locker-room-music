@@ -62,6 +62,19 @@ PAUSE_COMMAND_TIMEOUT_S = 5.0
 # is going nowhere regardless (see aux.py). All that is lost is that their
 # playlist advances in ten-second bites instead of being held still.
 PAUSE_COOLDOWN = timedelta(seconds=10)
+# How long to let a connection settle before re-pointing the audio player.
+#
+# Restarting bluealsa-aplay releases the A2DP transport, and doing that while a
+# phone is still negotiating one kills the connection outright. Measured in
+# production 2026-08-09, three phones, same shape every time: session opened,
+# the player was restarted 60ms later, and the phone dropped 2.3s after that
+# with iOS reporting "Cannot Connect - forget this device".
+#
+# So every re-point is deferred and coalesced. An established transport
+# survives a restart fine; it is only the setup window that is fragile, and
+# nothing needs re-pointing urgently — a phone that just connected is not
+# playing yet.
+AUX_SETTLE = timedelta(seconds=6)
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -176,6 +189,8 @@ class SessionManager:
         # device_path of the phone the speaker is routed to. Whoever this is
         # gets audio, and is the only session whose songs become plays.
         self._aux_path: str | None = None
+        # In-flight deferred re-point of the audio player; see AUX_SETTLE.
+        self._aux_task: asyncio.Task | None = None
         # BluezWatcher fires every D-Bus PropertiesChanged into its own task,
         # so nothing serialises these handlers. They are not safe to interleave:
         # on_track_changed reads session.current_play, awaits, and only then
@@ -258,6 +273,9 @@ class SessionManager:
                 await self._grant(self._sessions[device_path])
             else:
                 log.info("%s is waiting for the aux", alias)
+                # Now two phones are connected, so a filter is needed where it
+                # was not before.
+                self._schedule_aux_resync()
 
     def _holder(self, at: datetime) -> Session | None:
         """The session entitled to the speaker right now, if any.
@@ -287,7 +305,49 @@ class SessionManager:
         # into the void un-paused.
         session.last_paused_at = None
         log.info("aux granted to %s (%s)", session.alias, session.mac)
-        await self._aux.route(session.mac)
+        self._schedule_aux_resync()
+
+    def _aux_target(self) -> str | None:
+        """Which MAC the audio player should be filtered to. None = no filter.
+
+        Fewer than two phones connected needs NO filter, and that is the whole
+        point: one phone cannot mix with anything, so naming it explicitly buys
+        nothing and costs a service restart. Returning None here is what keeps
+        the ordinary one-phone-connects-and-plays path from ever restarting
+        bluealsa-aplay, which is what was killing connections.
+        """
+        if len(self._sessions) <= 1:
+            return None
+        holder = self._holder(now())
+        if holder is not None:
+            return holder.mac
+        # Two or more connected and nobody has earned it yet. Name the most
+        # recently active rather than leaving it unfiltered: whoever plays next
+        # gets granted and re-points it anyway, and this way the gap before
+        # that is not one where both are audible.
+        return max(self._sessions.values(), key=lambda s: s.last_active_at).mac
+
+    def _schedule_aux_resync(self) -> None:
+        """Re-point the audio player, once things have stopped moving.
+
+        Deferred rather than immediate because restarting the player during a
+        connection's setup window destroys it - see AUX_SETTLE. Coalesced,
+        because a burst of connects should cost one restart, not one each.
+        """
+        if self._aux_task is not None:
+            self._aux_task.cancel()
+        self._aux_task = asyncio.create_task(self._resync_aux_after_settle())
+
+    async def _resync_aux_after_settle(self) -> None:
+        try:
+            await asyncio.sleep(AUX_SETTLE.total_seconds())
+        except asyncio.CancelledError:
+            return
+        async with self._lock:
+            self._aux_task = None
+            # Recomputed now, not when this was scheduled: the phone that
+            # triggered it may already have gone.
+            await self._aux.route(self._aux_target())
 
     async def _may_use_aux(self, session: Session, at: datetime) -> bool:
         """Whether this phone's audio is reaching the room.
@@ -356,7 +416,7 @@ class SessionManager:
             if waiting:
                 await self._grant(waiting[0])
             else:
-                await self._aux.route(None)
+                self._schedule_aux_resync()
 
     async def on_track_changed(
         self,

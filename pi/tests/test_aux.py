@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lockerroom.aux import NOBODY, AuxRouter  # noqa: E402
+from lockerroom.aux import AuxRouter  # noqa: E402
 
 
 class FakeRestart:
@@ -44,19 +44,21 @@ async def test_routing_a_phone_writes_its_mac_and_restarts_the_player(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_routing_nobody_writes_an_address_no_phone_can_have(tmp_path):
-    """Not 00:00:00:00:00:00 — bluealsa-aplay reads that as 'any device', which
-    is the exact opposite of what routing nobody means, and would have turned
-    silence into everybody-at-once."""
+async def test_routing_none_clears_the_filter_entirely(tmp_path):
+    """None means "play whatever is connected", which is the right answer with
+    fewer than two phones — one phone cannot mix with anything.
+
+    An EMPTY value specifically: the drop-in passes `$AUX_MAC` unbracketed, and
+    systemd drops an empty unbracketed variable rather than passing an empty
+    argument, so this lands on plain `bluealsa-aplay -S`."""
+    (tmp_path / "aux.env").write_text("AUX_MAC=5C:AD:BA:F0:B2:61\n")
     restart = FakeRestart()
     r = router(tmp_path, restart)
 
     await r.route(None)
 
-    assert (tmp_path / "aux.env").read_text().strip() == f"AUX_MAC={NOBODY}"
-    # Locally-administered bit set: no manufacturer-assigned phone address can
-    # collide with it.
-    assert int(NOBODY.split(":")[0], 16) & 0b10 == 0b10
+    assert (tmp_path / "aux.env").read_text().strip() == "AUX_MAC="
+    assert restart.calls == 1
 
 
 @pytest.mark.asyncio
@@ -105,3 +107,33 @@ async def test_the_env_file_directory_is_created(tmp_path):
     await r.route("5C:AD:BA:F0:B2:61")
 
     assert (tmp_path / "nested" / "aux.env").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_router_does_not_re_point_a_player_that_is_already_right(tmp_path):
+    """A listener restart must not look like a change.
+
+    Assuming the live filter was unknown meant the first route() after every
+    restart re-pointed a player that was already correct — and a needless
+    restart is not free: it destroys the A2DP transport of any phone connecting
+    at that moment, which is what took the speaker down on 2026-08-09.
+    """
+    (tmp_path / "aux.env").write_text("AUX_MAC=5C:AD:BA:F0:B2:61\n")
+    restart = FakeRestart()
+    r = router(tmp_path, restart)
+
+    await r.route("5C:AD:BA:F0:B2:61")
+
+    assert restart.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_no_env_file_reads_as_no_filter(tmp_path):
+    """Which is what the systemd drop-in falls back to, so routing None on a
+    fresh boot is already true and costs no restart."""
+    restart = FakeRestart()
+    r = router(tmp_path, restart)
+
+    await r.route(None)
+
+    assert restart.calls == 0

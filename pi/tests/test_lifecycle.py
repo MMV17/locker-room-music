@@ -23,6 +23,10 @@ def fast_grace(monkeypatch):
     from datetime import timedelta
     monkeypatch.setattr(lifecycle_mod, "MIN_PLAY_GRACE", timedelta(seconds=0.02))
     monkeypatch.setattr(lifecycle_mod, "TRANSPORT_IDLE_GRACE", timedelta(seconds=0.05))
+    # Re-pointing the audio player is deferred by AUX_SETTLE in production so a
+    # restart never lands inside a connection's setup window. Tests shrink it
+    # and call settle_aux() where they assert on routing.
+    monkeypatch.setattr(lifecycle_mod, "AUX_SETTLE", timedelta(seconds=0.02))
     # PAUSE_GRACE is deliberately NOT shrunk here: several tests pause and then
     # assert the play is still open, and a 50ms pause timeout would close it
     # out from under them. The one test that needs it short patches it itself.
@@ -31,6 +35,11 @@ def fast_grace(monkeypatch):
 async def settle():
     """Let the deferred create-enqueue fire."""
     await asyncio.sleep(0.06)
+
+
+async def settle_aux():
+    """Let the deferred re-point of the audio player run."""
+    await asyncio.sleep(0.05)
 
 
 async def settle_watchdogs():
@@ -457,19 +466,39 @@ async def test_disconnect_closes_open_play():
 
 
 class FakeAux:
-    """Records who the speaker is routed to, in order."""
+    """Records every actual re-point of the speaker, in order.
+
+    Starts UNFILTERED, like the real thing: with no env file the systemd
+    drop-in runs plain `bluealsa-aplay -S`, and AuxRouter reads that state off
+    disk at construction. Modelling that matters — `routed` is meant to be the
+    list of times the audio player was really restarted, and a fake that
+    counted a no-op as a re-point would hide the very bug these tests exist
+    for.
+    """
 
     def __init__(self):
         self.routed: list[str | None] = []
+        self._live: str | None = None
 
     async def route(self, mac: str | None) -> None:
         await asyncio.sleep(0)
-        if not self.routed or self.routed[-1] != mac:
-            self.routed.append(mac)
+        if mac == self._live:
+            return
+        self._live = mac
+        self.routed.append(mac)
 
     @property
     def current(self) -> str | None:
-        return self.routed[-1] if self.routed else None
+        """The MAC the speaker is filtered to. None means no filter at all."""
+        return self._live
+
+    def hears(self, mac: str) -> bool:
+        """Whether this phone's audio reaches the speaker.
+
+        No filter means everything connected is audible — correct, and only
+        ever chosen when fewer than two phones are connected.
+        """
+        return self.current is None or self.current == mac
 
 
 class FakeBluez:
@@ -505,8 +534,10 @@ async def test_the_first_phone_gets_the_aux_when_it_connects():
     mgr = manager(FakeStore(), aux)
 
     await connect(mgr)
+    await settle_aux()
 
-    assert aux.current == MAC
+    assert aux.hears(MAC)
+    assert mgr._aux_path == DEV
 
 
 @pytest.mark.asyncio
@@ -519,9 +550,11 @@ async def test_a_newcomer_connects_fine_but_is_not_routed():
     await settle()
 
     await connect_other(mgr)
+    await settle_aux()
 
     assert OTHER in mgr._sessions       # connected, not turned away
-    assert aux.current == MAC           # and still not the one being heard
+    assert aux.hears(MAC)               # and still not the one being heard
+    assert not aux.hears(OTHER_MAC)
 
 
 @pytest.mark.asyncio
@@ -600,8 +633,9 @@ async def test_a_paused_song_still_holds_the_aux():
     await mgr.on_status_changed(DEV, "paused")
 
     await mgr.on_status_changed(OTHER, "playing")
+    await settle_aux()
 
-    assert aux.current == MAC
+    assert not aux.hears(OTHER_MAC)
 
 
 @pytest.mark.asyncio
@@ -623,7 +657,9 @@ async def test_a_waiting_phone_takes_the_aux_by_playing_once_the_grace_passes(mo
     await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
     await settle()
 
-    assert aux.current == OTHER_MAC
+    await settle_aux()
+    assert aux.hears(OTHER_MAC)
+    assert not aux.hears(MAC)
     assert [r["payload"]["title"] for r in store.opened()] == ["Decode", "Chun-Li"]
 
 
@@ -637,8 +673,10 @@ async def test_the_aux_passes_to_a_waiting_phone_when_the_holder_disconnects():
     await connect_other(mgr)
 
     await mgr.on_device_disconnected(DEV)
+    await settle_aux()
 
-    assert aux.current == OTHER_MAC
+    assert mgr._aux_path == OTHER
+    assert aux.hears(OTHER_MAC)
 
 
 @pytest.mark.asyncio
@@ -648,7 +686,9 @@ async def test_the_last_phone_leaving_routes_nobody():
     await connect(mgr)
 
     await mgr.on_device_disconnected(DEV)
+    await settle_aux()
 
+    # Nobody connected: no filter, which is also what a fresh boot looks like.
     assert aux.current is None
 
 
@@ -662,8 +702,9 @@ async def test_a_waiting_phone_is_not_routed_just_for_connecting_first():
     await connect_other(mgr)
 
     await mgr.on_status_changed(OTHER, "playing")
+    await settle_aux()
 
-    assert aux.current == MAC
+    assert not aux.hears(OTHER_MAC)
 
 
 @pytest.mark.asyncio
@@ -675,8 +716,10 @@ async def test_the_holder_reconnecting_keeps_the_aux():
     await settle()
 
     await connect(mgr)  # BlueZ re-announcing the same device
+    await settle_aux()
 
-    assert aux.current == MAC
+    assert aux.hears(MAC)
+    assert mgr._aux_path == DEV
 
 
 @pytest.mark.asyncio
@@ -752,3 +795,51 @@ async def test_taking_the_aux_clears_the_pause_cooldown():
     assert mgr._sessions[OTHER].last_paused_at is not None
     await mgr._grant(mgr._sessions[OTHER])
     assert mgr._sessions[OTHER].last_paused_at is None
+
+
+@pytest.mark.asyncio
+async def test_one_phone_connecting_alone_never_re_points_the_player():
+    """The outage of 2026-08-09, and the reason routing is deferred.
+
+    Re-pointing the audio player restarts bluealsa-aplay, which releases the
+    A2DP transport — and doing that while a phone is still negotiating one
+    destroys the connection. Three phones, identical shape every time: session
+    opened, player re-pointed 60ms later, phone dropped 2.3s after that, iOS
+    reporting "Cannot Connect - forget this device".
+
+    With one phone connected there is nothing it could mix with, so the
+    correct number of re-points is zero. This is the assertion that would have
+    caught it.
+    """
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+
+    await connect(mgr)
+    await settle_aux()
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await settle_aux()
+
+    assert aux.routed == []
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_connections_costs_one_re_point():
+    """Every restart is a window in which some other phone's connection can
+    die, so they are worth spending sparingly.
+
+    Note what actually guarantees this: AuxRouter refusing to act when the
+    target has not changed. The task coalescing in _schedule_aux_resync is
+    belt-and-braces on top — it keeps three pointless tasks from queuing, but
+    removing it does NOT break this assertion, so do not read it as covered.
+    """
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+
+    await connect(mgr)
+    await connect_other(mgr)
+    await mgr.on_device_connected("/org/bluez/hci0/dev_11_22_33_44_55_66",
+                                  "11:22:33:44:55:66", "Molly's iPhone")
+    await settle_aux()
+
+    assert len(aux.routed) == 1
