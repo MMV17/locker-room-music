@@ -1,0 +1,51 @@
+name = "auxgoat-apex"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+
+# auxgoat.com — the front door, and deliberately NOT the school's Worker.
+#
+# This started life inside locker-room-music, and could not work there. That
+# Worker serves the voting app from an [assets] binding, and Cloudflare serves
+# any file matching the request path WITHOUT invoking the Worker at all — so
+# `/` was answered with the team app's index.html and the apex routing never
+# ran. Measured in production 2026-08-08: /go and /api/* behaved correctly
+# because no file matches those paths, while / silently did not.
+#
+# The fix there would have been run_worker_first = true, which in wrangler
+# 3.x is all-or-nothing: every JS, CSS and font request on the live product
+# would start paying a Worker invocation, on campus wifi that already drops
+# out. Splitting instead keeps the school's hot path served straight from
+# edge cache, and gives the apex the property it actually wants:
+#
+#   there is no index.html in ./public, so `/` matches no asset, falls
+#   through to the Worker, and the page is rendered in code.
+#
+# That is why not_found_handling is "none" and why run_worker_first is absent.
+# Do not add an index.html to ./public — it would be served directly and the
+# ?e= error state would silently stop working.
+#
+# It also means a bad deploy of one school cannot take down the front door for
+# every other school, which is the whole point of an apex once there is more
+# than one.
+
+# Kept as a testable hostname that needs no DNS change. Verify a deploy here
+# before pointing the custom domains at it.
+workers_dev = true
+
+# ORDERING MATTERS. A custom domain belongs to exactly one Worker, so these
+# must be REMOVED from backend/wrangler.toml and that Worker redeployed BEFORE
+# this one is deployed, or the deploy is rejected for a route it does not own.
+routes = [
+  { pattern = "auxgoat.com", custom_domain = true },
+  { pattern = "www.auxgoat.com", custom_domain = true }
+]
+
+# The Outfit subset, and nothing else. The page itself is rendered by the
+# Worker with its CSS inlined, which costs ~1.2 kB gzipped and saves a round
+# trip — worth more than the bytes on the wifi this product lives on.
+#
+# not_found_handling = "none": a miss must reach the Worker so it can send
+# stray paths back to /. The default would answer them with an asset.
+[assets]
+directory = "./public"
+not_found_handling = "none"

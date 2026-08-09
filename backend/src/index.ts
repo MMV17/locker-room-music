@@ -19,21 +19,21 @@ import { devices } from "./devices";
 import { admin } from "./admin";
 import { theme } from "./theme";
 import { runBackup } from "./backup";
-import { apexRouter } from "./apex";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
 /**
- * The apex is its own thing now — a landing page and a team-code router, not a
- * shortcut to Holy Cross. See apex.ts, and the design in
- * docs/superpowers/specs/2026-08-07-auxgoat-landing-page-design.md.
+ * There is deliberately no bare-domain handling here any more.
  *
- * Registered before every other route so nothing below can be reached on the
- * wrong hostname. Any host that is not auxgoat.com or www falls through
- * untouched, which is what keeps hc.auxgoat.com and the Pi's
- * lockerroom.finestkindfarms.com behaving exactly as they did.
+ * auxgoat.com and www now belong to a separate Worker (see apex/), so this one
+ * never receives them. The redirect that used to live here could not have
+ * become a landing page in any case: Cloudflare serves any file matching the
+ * request path without invoking the Worker, so `/` was always answered with
+ * the [assets] index.html below and this middleware never ran for it.
+ *
+ * If a bare-domain rule ever seems necessary here again, that is a sign the
+ * apex routes have drifted back onto this Worker. Fix the routes, not this.
  */
-app.use("*", apexRouter());
 
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();

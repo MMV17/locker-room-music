@@ -21,3 +21,9 @@ backend/.wrangler/
 backend/public/
 web/node_modules/
 web/dist/
+
+# The apex Worker. Note apex/public/ is NOT ignored, unlike backend/public/:
+# it holds one vendored font and no build output, so the Worker deploys from a
+# clean checkout with no build step.
+apex/node_modules/
+apex/.wrangler/

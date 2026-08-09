@@ -26,17 +26,22 @@ compatibility_date = "2024-12-18"
 # dark and take the control channel with it — recoverable only by physically
 # standing next to it. A spare hostname costs nothing; do not remove this.
 workers_dev = true
-# auxgoat.com and www are TEMPORARY SCAFFOLDING. They exist only so someone
-# who hears the URL out loud in a locker room and types the short version
-# lands somewhere. They 302 to hc.auxgoat.com - see the redirect middleware in
-# src/index.ts, which explains why 302 and not 301.
+# auxgoat.com and www USED TO BE HERE and were moved to the apex Worker
+# (../apex) on 2026-08-08. Do not add them back.
 #
-# When a second school exists, the apex must stop favouring Holy Cross: remove
-# these two routes and the middleware, and put a real landing page here.
+# They could never have served a landing page from this Worker. Cloudflare
+# serves any file matching the request path WITHOUT invoking the Worker, so
+# `/` was answered by the [assets] index.html below and no middleware here
+# ever ran for it - measured in production, where /go and /api/* behaved
+# correctly while / silently did not. The only fix on this Worker would have
+# been run_worker_first = true, which is all-or-nothing in wrangler 3.x and
+# would put a Worker invocation in front of every JS, CSS and font request the
+# team makes on campus wifi.
+#
+# Keeping them off this Worker also means a bad deploy here cannot take down
+# the front door for any other school.
 routes = [
   { pattern = "hc.auxgoat.com", custom_domain = true },
-  { pattern = "auxgoat.com", custom_domain = true },
-  { pattern = "www.auxgoat.com", custom_domain = true },
   { pattern = "lockerroom.finestkindfarms.com", custom_domain = true }
 ]
 

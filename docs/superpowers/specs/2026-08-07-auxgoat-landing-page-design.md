@@ -24,20 +24,61 @@ Scope is deliberately one screen. No marketing copy, no pricing, no signup, no
 
 ## Architecture
 
-### It stays on the same Worker
+### It gets its own Worker — `apex/`
 
-The apex is routed to the `locker-room-music` Worker, the same one serving
-Holy Cross. That does not change here.
+**This reverses the original decision in this spec, and the reversal was forced
+by production.** The first version kept the apex on the `locker-room-music`
+Worker to avoid a second deploy target. That cannot work, for a reason worth
+writing down because it is invisible until deployed:
 
-Splitting the apex onto its own Worker is the structurally correct end state —
-it is the only way the front door stops depending on one school's deploy — but
-not yet. STATE.md records a `wrangler deploy` from the repo root accidentally
-creating a second Worker on 2026-08-05, and standing up a real second deploy
-target for one static page invites that class of mistake for no benefit today.
-The seam is one entry in `routes`; take it when school two is real.
+**Cloudflare serves any asset matching the request path without invoking the
+Worker at all.** The team Worker has an `[assets]` binding containing
+`index.html`, so `/` was answered with the voting app and the apex middleware
+never ran. Measured in production 2026-08-08, after the first deploy:
 
-**Consequence to accept knowingly:** until then, a bad hc deploy takes the
-front door down with it.
+| request | result |
+|---|---|
+| `auxgoat.com/go?code=CRUSADERS` | 302 → `hc.auxgoat.com` ✅ |
+| `auxgoat.com/api/now` | 404 ✅ |
+| `auxgoat.com/songs` | 302 → `/` ✅ |
+| **`auxgoat.com/`** | **the team app — Worker never invoked** ❌ |
+
+Everything that did not collide with a filename worked. The one path that
+mattered did not. The same is retroactively true of the 302 this replaced:
+`auxgoat.com/` has *always* shown Holy Cross's app directly rather than
+redirecting, and nobody noticed because the destination looked the same.
+
+The only fix available on the shared Worker is `run_worker_first = true`, which
+in wrangler 3.x is **all-or-nothing** — no path scoping. That would put a
+Worker invocation in front of every JS, CSS and font request the team makes, on
+the campus wifi this product already loses regularly, and would make a Worker
+exception take the static assets down with it. It also requires rewriting the
+catch-all to serve real assets before the app shell, or `/assets/index-*.js`
+gets answered with HTML.
+
+So the apex is its own Worker, `auxgoat-apex`, in `apex/`:
+
+```
+backend/   locker-room-music   hc.auxgoat.com, lockerroom.finestkindfarms.com
+apex/      auxgoat-apex        auxgoat.com, www.auxgoat.com
+```
+
+This is better on every axis that was actually being weighed:
+
+- **Multiple schools.** The front door stops living inside one school's Worker,
+  so a bad `hc` deploy cannot take it down for everyone. This was always the
+  end state; production just made it urgent.
+- **Latency and bad wifi.** The team's hot path keeps being served straight
+  from edge cache with no Worker invocation.
+- **Blast radius.** The apex Worker has **no bindings at all** — no D1, no
+  secrets, no cron, no R2. It cannot read a school's data because it has no
+  handle to any.
+
+**And it removes the interception problem instead of fighting it.** There is no
+`index.html` in `apex/public/`, so `/` matches no asset, falls through to the
+Worker naturally, and the page is rendered in code. No `run_worker_first`
+anywhere. Do not add an `index.html` there — it would be served directly and
+the `?e=` error state would silently stop working.
 
 ### Route table at the apex
 
@@ -63,7 +104,7 @@ any rule shipped by mistake outlives the ability to fix it from the server.
 
 ### `resolveTeam()`
 
-New file, `backend/src/teams.ts`:
+`apex/src/teams.ts`:
 
 ```ts
 export interface Team { slug: string; name: string; }
@@ -85,12 +126,19 @@ Three decisions, each load-bearing:
 signature would make that a change at every call site, which is the kind of
 friction that keeps a placeholder in place for a year.
 
-**It reuses `normalizeTeamCode()` from `crypto.ts`.** It does not do its own
-trim-and-uppercase. STATE.md documents `CRUSADERS` being rejected in
-production because one comparison path was byte-exact while the UI implied
-case-insensitivity. A second normalizer here would reintroduce exactly that
-bug, one layer earlier and worse: a player would be turned away at the front
-door by the very site that would have accepted them.
+**It imports `normalizeTeamCode()` from `backend/src/crypto.ts`, across the
+package boundary, rather than copying it.** STATE.md documents `CRUSADERS`
+being rejected in production because one comparison path was byte-exact while
+the UI implied case-insensitivity. A second copy here would reintroduce exactly
+that bug, one layer earlier and worse: a player turned away at the front door
+by the very site that would have accepted them.
+
+Splitting the Workers made this a real decision rather than an import. The
+trade taken is explicit — **duplication fails silently, a cross-package import
+fails at build time.** `crypto.ts` has no imports of its own, so nothing else
+is dragged along. If the apex is ever extracted to its own repository this
+breaks loudly, which is the correct moment to promote the function to something
+shared rather than the moment to copy it.
 
 **Internal whitespace still fails.** `normalizeTeamCode` preserves it
 deliberately, so `CRUS ADERS` is not a match and the error stays honest.
@@ -152,31 +200,43 @@ Not built now. Recorded so the shape does not have to be undone.
 
 The form submits to `/go` with a GET. The Worker resolves and 302s. An
 unrecognised code bounces to `/?e=<typed>`, and the page renders the error with
-the field refilled from the query string.
+the field refilled.
 
 Zero JS in the flow. The destination is a different origin, so there is a full
 navigation either way — a client-side `fetch` would save nothing and adds a
 failure mode on exactly the campus wifi that STATE.md keeps recording outages
-on. Enhancement later is unblocked by this design; it is simply not worth doing
-first.
+on.
 
 **`?e=` is reflected into a form value, so it must be HTML-escaped.** It is the
 only user-controlled string on the page and the only injection surface it has.
 
-### It must be a Vite entry, not a hand-placed file
+### Rendered in the Worker, with the CSS inlined
 
-`web/landing.html` becomes a second Rollup input alongside `index.html`,
-building to `backend/public/landing.html`.
+`apex/src/page.ts` returns the HTML as a string. Not built by Vite, not a file
+in an assets directory.
 
-Dropping a hand-written HTML file into `backend/public/` **does not work and
-fails late**: `vite.config.ts` sets `emptyOutDir: true`, so the next
-`cd web && npm run build` deletes it. The landing page would vanish during
-unrelated frontend work, with nothing connecting cause to effect.
+This is what makes `/` reach the Worker at all — see the interception problem
+above — but it earns its place twice over:
 
-The Vite entry also picks up the self-hosted Outfit subset. The type is the
-identity and it is never loaded from a CDN — campus wifi is unpredictable and a
-Google Fonts link is a dependency on a third party for the one thing that
-carries the brand.
+- **One round trip instead of two.** Inlining the CSS costs about 1.2 kB
+  gzipped and removes a request. On bad wifi that is the better trade, and it
+  is the whole page: 
+  the font is the only other fetch.
+- **It deletes a class of bug.** The earlier build-time version used
+  `__CODE__` / `__ERROR__` tokens that the Worker substituted, and shipped
+  broken — see below. There is nothing to substitute now; the value is
+  interpolated where it is used.
+
+The font stays self-hosted and is the only static asset: `apex/public/fonts/`
+holds the Outfit latin subset (32 kB), vendored into the repo rather than built
+from `node_modules`, so the Worker deploys from a clean checkout with no build
+step. It is served by Cloudflare directly and never touches the Worker.
+`font-display: swap` means text paints immediately in a fallback rather than
+hanging on 32 kB. It is never a Google Fonts CDN link — campus wifi is
+unpredictable and the type is the identity.
+
+The latin-ext subset is deliberately **not** shipped. The app needs it for
+track titles; this page has a fixed English string and an uppercase code field.
 
 ### Visual direction
 
@@ -227,11 +287,22 @@ smaller input on focus and does not zoom back out.
 
 ## Testing
 
-Unit, in `backend/test/`:
+31 tests in `apex/test/`, all pure, no wrangler and no deploy.
 
-- `resolveTeam` accepts every casing and padding of `CRUSADERS`; rejects
-  `KNIGHTS`, `CRUSADER`, `CRUS ADERS`, and empty. This mirrors
-  `teamcode.test.ts` on purpose — the two normalizers must never diverge.
+`teams.test.ts` (8) asserts `resolveTeam` accepts every casing and padding of
+`CRUSADERS` and rejects `KNIGHTS`, `CRUSADER`, `CRUS ADERS`, empty, and the
+`Object.prototype` collisions. It mirrors `backend/test/teamcode.test.ts`
+deliberately: the front door and the join gate must never diverge.
+
+`apex.test.ts` (23) drives the Worker's `fetch` directly. Beyond routing, three
+assert properties of the design that would otherwise erode silently:
+
+- the page contains no `<script` — the no-JS guarantee, pinned
+- the CSS is inlined and no stylesheet is linked — the round trip, pinned
+- the rejected code round-trips: `/go` encodes it into `Location`, `/` escapes
+  it back into the field. The two halves are written in different places, so
+  this is the test that they agree — `O'BRIEN & SONS` comes back as
+  `O&#39;BRIEN &amp; SONS`.
 
 ### Host routing cannot be tested through `wrangler dev` — measured
 
@@ -251,72 +322,86 @@ production and could not be made to fire locally by any means:
 | `curl --resolve hc.auxgoat.com…` (control) | 200, no redirect |
 
 The answer is better than the deployed-preview fallback this spec originally
-predicted: **drive the router directly through Hono's `app.request()` with a
-full absolute URL.** `backend/test/apex.test.ts` mounts `apexRouter()` on a
-bare Hono app with a sentinel catch-all standing in for the team app, and a
-stub `ASSETS` binding that records what it was asked for. No wrangler, no
-deploy, milliseconds per case — and it covers the one thing e2e could not.
+predicted: **call the Worker's `fetch` directly with an absolute URL.** No
+wrangler, no deploy, milliseconds per case, and it covers the one thing e2e
+could not.
 
-24 cases: apex landing, `/go` resolution and bounce, `/api/*` returning 404 and
-**not** 401, the catch-all, `www` canonicalisation preserving path and query,
-and passthrough for both `hc.auxgoat.com` and the Pi's
-`lockerroom.finestkindfarms.com`.
+Related, and confusing if met cold: `wrangler dev` also **rewrites `Location`
+headers on the way out**, mapping a configured domain back to the local
+address. `/go?code=crusaders` against `localhost:8788` returns
+`https://hc.localhost:8788/`, and only with `-H 'Host: auxgoat.com'` does it
+show the `https://hc.auxgoat.com/` the Worker actually produced. The Worker's
+output is correct either way; the dev server is being helpful. The unit tests
+assert the constant, so they are unaffected.
 
-`test/e2e.sh` is unchanged. It runs against `localhost` and therefore only ever
-exercises the non-apex path, which is exactly the regression surface that
-matters there: this change must be invisible to the live school.
+`backend/test/e2e.sh` is unchanged and still passes. It runs against
+`localhost` and only ever exercises the team Worker, which is exactly the
+regression surface that matters there: this change must be invisible to the
+live school.
 
-### Two bugs the tests did not catch on their own
+### Three bugs the tests did not catch on their own
 
-Both worth keeping, because both are about fixtures being too clean.
+All three are the same shape: **a fixture too clean to contain the hazard
+cannot catch it.** All three were found by deploying or by looking.
 
 **The Vite entry key silently disabled the stale-build reload.** Adding a
 second Rollup input meant naming the first one, and calling it `main` renamed
 the output to `main-<hash>.js`. `staleBuild.ts` finds the running and the
-served build by matching `/assets/index-<hash>.js` — a CSS-ish selector and a
-regex, *neither of which fails loudly*. The reload that stops a tab held across
-a deploy from executing `index.html` as JavaScript would simply have stopped
-happening. The entry key must stay `index`; there is now a comment in
-`vite.config.ts` saying so.
+served build by matching `/assets/index-<hash>.js` — a selector and a regex,
+*neither of which fails loudly*. The reload that stops a tab held across a
+deploy from executing `index.html` as JavaScript would simply have stopped
+happening. Moot now that the landing page is not built by Vite, but the
+landmine is still there for the next second entry, so `vite.config.ts` carries
+a comment.
 
-**Server-side substitution replaced the documentation, not the markup.**
-`landing.html` explains its own tokens in a comment above the form, so the
-first occurrence of each token is prose. `String.replace()` with a string
-pattern replaces only the first match, so the Worker substituted the comment
-and served the live tokens raw — `__CODE__` sitting in the input box, on a page
-with 24 passing tests behind it. Caught by looking at the rendered page.
+**Server-side substitution replaced the documentation, not the markup.** The
+built `landing.html` explained its own tokens in a comment above the form, so
+the first occurrence of each was prose. `String.replace()` with a string
+pattern replaces only the first match, so the Worker rewrote the comment and
+served the live tokens raw — `__CODE__` sitting in the input box, behind 24
+passing tests. Caught by looking at the rendered page. Now moot too: rendering
+in code means there is nothing to substitute.
 
-The fix is a global regex with a **function** replacer. The function matters
-independently: `$&` and `$'` are special inside a replacement *string*, and the
-substituted value is attacker-controlled from the query string — `escapeAttr`
-neutralises HTML, not `$`.
-
-The test fixture now includes a comment naming the tokens, mirroring the real
-file. A fixture too clean to contain the hazard cannot catch it.
-
-### Verified visually
-
-Both states rendered from the real built output at 393×852: clean load (no
-tokens, empty field, button correctly reading as inactive) and rejected code
-(`KNIGHTS` refilled, red error, button active). The disabled treatment comes
-from `:has(.input:invalid)` driven by `required` — no JavaScript, and the
-button stays clickable so the browser's own validation message still fires.
+**And the one that forced the redesign: `/` never reached the Worker.** No test
+could have caught it, because it is not a property of the code — the routing
+logic was correct and unit-tested. It is a property of `[assets]`, and it only
+exists in a deployed Worker. The tests were right; the architecture was wrong.
 
 ## Deployment notes
 
-- Deploy with `cd backend && npx wrangler deploy`. The `cd` is not cosmetic:
-  from the repo root, wrangler finds no config, scaffolds a `wrangler.jsonc`,
-  and creates a *second* Worker named after the directory, leaving the real one
-  serving the old build. Done by accident on 2026-08-05.
-- Wait ~2 minutes before verifying. A deploy reporting success was measured
-  still serving old code 80 seconds later. A verification run immediately after
-  a deploy tests the previous Worker.
-- **`cd web && npm run build` before every Worker deploy.** `backend/public/`
-  is gitignored, so the built page is never in a commit and a clean checkout
-  does not have one. Wrangler uploads whatever is on disk at deploy time, which
-  means a stale working tree ships a stale page with nothing in `git status` to
-  hint at it — and on a fresh clone, `/landing.html` would 404 and the apex
-  would serve nothing at all.
+Two Workers now, and **the order matters once**. A custom domain belongs to
+exactly one Worker, so the apex routes must be released by the team Worker
+before the apex Worker can claim them:
+
+```bash
+# 1. Release auxgoat.com + www from the team Worker.
+cd backend && npx wrangler deploy
+
+# 2. Claim them on the apex Worker.
+cd apex && npx wrangler deploy
+```
+
+Between those two steps `auxgoat.com` resolves to nothing. It is short, and it
+is the only ordering that does not have both Workers claiming one hostname.
+`hc.auxgoat.com` is unaffected throughout — no step here touches it.
+
+`apex/wrangler.toml` sets `workers_dev = true`, so a deploy can be verified at
+`auxgoat-apex.<subdomain>.workers.dev` **before** the custom domains are moved.
+Worth doing: it turns the ordering above from a leap into a check.
+
+Other things that bite:
+
+- **The `cd` is not cosmetic.** From the repo root, wrangler finds no config,
+  scaffolds a `wrangler.jsonc`, and creates a *second* Worker named after the
+  directory while the real one keeps serving the old build. Done by accident on
+  2026-08-05. With two Workers there are now two ways to get this wrong.
+- **Wait ~2 minutes before verifying.** A deploy reporting success was measured
+  still serving old code 80 seconds later.
+- **`cd web && npm run build` before deploying the team Worker.**
+  `backend/public/` is gitignored, so wrangler uploads whatever is on disk and
+  a stale working tree ships a stale app with nothing in `git status` to hint
+  at it. The apex Worker needs no build step at all — its only asset is a
+  vendored font, committed.
 
 ## Out of scope
 
@@ -325,4 +410,6 @@ button stays clickable so the browser's own validation message still fires.
   its own rather than as a rider here.
 - Any second school. The map has one entry and that is honest.
 - `/d/:serial`, device binding, and everything else in the provisioning design.
-- Splitting the apex onto its own Worker.
+- A rate-limiting rule on `/go`. Required before this is advertised, but it is
+  dashboard configuration rather than code — Security → WAF → Rate limiting,
+  matching `hostname eq "auxgoat.com" and http.request.uri.path eq "/go"`.
