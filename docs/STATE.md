@@ -1,14 +1,28 @@
 # Project state — resume here
 
-Last worked: **2026-08-05**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-08-08**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
-**Live at `https://hc.auxgoat.com`** (reachable again as of 2026-08-05 — the
-campus filter block appears to have lapsed; `lockerroom.finestkindfarms.com` is
-still bound and is what the Pi points at). All seven build-order phases are done
-and deployed. Code is backed up to a **private GitHub repo**,
-`git@github.com:MMV17/locker-room-music.git`, branch `phase5-voting-site`.
+**THE CAMPUS FILTER IS BACK, AND IT BLOCKS THE WHOLE `auxgoat.com` ZONE** —
+including `hc.auxgoat.com`, not just the apex. Re-measured 2026-08-08; see
+"auxgoat.com is filtered" below. What works on campus right now:
+
+| Hostname | Use |
+|---|---|
+| `https://locker-room-music.mmvinton17.workers.dev` | **the voting app** |
+| `https://auxgoat.mmvinton17.workers.dev` | **the front door** (apex Worker) |
+| `https://lockerroom.finestkindfarms.com` | also unfiltered; what the Pi points at |
+| `https://hc.auxgoat.com` | **filtered on campus**, fine off it |
+
+All seven build-order phases are done and deployed. Code is backed up to a
+**private GitHub repo**, `git@github.com:MMV17/locker-room-music.git`, branch
+`phase5-voting-site`.
+
+**There are TWO Workers now** (since 2026-08-08). `auxgoat.com` is a real
+landing page on its own Worker rather than a redirect to Holy Cross. See "The
+apex is its own Worker" below — it explains why it could not stay on the team
+Worker, which is not obvious and cost a deploy to discover.
 
 **2026-08-05 was the first day it met real use, and everything below the
 "first real UX walkthrough" heading came out of that.** The product now works
@@ -37,11 +51,12 @@ Build order status (spec section 10):
 
 | Thing | Value |
 |---|---|
-| Worker | `locker-room-music` |
-| Product URL | `https://hc.auxgoat.com` — **reachable again as of 2026-08-05**, the filter block appears to have lapsed. Re-test on campus before relying on it; see "auxgoat.com is filtered" below |
+| Worker (team app) | `locker-room-music`, deployed from `backend/` |
+| Worker (front door) | `auxgoat`, deployed from `apex/` — **added 2026-08-08** |
+| Product URL | `https://hc.auxgoat.com` — **filtered on campus again as of 2026-08-08**; see "auxgoat.com is filtered" below |
 | Always-worked fallback | `https://lockerroom.finestkindfarms.com` — what the Pi points at. Keep it bound |
-| Fallback | `https://locker-room-music.mmvinton17.workers.dev` — also unblocked |
-| Fallback URL | `https://locker-room-music.mmvinton17.workers.dev` |
+| Fallback | `https://locker-room-music.mmvinton17.workers.dev` — unfiltered, and currently where the front door sends players |
+| Front door | `https://auxgoat.mmvinton17.workers.dev` and `auxgoat.com` / `www` (the latter two filtered on campus) |
 | D1 database | `lockerroom` / `d8e68dc0-5eab-42a3-b54c-441b1f79627c`, region ENAM |
 | Cloudflare account | `7db3c13ee0073570030cac33d8c9f0dc` |
 | Secrets | `DEVICE_KEY`, `MAC_SALT`, `TEAM_CODE` (=`CRUSADERS`), `ADMIN_PASSWORD` |
@@ -65,6 +80,79 @@ this. Its Private Email is being abandoned — the old records are preserved in
 `docs/dns-snapshot-finestkindfarms.md`, and the Namecheap subscription must be
 set to not auto-renew separately (DNS changes do not stop billing).
 
+## The apex is its own Worker (2026-08-08)
+
+`auxgoat.com` is a landing page with a team-code box, not a redirect to Holy
+Cross. It lives in **`apex/`** as a separate Worker named `auxgoat`. Design is
+`docs/superpowers/specs/2026-08-07-auxgoat-landing-page-design.md`.
+
+**Why it could not stay on the team Worker — this is the part worth reading.**
+
+Cloudflare serves any asset matching the request path **without invoking the
+Worker at all**. The team Worker has an `[assets]` binding containing
+`index.html`, so `auxgoat.com/` was answered with the voting app and the apex
+middleware never ran. Deployed and measured 2026-08-08:
+
+| request | result |
+|---|---|
+| `auxgoat.com/go?code=CRUSADERS` | 302 → correct ✅ |
+| `auxgoat.com/api/now` | 404 ✅ |
+| `auxgoat.com/songs` | 302 → `/` ✅ |
+| **`auxgoat.com/`** | **the team app — Worker never invoked** ❌ |
+
+Everything that did not collide with a filename worked. Retroactively this was
+always true: **the old bare-domain 302 never fired for `/` either**, so
+`auxgoat.com` has been silently serving Holy Cross's app directly all along.
+
+The only fix on the shared Worker is `run_worker_first = true`, which is
+all-or-nothing in wrangler 3.x — every JS, CSS and font request would pay a
+Worker invocation, on the campus wifi this product already loses.
+
+So the apex Worker has **no `index.html` in `apex/public/`**. `/` matches no
+asset, falls through to the Worker, and the page is rendered in code with its
+CSS inlined. **Do not add an `index.html` there** — it would be served directly
+and the error state would silently stop working. Its only asset is a vendored
+Outfit woff2, committed, so it deploys from a clean checkout with no build step.
+
+The Worker has **no bindings at all** — no D1, no secrets, no cron, no R2. It
+cannot read a school's data because it has no handle to any.
+
+**Its name is load-bearing.** `name = "auxgoat"` produces
+`auxgoat.mmvinton17.workers.dev`, which is the only front door that opens on
+campus. Renaming the Worker mints a new hostname and abandons the old one.
+
+**Route ownership is exclusive.** A custom domain belongs to exactly one
+Worker, so `auxgoat.com` and `www` had to be removed from `backend/wrangler.toml`
+and that Worker redeployed *before* `apex` could claim them. Removing them
+deleted their DNS records, so between the two deploys the apex resolved to
+nothing — which looks alarming and is expected.
+
+### The code is only typed once
+
+`/go` hands the code to the team site in the **URL fragment**
+(`...#code=CRUSADERS`), and `Join.tsx` reads it, strips it with
+`replaceState`, and skips to the name step.
+
+A fragment, never `?code=` — a fragment is not sent to the server and never
+appears in a `Referer`. The app loads artwork via `<img>` straight from Deezer
+and iTunes, so a query param would hand the team code to Apple and Deezer with
+every cover. That code is the only gate on the team's data.
+
+It still calls `check-code` before skipping. The apex's map and the school's
+`TEAM_CODE` secret are independent, so a rotated code would otherwise be waved
+through and fail at the final submit — the exact "sent back three fields later"
+confusion `check-code` exists to prevent.
+
+### Still open
+
+- **No rate-limiting rule on `/go`.** The apex answers "is this a valid team
+  code?" to anyone who asks, and the team code is the only gate on a school's
+  data. Dashboard-only: Security → WAF → Rate limiting, matching
+  `hostname eq "auxgoat.com" and http.request.uri.path eq "/go"`.
+- The teams map has one hardcoded entry in `apex/src/teams.ts`. `resolveTeam`
+  is async and takes `env` specifically so it can become a D1 query without a
+  signature change.
+
 ## Phase 4 result (2026-08-03)
 
 The Pi's config now points at the production Worker. On restart it drained
@@ -87,8 +175,22 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Run it with actual teammates.** What is left needs more than one phone in a
-room.
+**FIRST: `auxgoat.com` currently resolves to nothing.** The team Worker was
+deployed with its apex routes removed, which deleted those DNS records, and the
+apex Worker has never been deployed. Two commands close it:
+
+```bash
+cd apex && npx wrangler deploy                    # claims auxgoat.com + www
+cd web && npm run build && cd ../backend && npx wrangler deploy
+```
+
+The second is needed because `Join.tsx` changed (the fragment handoff) and
+production is still running the build from before it. `hc.auxgoat.com` and the
+Pi are unaffected by either — neither is reachable on campus regardless, see
+the filter section.
+
+**Then: run it with actual teammates.** What is left needs more than one phone
+in a room.
 
 **First, though: verify the three lifecycle fixes on real hardware.** They
 landed late on 2026-08-05 and have only been proven by unit test. Play three
@@ -282,7 +384,7 @@ content.
 claim and every DJ attribution. It exists only in `backend/.secrets.local`.
 Back it up separately, off this laptop.
 
-## auxgoat.com is filtered on the school network (2026-08-04)
+## auxgoat.com is filtered on the school network (2026-08-04, BACK 2026-08-08)
 
 **The product domain is unusable on campus.** `hc.auxgoat.com` and
 `auxgoat.com` are blocked by the school's web filter **by SNI** — the same
@@ -295,6 +397,44 @@ from the same machine, and `lockerroom.finestkindfarms.com` and the
 Almost certainly because the domain was registered that morning — filters
 routinely block newly-registered, uncategorised domains. It worked for about
 4½ hours after cutover, then the filter caught up.
+
+### It lapsed on 08-05 and returned by 08-08. Re-measured, same signature
+
+Against one Cloudflare IP (`104.21.96.77`), on the wired campus network:
+
+| SNI presented | result |
+|---|---|
+| `hc.auxgoat.com` | CONNECTED, then **no peer certificate available** |
+| `auxgoat.com` | same |
+| `example.com` | `subject=CN=example.com` |
+| `lockerroom.finestkindfarms.com` | `subject=CN=finestkindfarms.com` |
+
+From a phone hotspot, minutes later, every one of those returns 200 with a
+valid `CN=auxgoat.com`. So the certificate is fine and Cloudflare is fine —
+this is the filter, not an SSL problem, and **treating it as an SSL problem
+wastes an hour.** The one-line check:
+
+```bash
+echo | openssl s_client -connect 104.21.96.77:443 -servername hc.auxgoat.com 2>&1 | grep -E "no peer|subject="
+```
+
+**Do not diagnose this as a deploy breaking something.** SNI rejection happens
+before a route or a Worker is consulted. If `workers.dev` and
+`finestkindfarms.com` still answer 200, the Worker is healthy by definition.
+
+**The blast radius is the whole zone, not just the apex.** The team's own
+voting site is unreachable on campus too. That is why `Team.url` in
+`apex/src/teams.ts` points at the `workers.dev` hostname rather than
+`hc.auxgoat.com` — deriving `https://<slug>.auxgoat.com/` would hand a player a
+blocked destination from a front door that had just worked. Move it back when
+the filter lapses; it is one line.
+
+**It also undermines the QR plan in the provisioning design.** A QR encoding
+`auxgoat.com/d/<serial>` is filtered, and so is the `hc.auxgoat.com` it would
+redirect to. Whatever gets printed on a case has to be a hostname the filter
+permits — which argues against a fresh subdomain of a newly-registered domain,
+since that is the exact pattern filters block on sight. Settle this before
+anything is printed.
 
 **The Pi has been reverted to `lockerroom.finestkindfarms.com`** and is beaconing
 normally. Keeping that hostname bound is what made the recovery a one-line
@@ -822,16 +962,29 @@ ssh pi@192.168.1.6 "sudo tail -f /var/log/lockerroom/listener.log"
 # for; this dump is for damage older than that.
 ./backend/scripts/backup.sh
 
-# Deploy the Worker. The `cd backend` is NOT optional and NOT cosmetic.
+# Deploy the team Worker. The `cd backend` is NOT optional and NOT cosmetic.
 # Run `npx wrangler deploy` from the repo root and wrangler finds no config,
 # silently scaffolds a wrangler.jsonc, and creates a SECOND Worker named after
 # the directory — locker-room-music-nosync — serving web/ as static assets.
 # It does not touch the real Worker, so hc.auxgoat.com keeps serving the old
 # build and it looks like slow propagation. Done by accident 2026-08-05.
+# There are two Workers now, so there are two ways to get this wrong.
 cd backend && npx wrangler deploy
 
-# Backend unit tests (15)
+# Deploy the front door. No build step — its only asset is a committed font.
+cd apex && npx wrangler deploy
+
+# Backend unit tests (36)
 cd backend && npx vitest run
+
+# Front door tests (35). No wrangler, no deploy — the Worker's fetch is called
+# directly with absolute URLs, which is the ONLY way to cover host-based
+# behaviour: `wrangler dev` rebuilds every request URL against its own bind
+# address, so the Worker always sees localhost no matter what Host header or
+# even `curl --resolve` hostname is presented. Measured 2026-08-08.
+# It also rewrites Location headers on the way out, so /go looks like it
+# redirects to hc.localhost:8788 unless you pass -H 'Host: auxgoat.com'.
+cd apex && npx vitest run
 
 # Frontend: build into backend/public/, or run a dev server on :5173 that
 # proxies /api to wrangler on :8787
