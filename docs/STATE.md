@@ -313,6 +313,53 @@ anywhere the school filter is active.)
 Known and deliberately not blocking: the `/go` throttle is inert (see above),
 and the speaker cannot yet report who is connected over Bluetooth.
 
+### One phone on the aux (2026-08-09)
+
+A2DP is not exclusive. Two phones can be connected to the speaker at the same
+time and it mixes both streams — two songs at once in the room, and two plays
+open at once in D1, with `/api/now` showing whichever it happened to find
+first. Nothing stopped that until now.
+
+The rule, in `SessionManager.on_device_connected`:
+
+- **A song is playing → a second phone is hung up on.** It never gets a
+  session, so even if the hang-up fails it cannot record a play over the top of
+  the real one.
+- **A song was playing within the last 45 seconds → same.** That is `AUX_GRACE`,
+  and it exists for the gap between songs. Without it the aux is briefly
+  unowned every time a track ends, which is exactly when someone would grab it.
+- **Nothing has played for 45 seconds → the new phone takes over,** and any
+  phone still connected is dropped. A player who walks out with their phone
+  still paired does not hold the room hostage until they leave Bluetooth range.
+- A pause holds the aux for as long as the play stays open (`PAUSE_GRACE`, 60s),
+  because a paused play is still open. So pausing to talk does not lose it.
+
+Handing off is therefore: stop your music, wait, next person connects. **This
+needs a Pi deploy to take effect** — `pi/scripts/deploy.sh pi@<host>` — and it
+is the one change here that is invisible until then.
+
+### Deleting players and phones (2026-08-09)
+
+Admin can now delete, not just deactivate. Deactivate is still right for
+someone who left the team; delete is for rows that should never have existed,
+which accumulate because players sign themselves up with only the team code.
+
+**The songs always survive.** A play is a thing that happened in the room.
+Deleting a player nulls `plays.user_id` (the song reads "Unclaimed"), unclaims
+their phones, and signs them out. Deleting a phone nulls `plays.device_hash`.
+
+Two consequences the UI states before asking, both irreversible:
+
+- **A deleted player's votes are DELETED, not voided.** `votes.user_id` is NOT
+  NULL and references `users(id)`, so there is no row to leave behind. Visible
+  effect is identical — those votes stop counting.
+- **Deleting a phone that has unclaimed songs strands them.** Claiming works by
+  picking your phone off the list; with the phone gone there is nothing left
+  tying those plays to a person.
+
+Deleting a phone does not stop it being tracked — the Pi re-creates the row from
+its MAC hash the next time it plays. Covered by 15 checks in `backend/test/e2e.sh`.
+
 **First, though: verify the three lifecycle fixes on real hardware.** They
 landed late on 2026-08-05 and have only been proven by unit test. Play three
 songs, pause one mid-track for over a minute, and let one run to its natural
