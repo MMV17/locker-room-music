@@ -313,30 +313,47 @@ anywhere the school filter is active.)
 Known and deliberately not blocking: the `/go` throttle is inert (see above),
 and the speaker cannot yet report who is connected over Bluetooth.
 
-### One phone on the aux (2026-08-09)
+### One phone on the aux (2026-08-09) — VERIFIED ON HARDWARE
 
-A2DP is not exclusive. Two phones can be connected to the speaker at the same
-time and it mixes both streams — two songs at once in the room, and two plays
-open at once in D1, with `/api/now` showing whichever it happened to find
-first. Nothing stopped that until now.
+Two real iPhones, 15:59–16:03 on 2026-08-09. A waiting phone connected fine,
+was inaudible, was not recorded, and took the aux cleanly once the holder went
+quiet — in both directions. The router's no-restart guard also proved itself:
+it re-granted the aux to the same phone and correctly skipped the service
+restart.
 
-The rule, in `SessionManager.on_device_connected`:
+Enforcement is **routing, not refusal**. A newcomer connects normally and
+simply is not audible: `bluealsa-aplay` gets a MAC allowlist naming one phone.
+See `pi/lockerroom/aux.py` and the comment block in
+`pi/systemd/bluealsa-aplay-aux.conf` — every failure path there lands on plain
+`bluealsa-aplay -S`, which plays anything. The failure mode is the old
+mixing behaviour, never a silent speaker. Do not "simplify" that away.
 
-- **A song is playing → a second phone is hung up on.** It never gets a
-  session, so even if the hang-up fails it cannot record a play over the top of
-  the real one.
+Two things the hardware taught that no unit test would have:
+
+- **iOS resumes on its own after an external AVRCP pause.** 12 pauses in 41
+  seconds before `PAUSE_COOLDOWN` was added. The pause is a courtesy, not the
+  enforcement, so it now backs off for 10s rather than fighting.
+- **After a listener restart the aux goes to whichever phone BlueZ announces
+  first**, not to whoever held it before. With two phones connected, a deploy
+  can land it on the wrong one and the right one waits out AUX_GRACE. Known,
+  self-correcting in 45 seconds, deliberately not fixed — but do not deploy
+  mid-session and expect the aux to stay put.
+
+The rule, in `SessionManager`:
+
+- **A song is playing → a second phone connects but is not routed.** Its audio
+  goes nowhere and its songs are not recorded: a song the room could not hear
+  did not play to the room.
 - **A song was playing within the last 45 seconds → same.** That is `AUX_GRACE`,
   and it exists for the gap between songs. Without it the aux is briefly
-  unowned every time a track ends, which is exactly when someone would grab it.
-- **Nothing has played for 45 seconds → the new phone takes over,** and any
-  phone still connected is dropped. A player who walks out with their phone
-  still paired does not hold the room hostage until they leave Bluetooth range.
+  unowned every time a track ends, which is exactly when someone would take it.
+- **Nothing has played for 45 seconds → whoever presses play next gets it.**
+  Nobody has to disconnect, and a phone left in somebody's pocket does not hold
+  the room hostage until it leaves Bluetooth range.
 - A pause holds the aux for as long as the play stays open (`PAUSE_GRACE`, 60s),
   because a paused play is still open. So pausing to talk does not lose it.
 
-Handing off is therefore: stop your music, wait, next person connects. **This
-needs a Pi deploy to take effect** — `pi/scripts/deploy.sh pi@<host>` — and it
-is the one change here that is invisible until then.
+Handing off is therefore: stop your music, wait, next person presses play.
 
 ### Deleting players and phones (2026-08-09)
 
