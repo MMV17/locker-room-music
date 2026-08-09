@@ -1,0 +1,184 @@
+/* ------------------------------------------------------------------ *
+ * auxgoat.com — the front door.
+ *
+ * Same tokens as the product (styles.css), with one difference that matters:
+ * there is no team colour here, because there is no team. The app spends its
+ * single accent on a school's colour; the apex has none to spend, so the
+ * button is filled with --ink and the page carries no accent at all.
+ *
+ * Deliberately no logo. The AuxGoat mark is cream and gold on solid black,
+ * and 87% of the artwork is that black field — it cannot sit on a pale page,
+ * and knocking the black out leaves white marks on white. It was tried in the
+ * app header and rejected. The wordmark in type carries this instead, which
+ * is also the most obviously adjustable thing to change later.
+ *
+ * Self-hosted, never a Google Fonts CDN link: campus wifi is unpredictable
+ * and the type is the identity.
+ * ------------------------------------------------------------------ */
+
+@import "@fontsource-variable/outfit";
+
+:root {
+  --page: #edf0f5;
+  --surface: #ffffff;
+  --ink: #14171c;
+  --ink-2: #4a515c;
+  --muted: #8a93a0;
+  --hairline: #e4e8ee;
+  --error: #dc2626;
+
+  --shadow: 0 8px 28px rgba(20, 23, 28, 0.07), 0 2px 6px rgba(20, 23, 28, 0.04);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100svh;
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Outfit Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+
+  display: grid;
+  place-items: center;
+  padding: 24px 20px calc(24px + var(--safe-b));
+}
+
+.wrap {
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+}
+
+/* The type is the identity, so it gets the room. clamp() rather than a fixed
+   size: this is the one element that should still feel large on a 320px
+   phone and not silly on a desktop. */
+.mark {
+  margin: 0;
+  font-size: clamp(44px, 13vw, 60px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.tagline {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: 17px;
+  text-wrap: balance;
+}
+
+.form {
+  margin-top: 32px;
+  background: var(--surface);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  padding: 22px 20px;
+  text-align: left;
+}
+
+.label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+/* 17px, never smaller: iOS zooms any input under 16px on focus and does not
+   zoom back out. uppercase matches the Join screen, so a code looks the same
+   in both places. */
+.input {
+  width: 100%;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 14px 16px;
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--muted);
+  letter-spacing: normal;
+}
+
+.input:focus {
+  border-color: var(--ink);
+  background: var(--surface);
+}
+
+.error {
+  margin: 12px 0 0;
+  color: var(--error);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.btn {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--surface);
+  background: var(--ink);
+  border: 0;
+  border-radius: 12px;
+  padding: 15px 16px;
+  min-height: 52px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+/* An empty field means there is nothing to submit, and `required` already
+   stops the submission natively — no JavaScript involved. This only makes the
+   button *look* the way it behaves.
+ *
+ * It stays clickable on purpose: tapping it fires the browser's own "please
+ * fill this in" message, which is more useful than a dead control. The
+ * treatment drops the fill entirely rather than just fading it, because a
+ * half-strength button still reads as confidently tappable — that exact
+ * mistake shipped once already on the Join screen. */
+.form:has(.input:invalid) .btn {
+  background: var(--hairline);
+  color: var(--muted);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.hint {
+  margin: 20px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:active {
+    transform: none;
+  }
+}

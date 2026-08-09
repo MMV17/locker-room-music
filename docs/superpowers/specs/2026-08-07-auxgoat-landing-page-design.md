@@ -233,26 +233,74 @@ Unit, in `backend/test/`:
   `KNIGHTS`, `CRUSADER`, `CRUS ADERS`, and empty. This mirrors
   `teamcode.test.ts` on purpose — the two normalizers must never diverge.
 
-End-to-end, added to `test/e2e.sh`, all with an apex `Host` header.
+### Host routing cannot be tested through `wrangler dev` — measured
 
-**Verify host-based routing works under `wrangler dev --local` before writing
-these.** The middleware branches on `new URL(c.req.url).hostname`, and that URL
-is reconstructed by the runtime from the request's `Host` header — so
-`curl -H 'Host: auxgoat.com' localhost:8787` should present as `auxgoat.com`.
-If it does not, these cases cannot run locally and have to move to a deployed
-preview, which is slow enough to change how the work is sequenced. Check it
-first with a one-line probe rather than discovering it after writing six tests.
+The plan was to cover this in `test/e2e.sh` with an apex `Host` header. **That
+does not work, and the probe is worth recording so nobody spends an afternoon
+on it.**
 
-- `GET /` serves the landing page, not the app shell.
-- `GET /go?code=crusaders` → 302 to `https://hc.auxgoat.com/`.
-- `GET /go?code=nope` → 302 to `/?e=nope`.
-- `GET /api/now` → 404, **not** 401. A 401 would mean the API is still mounted.
-- `GET /whatever` → 302 to `/`.
-- Same requests with an `hc.auxgoat.com` Host header behave as they do today —
-  this change must be invisible to the live school.
+`wrangler dev` reconstructs every request URL against its own bind address, so
+the Worker always sees `localhost:8787`. Measured 2026-08-07 against the *old*
+`auxgoat.com` → `hc.auxgoat.com` redirect, which demonstrably worked in
+production and could not be made to fire locally by any means:
 
-Manual, once: the reflected `?e=` value is escaped. Submit `"><script>` and
-confirm it renders as text in the field.
+| attempt | result |
+|---|---|
+| `curl -H 'Host: auxgoat.com' localhost:8787` | 200, no redirect |
+| `curl --resolve auxgoat.com:8787:127.0.0.1 http://auxgoat.com:8787/` | 200, no redirect |
+| `curl --resolve hc.auxgoat.com…` (control) | 200, no redirect |
+
+The answer is better than the deployed-preview fallback this spec originally
+predicted: **drive the router directly through Hono's `app.request()` with a
+full absolute URL.** `backend/test/apex.test.ts` mounts `apexRouter()` on a
+bare Hono app with a sentinel catch-all standing in for the team app, and a
+stub `ASSETS` binding that records what it was asked for. No wrangler, no
+deploy, milliseconds per case — and it covers the one thing e2e could not.
+
+24 cases: apex landing, `/go` resolution and bounce, `/api/*` returning 404 and
+**not** 401, the catch-all, `www` canonicalisation preserving path and query,
+and passthrough for both `hc.auxgoat.com` and the Pi's
+`lockerroom.finestkindfarms.com`.
+
+`test/e2e.sh` is unchanged. It runs against `localhost` and therefore only ever
+exercises the non-apex path, which is exactly the regression surface that
+matters there: this change must be invisible to the live school.
+
+### Two bugs the tests did not catch on their own
+
+Both worth keeping, because both are about fixtures being too clean.
+
+**The Vite entry key silently disabled the stale-build reload.** Adding a
+second Rollup input meant naming the first one, and calling it `main` renamed
+the output to `main-<hash>.js`. `staleBuild.ts` finds the running and the
+served build by matching `/assets/index-<hash>.js` — a CSS-ish selector and a
+regex, *neither of which fails loudly*. The reload that stops a tab held across
+a deploy from executing `index.html` as JavaScript would simply have stopped
+happening. The entry key must stay `index`; there is now a comment in
+`vite.config.ts` saying so.
+
+**Server-side substitution replaced the documentation, not the markup.**
+`landing.html` explains its own tokens in a comment above the form, so the
+first occurrence of each token is prose. `String.replace()` with a string
+pattern replaces only the first match, so the Worker substituted the comment
+and served the live tokens raw — `__CODE__` sitting in the input box, on a page
+with 24 passing tests behind it. Caught by looking at the rendered page.
+
+The fix is a global regex with a **function** replacer. The function matters
+independently: `$&` and `$'` are special inside a replacement *string*, and the
+substituted value is attacker-controlled from the query string — `escapeAttr`
+neutralises HTML, not `$`.
+
+The test fixture now includes a comment naming the tokens, mirroring the real
+file. A fixture too clean to contain the hazard cannot catch it.
+
+### Verified visually
+
+Both states rendered from the real built output at 393×852: clean load (no
+tokens, empty field, button correctly reading as inactive) and rejected code
+(`KNIGHTS` refilled, red error, button active). The disabled treatment comes
+from `:has(.input:invalid)` driven by `required` — no JavaScript, and the
+button stays clickable so the browser's own validation message still fires.
 
 ## Deployment notes
 
@@ -263,8 +311,12 @@ confirm it renders as text in the field.
 - Wait ~2 minutes before verifying. A deploy reporting success was measured
   still serving old code 80 seconds later. A verification run immediately after
   a deploy tests the previous Worker.
-- `web/` must be rebuilt and committed before the Worker deploy, since the
-  Worker serves `backend/public/` from its `[assets]` binding.
+- **`cd web && npm run build` before every Worker deploy.** `backend/public/`
+  is gitignored, so the built page is never in a commit and a clean checkout
+  does not have one. Wrangler uploads whatever is on disk at deploy time, which
+  means a stale working tree ships a stale page with nothing in `git status` to
+  hint at it — and on a fresh clone, `/landing.html` would 404 and the apex
+  would serve nothing at all.
 
 ## Out of scope
 
