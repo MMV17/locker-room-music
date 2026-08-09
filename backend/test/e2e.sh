@@ -285,12 +285,12 @@ echo "== pi remote control =="
 # assertion below. Drain it through the same API the Pi uses.
 for _ in 1 2 3; do
   LEFTOVER=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-    -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}')
+    -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
   LEFT_ID=$(echo "$LEFTOVER" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$LEFT_ID" ] && break
   curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
     -H 'content-type: application/json' \
-    -d "{\"speaker_name\":\"Locker Room Speaker\",\"result\":{\"id\":\"$LEFT_ID\",\"ok\":true,\"output\":\"drained by e2e setup\"}}" > /dev/null
+    -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$LEFT_ID\",\"ok\":true,\"output\":\"drained by e2e setup\"}}" > /dev/null
 done
 # The allowlist is what stops this being remote code execution on a device in
 # a locker room, so it is asserted at the API boundary, not just on the Pi.
@@ -318,16 +318,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/comman
 [ "$code" = "409" ] && ok "a second queued command is refused while one is outstanding" || bad "single outstanding" "got $code"
 
 GOT=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}')
+  -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
 echo "$GOT" | grep -q "report-status" && ok "beacon receives the pending command" || bad "beacon dispatch" "$GOT"
 
 AGAIN=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}')
+  -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
 echo "$AGAIN" | grep -q '"command":null' && ok "a dispatched command is not handed out twice" || bad "double dispatch" "$AGAIN"
 
 curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' \
-  -d "{\"speaker_name\":\"Locker Room Speaker\",\"result\":{\"id\":\"$CMD_ID\",\"ok\":true,\"output\":\"up 4 minutes\"}}" > /dev/null
+  -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$CMD_ID\",\"ok\":true,\"output\":\"up 4 minutes\"}}" > /dev/null
 DONE=$(curl -s "$BASE/api/admin/pi/commands" -H "X-Admin-Password: $ADMIN_PW")
 echo "$DONE" | grep -q "up 4 minutes" && ok "the Pi's result is recorded" || bad "result recorded" "$DONE"
 
@@ -343,7 +343,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/comman
 # The previous assertion left a reboot queued; collect it so this block starts
 # from a clean queue.
 curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null
+  -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}' > /dev/null
 
 RB_ID=$(curl -s -X POST "$BASE/api/admin/pi/commands" \
   -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
@@ -351,7 +351,7 @@ RB_ID=$(curl -s -X POST "$BASE/api/admin/pi/commands" \
 [ -n "$RB_ID" ] && ok "queued a reboot" || bad "queue reboot" "no id"
 
 curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null
+  -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}' > /dev/null
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/commands" \
   -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
@@ -461,7 +461,7 @@ rm -f "$DJAR"
 
 echo "== heartbeat =="
 curl -s -X POST "$BASE/api/heartbeat" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null
+  -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}' > /dev/null
 curl -s -b "$JAR" "$BASE/api/now" | grep -q '"speaker_online":true' \
   && ok "speaker reports online after heartbeat" || bad "heartbeat" "not online"
 

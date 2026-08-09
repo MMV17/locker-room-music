@@ -313,6 +313,36 @@ anywhere the school filter is active.)
 Known and deliberately not blocking: the `/go` throttle is inert (see above),
 and the speaker cannot yet report who is connected over Bluetooth.
 
+### The speaker is called AuxGoat now (2026-08-09)
+
+Renamed from "Locker Room Speaker". Three separate settings had to change, and
+they only look like one thing:
+
+| what | where | what it actually does |
+|---|---|---|
+| **pretty hostname** | `hostnamectl set-hostname --pretty` | the name phones see |
+| `speaker_name` | `/etc/lockerroom/config.toml` | the `heartbeats` key |
+| `Name` | `/etc/bluetooth/main.conf` | **nothing** |
+
+**`Name` in main.conf does nothing on BlueZ 5.x.** Measured on the Pi: changed
+it, restarted bluetoothd, advertised name unchanged — and there was no stored
+`Alias` in `/var/lib/bluetooth/<adapter>/settings` to explain it. BlueZ takes
+the name from systemd's pretty hostname. `docs/spec.md` said to set main.conf
+`Name` and had been wrong about that since phase 1; it is corrected now. The
+change is NOT picked up live — `systemctl restart bluetooth` is required.
+
+Two follow-ons:
+
+- **Already-paired phones cache the old name** and may keep showing "Locker
+  Room Speaker" until they forget and re-pair. Nothing is broken if they do.
+- **The `heartbeats` row is keyed on the name**, so there is now a stale
+  "Locker Room Speaker" row. Harmless — `speaker_online` reads
+  `ORDER BY last_seen_at DESC LIMIT 1`, so the newest row always wins — and it
+  is left in place rather than deleting production data for tidiness.
+
+Still one shared name across every box. Fine with one; see the note in
+`pi/config.example.toml` before there are two.
+
 ### One phone on the aux (2026-08-09) — VERIFIED ON HARDWARE
 
 Two real iPhones, 15:59–16:03 on 2026-08-09. A waiting phone connected fine,

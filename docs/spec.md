@@ -61,7 +61,7 @@ Target cost: **$0/month.** See section 8 for the request-budget constraint that 
 
 ## 4. Phase 1 — Pi as a Bluetooth speaker
 
-Goal for this phase: a phone can connect to a device named "Locker Room Speaker" and hear music come out of the aux-connected speaker. No app code yet. Verify this works before writing anything else.
+Goal for this phase: a phone can connect to a device named "AuxGoat" and hear music come out of the aux-connected speaker. No app code yet. Verify this works before writing anything else.
 
 ### 4.1 Audio backend
 
@@ -76,7 +76,19 @@ Use **bluez-alsa** (`bluez-alsa-utils`), not PipeWire. Pi OS Lite is headless wi
 ### 4.2 Discoverability and pairing
 
 In `/etc/bluetooth/main.conf`:
-- `Name = Locker Room Speaker`
+- `Name = AuxGoat` — **this does nothing on BlueZ 5.x and is kept only so the
+  file does not contradict reality.** Verified on the real Pi 2026-08-09:
+  changing it and restarting bluetoothd left the advertised name untouched,
+  with no `Alias` stored in `/var/lib/bluetooth/<adapter>/settings` to explain
+  it. BlueZ takes the adapter name from systemd's **pretty hostname**:
+
+      sudo hostnamectl set-hostname --pretty "AuxGoat"
+      sudo systemctl restart bluetooth      # required; it is not picked up live
+
+  That is the setting that actually renames the speaker, and it survives
+  reboots in `/etc/machine-info`. It must match `speaker_name` in
+  `/etc/lockerroom/config.toml`, which is a third separate setting — that one
+  is only the key the server files heartbeats under.
 - `Class = 0x200414` — this makes phones display it as a speaker rather than a generic device
 - `DiscoverableTimeout = 0` and `PairableTimeout = 0` — permanently visible, never times out
 

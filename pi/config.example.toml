@@ -2,7 +2,11 @@
 
 api_base_url = "https://locker-room-music.example.workers.dev"
 device_key = "REPLACE_ME"
-speaker_name = "Locker Room Speaker"
+# Reported to the server (the heartbeats key). Keep it the same as the
+# Bluetooth Name in /etc/bluetooth/main.conf — they are two different
+# settings that only look like one, and letting them drift means the site
+# names a speaker nobody can find in their Bluetooth list.
+speaker_name = "AuxGoat"
 # How often the outbox drains. This is how quickly a NEW song reaches the
 # site, so it is felt directly as "skips are late". Costs nothing when idle:
 # a drain pass with an empty outbox makes no network call at all.

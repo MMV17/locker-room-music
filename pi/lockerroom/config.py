@@ -24,7 +24,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
     return Config(
         api_base_url=raw["api_base_url"].rstrip("/"),
         device_key=raw["device_key"],
-        speaker_name=raw.get("speaker_name", "Locker Room Speaker"),
+        speaker_name=raw.get("speaker_name", "AuxGoat"),
         sync_interval_s=float(raw.get("sync_interval_s", 15)),
         db_path=Path(raw.get("db_path", "/var/lib/lockerroom/lockerroom.db")),
         log_path=Path(raw.get("log_path", "/var/log/lockerroom/listener.log")),

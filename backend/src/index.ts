@@ -227,7 +227,7 @@ const touchHeartbeat = (env: Env, speakerName: string) =>
  */
 app.post("/api/heartbeat", requireDeviceKey, async (c) => {
   const body = await c.req.json<{ speaker_name?: string }>().catch(() => ({}) as any);
-  await touchHeartbeat(c.env, body.speaker_name ?? "Locker Room Speaker");
+  await touchHeartbeat(c.env, body.speaker_name ?? "AuxGoat");
   return c.json({ ok: true });
 });
 
@@ -247,7 +247,7 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
     }>()
     .catch(() => ({}) as any);
 
-  await touchHeartbeat(c.env, body.speaker_name ?? "Locker Room Speaker");
+  await touchHeartbeat(c.env, body.speaker_name ?? "AuxGoat");
 
   // The song still on the speaker. This is what keeps the vote window open
   // through a pause: without it the window closes on wall-clock time, which

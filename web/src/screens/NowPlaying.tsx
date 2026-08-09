@@ -220,7 +220,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
 function NothingPlaying({ online }: { online: boolean }) {
   return online ? (
     <Empty title="Nothing playing">
-      Connect to <strong>Locker Room Speaker</strong> over Bluetooth to DJ.
+      Connect to <strong>AuxGoat</strong> over Bluetooth to DJ.
     </Empty>
   ) : (
     <Empty title="Speaker offline">Songs and votes resume when it reconnects.</Empty>
