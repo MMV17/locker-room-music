@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
+from .aux import AuxRouter  # noqa: F401  (re-exported for main.py)
 from .storage import Store
 
 log = logging.getLogger("lockerroom.lifecycle")
@@ -30,24 +31,26 @@ TRANSPORT_IDLE_GRACE = timedelta(seconds=5)
 # How long a phone keeps the aux after the music stops.
 #
 # A2DP is not exclusive. Two phones can be connected and streaming at the same
-# time, and the speaker mixes them - so "one song at a time" has to be enforced
-# by refusing the second phone, not assumed.
+# time and the speaker mixes them, so "one song at a time" has to be enforced
+# rather than assumed. It is enforced by routing (see aux.py), NOT by refusing
+# the connection: a newcomer connects normally and simply is not audible until
+# it is their turn.
 #
-# The hold itself lasts as long as there is an open play, which already covers
-# a track change (the old play closes and the new one opens inside one locked
+# The hold lasts as long as there is an open play, which already covers a
+# track change (the old play closes and the new one opens inside one locked
 # handler) and a pause (PAUSE_GRACE keeps the play open for 60s). This grace
 # covers the remaining gap: a phone that stops playback for a few seconds
-# between songs, which is precisely the moment a newcomer would grab the aux
-# out from under it.
+# between songs, which is precisely the moment a waiting phone would take the
+# aux out from under it.
 #
 # It is deliberately short. Every second here is a second the next DJ waits
 # after the previous one is genuinely done, and a phone left connected in
-# somebody's pocket must not hold the room hostage - past this, a new phone
-# takes over and the idle one is dropped.
+# somebody's pocket must not hold the room hostage - past this, whoever
+# presses play next gets it.
 AUX_GRACE = timedelta(seconds=45)
 # A hung D-Bus call must not hold the session lock, and therefore every
 # lifecycle event, indefinitely.
-DISCONNECT_TIMEOUT_S = 5.0
+PAUSE_COMMAND_TIMEOUT_S = 5.0
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -138,10 +141,27 @@ class Session:
     last_track: dict[str, Any] | None = None
 
 
+class NullAux:
+    """Routes nothing anywhere.
+
+    The default, so constructing a SessionManager can never reach out and
+    restart a system service as a side effect. main.py passes the real
+    AuxRouter deliberately; every test that does not care about routing gets
+    this and stays on the plain lifecycle behaviour.
+    """
+
+    async def route(self, mac: str | None) -> None:
+        return None
+
+
 class SessionManager:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, aux: Any | None = None):
         self._store = store
+        self._aux = aux if aux is not None else NullAux()
         self._sessions: dict[str, Session] = {}
+        # device_path of the phone the speaker is routed to. Whoever this is
+        # gets audio, and is the only session whose songs become plays.
+        self._aux_path: str | None = None
         # BluezWatcher fires every D-Bus PropertiesChanged into its own task,
         # so nothing serialises these handlers. They are not safe to interleave:
         # on_track_changed reads session.current_play, awaits, and only then
@@ -156,18 +176,18 @@ class SessionManager:
         # internal that assumes it is held. Internals must call each other, never
         # the public method, or they deadlock.
         self._lock = asyncio.Lock()
-        # Set by main.py to BluezWatcher.disconnect. Optional so the whole
-        # lifecycle stays testable without a D-Bus bus; see _drop.
-        self._disconnect: Callable[[str], Awaitable[None]] | None = None
+        # Set by main.py to BluezWatcher.pause. Optional so the whole lifecycle
+        # stays testable without a D-Bus bus; see _pause_politely.
+        self._pause: Callable[[str], Awaitable[None]] | None = None
 
-    def set_disconnect(self, disconnect: Callable[[str], Awaitable[None]]) -> None:
-        """Give the manager a way to hang up on a phone.
+    def set_pause(self, pause: Callable[[str], Awaitable[None]]) -> None:
+        """Give the manager a way to pause a phone that is not on the aux.
 
         Injected rather than imported because BluezWatcher takes this object in
         its constructor - wiring it the other way round is a cycle - and
         because it keeps every test in test_lifecycle.py free of D-Bus.
         """
-        self._disconnect = disconnect
+        self._pause = pause
 
     def open_play_state(self, at: datetime | None = None) -> dict[str, Any] | None:
         """The play currently on the speaker, for the beacon to report.
@@ -182,14 +202,19 @@ class SessionManager:
         rather than elapsed wall clock.
         """
         moment = at or now()
-        for session in self._sessions.values():
-            play = session.current_play
-            if play is not None and play.created and not play.closed:
-                return {
-                    "id": play.id,
-                    "status": play.status,
-                    "played_ms": play.played_ms_at(moment),
-                }
+        # The routed phone only. Several phones can be connected at once and
+        # only one of them is audible, so scanning them all would make this a
+        # coin toss between the song the room is hearing and one it is not.
+        session = self._sessions.get(self._aux_path or "")
+        if session is None:
+            return None
+        play = session.current_play
+        if play is not None and play.created and not play.closed:
+            return {
+                "id": play.id,
+                "status": play.status,
+                "played_ms": play.played_ms_at(moment),
+            }
         return None
 
     # -- BluezWatcher.LifecycleSink protocol --------------------------------
@@ -197,35 +222,12 @@ class SessionManager:
     async def on_device_connected(self, device_path: str, mac: str, alias: str) -> None:
         async with self._lock:
             if device_path in self._sessions:
-                # Same phone, already on the aux. BlueZ re-announces devices on
-                # a listener restart, and iOS reconnects on its own after a
-                # lock screen; neither is a newcomer.
+                # BlueZ re-announces devices on a listener restart, and iOS
+                # reconnects on its own after a lock screen. Neither is a
+                # newcomer, and neither should disturb who holds the aux.
                 return
 
             moment = now()
-            holder = self._holder(moment)
-            if holder is not None:
-                # Somebody is on the aux. Refuse this one BEFORE it gets a
-                # session: a session is what turns AVRCP metadata into a play,
-                # and if the disconnect below fails for any reason, the wrong
-                # answer is two songs recorded on top of each other.
-                log.info(
-                    "aux is taken by %s (%s); dropping %s (%s)",
-                    holder.alias, holder.mac, alias, mac,
-                )
-                await self._drop(device_path, "aux already held")
-                return
-
-            # Nobody holds it, so anything still connected is idle past the
-            # grace - a phone left in a pocket. Hang up on it, or it keeps
-            # streaming over whatever the new DJ plays.
-            for stale_path, stale in list(self._sessions.items()):
-                self._sessions.pop(stale_path, None)
-                if stale.current_play is not None:
-                    await self._close_play(stale, stale.current_play, reason="aux_taken_over")
-                log.info("aux taken over from idle %s (%s)", stale.alias, stale.mac)
-                await self._drop(stale_path, "idle, aux taken over")
-
             self._sessions[device_path] = Session(
                 device_path=device_path,
                 mac=mac,
@@ -235,32 +237,73 @@ class SessionManager:
             )
             log.info("session open: %s (%s)", alias, mac)
 
+            # Connecting is always allowed - a connection that dies with no
+            # reason given is the worst possible way to say "wait your turn".
+            # It just does not necessarily come with the speaker attached.
+            if self._holder(moment) is None:
+                await self._grant(self._sessions[device_path])
+            else:
+                log.info("%s is waiting for the aux", alias)
+
     def _holder(self, at: datetime) -> Session | None:
-        """The session that currently owns the aux, if any."""
-        for session in self._sessions.values():
-            play = session.current_play
-            if play is not None and not play.closed:
-                return session
-            if at - session.last_active_at < AUX_GRACE:
-                return session
+        """The session entitled to the speaker right now, if any.
+
+        A phone keeps it while a song is open and for AUX_GRACE after the last
+        thing it did. The grace is what stops a waiting phone snatching the
+        aux in the gap between two songs.
+        """
+        if self._aux_path is None:
+            return None
+        session = self._sessions.get(self._aux_path)
+        if session is None:
+            return None
+        play = session.current_play
+        if play is not None and not play.closed:
+            return session
+        if at - session.last_active_at < AUX_GRACE:
+            return session
         return None
 
-    async def _drop(self, device_path: str, why: str) -> None:
-        if self._disconnect is None:
-            log.warning(
-                "no way to disconnect %s (%s) - two phones are connected at "
-                "once and their audio will mix",
-                device_path, why,
-            )
+    async def _grant(self, session: Session) -> None:
+        """Point the speaker at one phone."""
+        self._aux_path = session.device_path
+        log.info("aux granted to %s (%s)", session.alias, session.mac)
+        await self._aux.route(session.mac)
+
+    async def _may_use_aux(self, session: Session, at: datetime) -> bool:
+        """Whether this phone's audio is reaching the room.
+
+        Also the gate on recording: a song nobody could hear did not play to
+        the room, and putting it on the leaderboard would be a lie.
+        """
+        holder = self._holder(at)
+        if holder is session:
+            return True
+        if holder is None:
+            # Free, so playing is how you claim it. Nobody has to disconnect
+            # and the waiting phone does not have to do anything but press
+            # play.
+            await self._grant(session)
+            return True
+        return False
+
+    async def _pause_politely(self, session: Session) -> None:
+        """Pause a phone that is playing into a speaker it is not routed to.
+
+        Without this their phone streams a whole playlist into nothing and the
+        only feedback they get is silence. Best effort: some players do not
+        implement AVRCP pause, and a phone we cannot pause is a minor
+        annoyance rather than a reason to fail anything.
+        """
+        if self._pause is None:
             return
         try:
             await asyncio.wait_for(
-                self._disconnect(device_path), timeout=DISCONNECT_TIMEOUT_S
+                self._pause(session.device_path), timeout=PAUSE_COMMAND_TIMEOUT_S
             )
+            log.info("paused %s, which is not on the aux", session.alias)
         except Exception:
-            # A phone we cannot hang up on is a bad afternoon, not a reason to
-            # take the listener down with it.
-            log.exception("could not disconnect %s (%s)", device_path, why)
+            log.warning("could not pause %s", session.alias, exc_info=True)
 
     async def on_device_disconnected(self, device_path: str) -> None:
         async with self._lock:
@@ -270,6 +313,19 @@ class SessionManager:
             if session.current_play is not None:
                 await self._close_play(session, session.current_play, reason="disconnect")
             log.info("session closed: %s (%s)", session.alias, session.mac)
+
+            if self._aux_path != device_path:
+                return
+            self._aux_path = None
+            # Hand it straight to whoever has been waiting longest rather than
+            # leaving the speaker unrouted. Re-pointing it costs a service
+            # restart, and doing that lazily would eat the first second of
+            # their first song.
+            waiting = sorted(self._sessions.values(), key=lambda s: s.connected_at)
+            if waiting:
+                await self._grant(waiting[0])
+            else:
+                await self._aux.route(None)
 
     async def on_track_changed(
         self,
@@ -310,6 +366,18 @@ class SessionManager:
         new_key = track_key(title, artist)
         current = session.current_play
         moment = now()
+
+        # Somebody else is audible. Remember the metadata - it is what lets
+        # this phone start recording the moment it does get the aux - but do
+        # not open a play for a song the room cannot hear.
+        if not await self._may_use_aux(session, moment):
+            log.info(
+                "not recording %s - %s: %s is not on the aux",
+                artist or "?", title or "?", session.alias,
+            )
+            await self._pause_politely(session)
+            return
+
         # Real metadata from this phone means it is using the aux, even if the
         # re-emit check below decides it is not a new play.
         session.last_active_at = moment
@@ -374,9 +442,17 @@ class SessionManager:
         session = self._sessions.get(device_path)
         if session is None:
             return
+
+        moment_now = now()
+        if status == "playing" and not await self._may_use_aux(session, moment_now):
+            # They pressed play on a speaker that is not listening to them.
+            log.info("%s pressed play but is not on the aux", session.alias)
+            await self._pause_politely(session)
+            return
+
         # Any AVRCP status at all is this phone using the aux, including the
         # "stopped" that ends a song - that is what starts AUX_GRACE running.
-        session.last_active_at = now()
+        session.last_active_at = moment_now
 
         if session.current_play is None:
             # Playback restarting after a stop. The phone will not re-send

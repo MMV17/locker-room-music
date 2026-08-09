@@ -443,67 +443,94 @@ async def test_disconnect_closes_open_play():
     assert len(store.closed()) == 1
 
 
+
 # -- one phone on the aux ----------------------------------------------------
 #
-# A2DP is not exclusive: two phones can be connected and streaming at once, and
-# the speaker cheerfully mixes them. So "only one song at a time" has to be
-# enforced here, by refusing the second phone rather than by hoping.
+# A2DP is not exclusive. Two phones can be connected and streaming at once and
+# the speaker mixes them, so "one song at a time" has to be enforced rather
+# than hoped for.
+#
+# It is NOT enforced by refusing the connection. A newcomer connects normally
+# and simply is not routed to the speaker: a phone that connects and waits its
+# turn is a far kinder failure than one whose connection dies with no reason
+# given, and being connected is what lets the site say whose turn it is.
+
+
+class FakeAux:
+    """Records who the speaker is routed to, in order."""
+
+    def __init__(self):
+        self.routed: list[str | None] = []
+
+    async def route(self, mac: str | None) -> None:
+        await asyncio.sleep(0)
+        if not self.routed or self.routed[-1] != mac:
+            self.routed.append(mac)
+
+    @property
+    def current(self) -> str | None:
+        return self.routed[-1] if self.routed else None
 
 
 class FakeBluez:
-    """Records the disconnects the SessionManager asks BlueZ to perform."""
+    """Records the AVRCP pauses sent to phones that are not on the aux."""
 
     def __init__(self):
-        self.disconnected: list[str] = []
+        self.paused: list[str] = []
 
-    async def disconnect(self, device_path: str) -> None:
+    async def pause(self, device_path: str) -> None:
         await asyncio.sleep(0)
-        self.disconnected.append(device_path)
+        self.paused.append(device_path)
 
 
+MAC = "5C:AD:BA:F0:B2:61"
 OTHER = "/org/bluez/hci0/dev_A1_B2_C3_D4_E5_F6"
+OTHER_MAC = "A1:B2:C3:D4:E5:F6"
 
 
-def manager(store, bluez):
-    mgr = SessionManager(store)
-    mgr.set_disconnect(bluez.disconnect)
+def manager(store, aux=None, bluez=None):
+    mgr = SessionManager(store, aux=aux or FakeAux())
+    if bluez is not None:
+        mgr.set_pause(bluez.pause)
     return mgr
 
 
 async def connect_other(mgr):
-    await mgr.on_device_connected(OTHER, "A1:B2:C3:D4:E5:F6", "Ty's Pixel")
+    await mgr.on_device_connected(OTHER, OTHER_MAC, "Ty's Pixel")
 
 
 @pytest.mark.asyncio
-async def test_first_phone_is_never_refused():
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
+async def test_the_first_phone_gets_the_aux_when_it_connects():
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
 
     await connect(mgr)
 
-    assert bluez.disconnected == []
+    assert aux.current == MAC
 
 
 @pytest.mark.asyncio
-async def test_second_phone_is_dropped_while_a_song_is_playing():
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
+async def test_a_newcomer_connects_fine_but_is_not_routed():
+    """The whole point of the redesign: they get in, they just get no audio."""
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
     await connect(mgr)
     await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
     await settle()
 
     await connect_other(mgr)
 
-    assert bluez.disconnected == [OTHER]
+    assert OTHER in mgr._sessions       # connected, not turned away
+    assert aux.current == MAC           # and still not the one being heard
 
 
 @pytest.mark.asyncio
-async def test_a_dropped_phone_cannot_record_a_play():
-    """Refusing the connection is only half of it. If the interloper still got
-    a session, its metadata would open a second play and /api/now would show
-    whichever of the two happened to be found first."""
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
+async def test_a_newcomer_playing_records_no_play():
+    """A phone nobody can hear did not play a song to the room. Recording it
+    would put a song on the leaderboard that was never audible."""
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    store = mgr._store
     await connect(mgr)
     await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
     await settle()
@@ -516,125 +543,169 @@ async def test_a_dropped_phone_cannot_record_a_play():
 
 
 @pytest.mark.asyncio
-async def test_second_phone_cannot_snag_the_aux_between_songs():
-    """The gap where a song has ended and the next has not started is exactly
-    the moment a newcomer would grab the aux. The hold outlives the song."""
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
+async def test_a_newcomer_who_presses_play_is_paused_on_their_own_phone():
+    """Otherwise their phone streams a whole playlist into a void and they get
+    no signal at all that it is not coming out."""
+    bluez = FakeBluez()
+    mgr = manager(FakeStore(), bluez=bluez)
     await connect(mgr)
     await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
     await settle()
+
+    await connect_other(mgr)
+    await mgr.on_status_changed(OTHER, "playing")
+
+    assert bluez.paused == [OTHER]
+
+
+@pytest.mark.asyncio
+async def test_the_phone_on_the_aux_is_never_paused():
+    bluez = FakeBluez()
+    mgr = manager(FakeStore(), bluez=bluez)
+    await connect(mgr)
+
+    await mgr.on_status_changed(DEV, "playing")
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+
+    assert bluez.paused == []
+
+
+@pytest.mark.asyncio
+async def test_the_holder_keeps_the_aux_between_songs():
+    """The gap after a song ends is exactly when a waiting phone would grab
+    it. AUX_GRACE outlives the song for that reason."""
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    await connect(mgr)
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await connect_other(mgr)
     await mgr.on_status_changed(DEV, "stopped")  # song over, nothing open
 
-    await connect_other(mgr)
-
-    assert bluez.disconnected == [OTHER]
-
-
-@pytest.mark.asyncio
-async def test_a_new_phone_takes_over_once_the_grace_has_passed(monkeypatch):
-    """Otherwise a player who walks out with their phone still connected holds
-    the aux hostage until they are out of Bluetooth range."""
-    from datetime import timedelta
-    monkeypatch.setattr(lifecycle_mod, "AUX_GRACE", timedelta(seconds=0.05))
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
-    await connect(mgr)
-    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
-    await settle()
-    await mgr.on_status_changed(DEV, "stopped")
-    await asyncio.sleep(0.06)
-
-    await connect_other(mgr)
     await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
     await settle()
 
-    # The idle incumbent is dropped, not the newcomer, and the newcomer plays.
-    assert bluez.disconnected == [DEV]
-    assert [r["payload"]["title"] for r in store.opened()] == ["Decode", "Chun-Li"]
-
-
-@pytest.mark.asyncio
-async def test_the_aux_is_free_the_moment_the_holder_disconnects():
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
-    await connect(mgr)
-    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
-    await settle()
-    await mgr.on_device_disconnected(DEV)
-
-    await connect_other(mgr)
-    await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
-    await settle()
-
-    assert bluez.disconnected == []
-    assert [r["payload"]["title"] for r in store.opened()] == ["Decode", "Chun-Li"]
-
-
-@pytest.mark.asyncio
-async def test_the_holder_reconnecting_is_not_dropped():
-    """A phone that drops and comes straight back is the same DJ, not a
-    newcomer. iOS does this on its own after a lock screen."""
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
-    await connect(mgr)
-    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
-    await settle()
-
-    await connect(mgr)  # same path, still connected as far as BlueZ told us
-
-    assert bluez.disconnected == []
+    assert aux.current == MAC
 
 
 @pytest.mark.asyncio
 async def test_a_paused_song_still_holds_the_aux():
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
     await connect(mgr)
     await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
     await settle()
+    await connect_other(mgr)
     await mgr.on_status_changed(DEV, "paused")
 
-    await connect_other(mgr)
+    await mgr.on_status_changed(OTHER, "playing")
 
-    assert bluez.disconnected == [OTHER]
+    assert aux.current == MAC
 
 
 @pytest.mark.asyncio
-async def test_a_takeover_leaves_no_play_open(monkeypatch):
-    """An evicted session must never keep a play open: it would stay open in
-    D1 forever and /api/now would go on showing a song nobody is playing.
+async def test_a_waiting_phone_takes_the_aux_by_playing_once_the_grace_passes(monkeypatch):
+    """The handoff. Nobody has to disconnect, and the waiting phone does not
+    need to do anything except press play."""
+    from datetime import timedelta
+    monkeypatch.setattr(lifecycle_mod, "AUX_GRACE", timedelta(seconds=0.05))
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    store = mgr._store
+    await connect(mgr)
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await connect_other(mgr)
+    await mgr.on_status_changed(DEV, "stopped")
+    await asyncio.sleep(0.06)
 
-    The hold rule already makes an eviction-with-a-live-play unreachable - an
-    open play always holds the aux - so this reaches past it to pin the
-    defensive close that keeps it true if that rule ever changes."""
-    monkeypatch.setattr(SessionManager, "_holder", lambda self, at: None)
-    store, bluez = FakeStore(), FakeBluez()
-    mgr = manager(store, bluez)
+    await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
+    await settle()
+
+    assert aux.current == OTHER_MAC
+    assert [r["payload"]["title"] for r in store.opened()] == ["Decode", "Chun-Li"]
+
+
+@pytest.mark.asyncio
+async def test_the_aux_passes_to_a_waiting_phone_when_the_holder_disconnects():
+    """Handed straight over rather than left unrouted, so the next song starts
+    at its first note instead of losing a second while the player restarts."""
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    await connect(mgr)
+    await connect_other(mgr)
+
+    await mgr.on_device_disconnected(DEV)
+
+    assert aux.current == OTHER_MAC
+
+
+@pytest.mark.asyncio
+async def test_the_last_phone_leaving_routes_nobody():
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    await connect(mgr)
+
+    await mgr.on_device_disconnected(DEV)
+
+    assert aux.current is None
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_phone_is_not_routed_just_for_connecting_first():
+    """Two phones connect before anyone plays. The one that connected first
+    holds it, so the second pressing play must not steal it."""
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    await connect(mgr)
+    await connect_other(mgr)
+
+    await mgr.on_status_changed(OTHER, "playing")
+
+    assert aux.current == MAC
+
+
+@pytest.mark.asyncio
+async def test_the_holder_reconnecting_keeps_the_aux():
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
     await connect(mgr)
     await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
     await settle()
 
-    await connect_other(mgr)
+    await connect(mgr)  # BlueZ re-announcing the same device
 
-    assert bluez.disconnected == [DEV]
-    assert len(store.closed()) == 1
-    assert mgr.open_play_state() is None
+    assert aux.current == MAC
 
 
 @pytest.mark.asyncio
-async def test_with_no_way_to_disconnect_the_interloper_still_gets_no_session():
-    """`set_disconnect` is never called in the unit tests above this block, and
-    would not be called if wiring regressed. Failing open to two mixed audio
-    streams AND two recorded plays would be the worst of both."""
-    store = FakeStore()
-    mgr = SessionManager(store)
+async def test_only_the_routed_phone_appears_as_the_open_play():
+    """/api/now reads this. With two phones connected it must never be a coin
+    toss which one the room is told it is hearing."""
+    mgr = manager(FakeStore())
     await connect(mgr)
     await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
     await settle()
-
     await connect_other(mgr)
     await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
     await settle()
 
-    assert [r["payload"]["title"] for r in store.opened()] == ["Decode"]
+    state = mgr.open_play_state()
+    assert state is not None
+    assert state["id"] == mgr._sessions[DEV].current_play.id
+
+
+@pytest.mark.asyncio
+async def test_the_lifecycle_runs_without_any_aux_wiring_at_all():
+    """Every test above this block constructs SessionManager(store) bare. If
+    the aux router ever becomes required, they all break at once — and so does
+    anything that constructs one without it."""
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+
+    assert len(store.opened()) == 1

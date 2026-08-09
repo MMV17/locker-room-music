@@ -12,5 +12,17 @@ ExecStart=/opt/lockerroom/venv/bin/python -m lockerroom.main
 Restart=always
 RestartSec=3
 
+# The safety net for aux routing.
+#
+# This service decides which phone bluealsa-aplay is allowed to play (see
+# aux.py). If it dies while the speaker is narrowed to one phone, that
+# narrowing would outlive it — and if that phone has gone home, the room is
+# silent with no obvious cause. Clearing the file on the way out puts
+# bluealsa-aplay back to playing anything, which is imperfect but audible.
+#
+# --no-block matters: a stopping unit that waits on a systemd job it just
+# queued can deadlock the transaction.
+ExecStopPost=/bin/sh -c 'rm -f /run/lockerroom/aux.env; systemctl --no-block restart bluealsa-aplay'
+
 [Install]
 WantedBy=multi-user.target

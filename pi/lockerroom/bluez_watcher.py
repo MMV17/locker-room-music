@@ -77,17 +77,34 @@ class BluezWatcher:
         om_iface.on_interfaces_removed(self._on_interfaces_removed)
         log.info("bluez watcher started, tracking %d existing device(s)", len(self._device_paths))
 
-    async def disconnect(self, device_path: str) -> None:
-        """Hang up on a phone.
+    async def pause(self, device_path: str) -> None:
+        """Pause a phone over AVRCP.
 
-        Wired into SessionManager.set_disconnect so it can keep one phone on
-        the aux: A2DP is not exclusive, and two connected phones stream into
-        the same speaker at once. Raises on failure - the caller decides what a
-        failed hang-up means.
+        Wired into SessionManager.set_pause, for a phone that is connected but
+        not routed to the speaker: without it their music runs through a whole
+        playlist into nothing, and silence is the only feedback they get.
+
+        This is a courtesy, not the enforcement — the audio is already going
+        nowhere (see aux.py). Raises on failure; the caller treats a phone it
+        cannot pause as an annoyance rather than an error.
         """
-        proxy = await self._get_proxy(device_path)
-        await proxy.get_interface(DEVICE_IFACE).call_disconnect()
-        log.info("disconnected %s", device_path)
+        player = self._player_for(device_path)
+        if player is None:
+            raise RuntimeError(f"no MediaPlayer1 for {device_path}")
+        await player.call_pause()
+        log.info("paused %s over AVRCP", device_path)
+
+    def _player_for(self, device_path: str):
+        """The MediaPlayer1 interface belonging to a device, if it has one.
+
+        Players live at sub-paths of their device (dev_AA_BB/player0) and are
+        cached by path in _players, so this walks the ownership map rather
+        than guessing the child path.
+        """
+        for player_path, owner in self._owner.items():
+            if owner == device_path and player_path in self._players:
+                return self._players[player_path]
+        return None
 
     async def _get_proxy(self, path: str) -> ProxyObject:
         assert self._bus is not None

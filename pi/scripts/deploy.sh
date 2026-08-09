@@ -31,6 +31,7 @@ echo "Deploying to ${PI_HOST}..."
 scp -q -r "${REPO_ROOT}/pi/lockerroom" "${PI_HOST}:/tmp/lockerroom_pkg"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-listener.service" "${PI_HOST}:/tmp/lockerroom-listener.service"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-netwatch.service" "${PI_HOST}:/tmp/lockerroom-netwatch.service"
+scp -q "${REPO_ROOT}/pi/systemd/bluealsa-aplay-aux.conf" "${PI_HOST}:/tmp/bluealsa-aplay-aux.conf"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -39,7 +40,13 @@ sudo mv /tmp/lockerroom_pkg /opt/lockerroom/lockerroom
 sudo find /opt/lockerroom/lockerroom -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 sudo mv /tmp/lockerroom-listener.service /etc/systemd/system/lockerroom-listener.service
 sudo mv /tmp/lockerroom-netwatch.service /etc/systemd/system/lockerroom-netwatch.service
+# Teaches bluealsa-aplay to play one phone instead of mixing every connected
+# one. Restarted below so a changed drop-in actually takes effect; the listener
+# re-points it within a second of the next connection either way.
+sudo mkdir -p /etc/systemd/system/bluealsa-aplay.service.d
+sudo mv /tmp/bluealsa-aplay-aux.conf /etc/systemd/system/bluealsa-aplay.service.d/aux.conf
 sudo systemctl daemon-reload
+sudo systemctl restart bluealsa-aplay
 sudo systemctl restart lockerroom-listener
 # `enable` so it survives an unattended reboot, which is exactly when nobody is
 # here to start it — and `restart` SEPARATELY, which is the part that matters.
