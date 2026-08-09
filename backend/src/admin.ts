@@ -54,9 +54,14 @@ const identityKey = (first: string, last: string, jersey: string | null) =>
   `${normalize(first)}|${normalize(last)}|${normalize(jersey ?? "")}`;
 
 admin.get("/api/admin/users", async (c) => {
+  // The play and vote counts are not decoration: deleting a player is
+  // irreversible, and the confirm has to be able to say what is about to
+  // happen to their history rather than asking for a blind yes.
   const { results } = await c.env.DB.prepare(
-    `SELECT *, TRIM(first_name || ' ' || last_name) AS name
-       FROM users ORDER BY last_name, first_name`,
+    `SELECT u.*, TRIM(u.first_name || ' ' || u.last_name) AS name,
+            (SELECT COUNT(*) FROM plays p WHERE p.user_id = u.id) AS plays,
+            (SELECT COUNT(*) FROM votes v WHERE v.user_id = u.id) AS votes
+       FROM users u ORDER BY u.last_name, u.first_name`,
   ).all();
   return c.json({ users: results });
 });
@@ -134,6 +139,50 @@ admin.patch("/api/admin/users/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * Delete a player outright.
+ *
+ * Deactivating is still the right tool for someone who left the team — it
+ * keeps their record and their name on the leaderboard. This is for the rows
+ * that should never have existed: a typo, a duplicate, a test signup. Players
+ * sign themselves up with nothing but the team code, so those accumulate.
+ *
+ * The songs survive. A play is a thing that happened in the room, and it stays
+ * on record; it just loses its DJ and reads as "Unclaimed", exactly as it did
+ * before anyone claimed the phone. Their phones go back to unclaimed too, so
+ * whoever actually owns one can claim it.
+ *
+ * Their VOTES are deleted rather than voided, and that is forced: votes.user_id
+ * is NOT NULL and references users(id), so a voided row would be left pointing
+ * at a player who no longer exists. The visible effect is identical either way
+ * — those votes stop counting toward every tally.
+ *
+ * Ordering is deliberate. Children first, parent last, so this is correct
+ * whether or not foreign keys are being enforced. D1 runs a batch as one
+ * transaction, so a player is never half-deleted.
+ */
+admin.delete("/api/admin/users/:id", async (c) => {
+  const id = c.req.param("id");
+  const user = await c.env.DB.prepare("SELECT id FROM users WHERE id = ?")
+    .bind(id)
+    .first<{ id: string }>();
+  if (!user) return c.json({ error: "Unknown player" }, 404);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM votes WHERE user_id = ?").bind(id),
+    c.env.DB.prepare("UPDATE plays SET user_id = NULL WHERE user_id = ?").bind(id),
+    c.env.DB.prepare(
+      "UPDATE devices SET user_id = NULL, claimed_at = NULL WHERE user_id = ?",
+    ).bind(id),
+    // Signs them out everywhere. Without this their phone keeps a valid
+    // session cookie pointing at a user row that is gone, and every request
+    // it makes 401s in a way that looks like a bug rather than a deletion.
+    c.env.DB.prepare("DELETE FROM device_tokens WHERE user_id = ?").bind(id),
+    c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id),
+  ]);
+  return c.json({ ok: true });
+});
+
 /* Devices and plays.
    The public /api/devices/unclaimed only lists orphans, and /api/history hides
    anything still inside its vote window - neither is a basis for the two
@@ -176,6 +225,33 @@ admin.post("/api/admin/devices/:hash/unclaim", async (c) => {
     .bind(c.req.param("hash"))
     .run();
   if (!r.meta.changes) return c.json({ error: "Unknown device" }, 404);
+  return c.json({ ok: true });
+});
+
+/**
+ * Delete a phone.
+ *
+ * For clearing out rows that are noise — a visitor's phone, a laptop that
+ * paired once, a duplicate from before a MAC_SALT change. The songs it played
+ * stay in history, but they lose the phone they came from, which means an
+ * unclaimed one can never be claimed afterwards: claiming works by picking
+ * your phone off the list, and there is nothing else tying a play to a person.
+ * The UI says so before asking.
+ *
+ * This is not a way to stop a phone being tracked. The Pi re-creates the row
+ * from its MAC hash the next time that phone plays anything.
+ */
+admin.delete("/api/admin/devices/:hash", async (c) => {
+  const hash = c.req.param("hash");
+  const device = await c.env.DB.prepare("SELECT mac_hash FROM devices WHERE mac_hash = ?")
+    .bind(hash)
+    .first<{ mac_hash: string }>();
+  if (!device) return c.json({ error: "Unknown device" }, 404);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE plays SET device_hash = NULL WHERE device_hash = ?").bind(hash),
+    c.env.DB.prepare("DELETE FROM devices WHERE mac_hash = ?").bind(hash),
+  ]);
   return c.json({ ok: true });
 });
 

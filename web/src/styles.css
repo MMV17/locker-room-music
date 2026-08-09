@@ -940,6 +940,13 @@ input {
   padding: 8px;
 }
 
+/* Void and Delete. The admin rows already asked for this class; without the
+   rule they rendered in the same grey as Restore, so the destructive action
+   and the harmless one looked identical right up until the confirm. */
+.btn-quiet.is-danger {
+  color: var(--down);
+}
+
 .field {
   display: block;
   width: 100%;

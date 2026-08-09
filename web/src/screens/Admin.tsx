@@ -23,6 +23,11 @@ interface AdminUser {
   first_name: string;
   last_name: string;
   active: number;
+  // Only used to tell the coach what deleting this person costs. Deleting is
+  // irreversible, so the confirm has to name the damage rather than ask for a
+  // blind yes.
+  plays: number;
+  votes: number;
 }
 
 interface PiCommand {
@@ -294,6 +299,27 @@ function Roster({ call }: { call: Call }) {
     load();
   };
 
+  // Deactivate is still the right tool for someone who left the team — it
+  // keeps their record and their name on the leaderboard. This is for the rows
+  // that should never have existed: a typo, a duplicate, a test signup. Since
+  // players sign themselves up with nothing but the team code, those pile up.
+  const remove = async (u: AdminUser) => {
+    const kept = u.plays
+      ? `Their ${u.plays} ${u.plays === 1 ? "song stays" : "songs stay"} in history as Unclaimed`
+      : "They have no songs in history";
+    const lost = u.votes
+      ? `, and their ${u.votes} ${u.votes === 1 ? "vote stops" : "votes stop"} counting`
+      : "";
+    if (!window.confirm(`Delete ${u.name}? ${kept}${lost}. This cannot be undone.`)) return;
+    setError(null);
+    try {
+      await call(`/api/admin/users/${u.id}`, { method: "DELETE" });
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not delete that player");
+    }
+  };
+
   return (
     <Section title="Roster">
       {error && <div className="banner is-bad">{error}</div>}
@@ -343,9 +369,17 @@ function Roster({ call }: { call: Call }) {
                 </span>
                 <span className="row-sub">#{u.jersey_number ?? "—"}</span>
               </span>
-              <button className="btn-quiet" onClick={() => toggle(u)}>
-                {u.active ? "Deactivate" : "Restore"}
-              </button>
+              {/* Grouped so the row's 14px gap falls once, before the pair,
+                  rather than between two already-padded buttons — the name
+                  needs that width back on a phone. */}
+              <span style={{ display: "flex", flexShrink: 0 }}>
+                <button className="btn-quiet" onClick={() => toggle(u)}>
+                  {u.active ? "Deactivate" : "Restore"}
+                </button>
+                <button className="btn-quiet is-danger" onClick={() => remove(u)}>
+                  Delete
+                </button>
+              </span>
             </div>
           ))}
         </div>
@@ -356,6 +390,7 @@ function Roster({ call }: { call: Call }) {
 
 function Devices({ call }: { call: Call }) {
   const [devices, setDevices] = useState<AdminDevice[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     call<{ devices: AdminDevice[] }>("/api/admin/devices")
@@ -370,10 +405,36 @@ function Devices({ call }: { call: Call }) {
     load();
   };
 
+  // For clearing out noise: a visitor's phone, a laptop that paired once. The
+  // songs stay, but they lose the phone they came from — and an unclaimed song
+  // can then never be claimed, because picking your phone off the list is the
+  // only thing tying a play to a person. Worth saying out loud in the confirm.
+  const remove = async (d: AdminDevice) => {
+    const name = d.alias ?? "this phone";
+    const cost = d.plays
+      ? d.owner_name
+        ? `Its ${d.plays} ${d.plays === 1 ? "song stays" : "songs stay"} on record with ${d.owner_name}.`
+        : `Its ${d.plays} unclaimed ${d.plays === 1 ? "song stays" : "songs stay"} on record, and nobody will be able to claim ${d.plays === 1 ? "it" : "them"} afterwards.`
+      : "It has played nothing.";
+    if (!window.confirm(`Delete ${name}? ${cost} It comes back if that phone plays again.`)) {
+      return;
+    }
+    setError(null);
+    try {
+      await call(`/api/admin/devices/${d.mac_hash}`, { method: "DELETE" });
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not delete that phone");
+    }
+  };
+
   return (
     <Section title="Phones">
+      {error && <div className="banner is-bad">{error}</div>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
-        Un-claiming leaves the songs on record but removes DJ credit for them.
+        Un-claiming leaves the songs on record but removes DJ credit for them. Deleting
+        removes the phone itself — the songs stay, and the phone reappears the next time
+        it plays.
       </p>
       {!devices ? (
         <Spinner />
@@ -390,11 +451,16 @@ function Devices({ call }: { call: Call }) {
                   {d.owner_name ?? "unclaimed"}
                 </span>
               </span>
-              {d.owner_name && (
-                <button className="btn-quiet" onClick={() => unclaim(d)}>
-                  Un-claim
+              <span style={{ display: "flex", flexShrink: 0 }}>
+                {d.owner_name && (
+                  <button className="btn-quiet" onClick={() => unclaim(d)}>
+                    Un-claim
+                  </button>
+                )}
+                <button className="btn-quiet is-danger" onClick={() => remove(d)}>
+                  Delete
                 </button>
-              )}
+              </span>
             </div>
           ))}
         </div>

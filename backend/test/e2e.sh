@@ -358,6 +358,107 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/pi/comman
   -d '{"command":"report-status"}')
 [ "$code" = "200" ] && ok "a dispatched reboot does not wedge the queue" || bad "reboot wedge" "got $code"
 
+echo "== deleting a player =="
+# Deactivating keeps someone's record; deleting is for the rows that should
+# never have existed (typos, duplicates, test signups). The rule being pinned
+# here is that the SONGS survive it: a play is a thing that happened in the
+# room, and it stays on record having lost only its DJ.
+DJAR="$(mktemp)"
+DOOM_LAST="Doomed$SUFFIX"
+DOOM=$(curl -s -c "$DJAR" -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Temp\",\"last_name\":\"$DOOM_LAST\"}")
+DOOM_ID=$(echo "$DOOM" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+
+# A song they DJ'd, on a phone of their own.
+DOOM_PLAY=$(gen_id)
+DOOM_MAC="$MAC_PREFIX:$(printf '%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)))"
+curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"play_id\":\"$DOOM_PLAY\",\"device_mac\":\"$DOOM_MAC\",\"device_alias\":\"TempPhone$SUFFIX\",\"title\":\"Sabotage\",\"artist\":\"Beastie Boys\",\"duration_ms\":178000,\"started_at\":\"$STARTED\"}" > /dev/null
+# Found by its unique alias rather than by asking /api/now, which picks the
+# latest play — several fixtures here share a started_at, so which one that is
+# would be a coin toss.
+DOOM_HASH=$(curl -s -b "$DJAR" "$BASE/api/devices/unclaimed" \
+  | tr '{' '\n' | grep "TempPhone$SUFFIX" \
+  | sed -n 's/.*"mac_hash":"\([^"]*\)".*/\1/p')
+[ -n "$DOOM_HASH" ] || bad "delete fixture: found the phone" "no mac_hash for TempPhone$SUFFIX"
+curl -s -b "$DJAR" -X POST "$BASE/api/devices/$DOOM_HASH/claim" > /dev/null
+
+# A vote they cast on somebody else's song, closed so the tally is readable.
+VPLAY=$(gen_id)
+curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"play_id\":\"$VPLAY\",\"device_mac\":\"$DEVICE_MAC\",\"title\":\"Bulls On Parade\",\"artist\":\"Rage Against The Machine\",\"duration_ms\":230000,\"started_at\":\"$STARTED\"}" > /dev/null
+curl -s -b "$DJAR" -X POST "$BASE/api/votes" -H 'content-type: application/json' \
+  -d "{\"play_id\":\"$VPLAY\",\"value\":1}" > /dev/null
+curl -s -X PATCH "$BASE/api/plays/$VPLAY" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"ended_at\":\"$ENDED\",\"played_ms\":200000,\"counted\":true}" > /dev/null
+curl -s -b "$JAR" "$BASE/api/plays/$VPLAY/results" | grep -q '"upvotes":1' \
+  && ok "fixture vote is counted before the delete" \
+  || bad "fixture vote" "$(curl -s -b "$JAR" "$BASE/api/plays/$VPLAY/results")"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/admin/users/$DOOM_ID")
+[ "$code" = "401" ] && ok "deleting a player needs the admin password" || bad "delete auth" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/admin/users/nope" \
+  -H "X-Admin-Password: $ADMIN_PW")
+[ "$code" = "404" ] && ok "deleting an unknown player is 404" || bad "delete unknown player" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/admin/users/$DOOM_ID" \
+  -H "X-Admin-Password: $ADMIN_PW")
+[ "$code" = "200" ] && ok "player deleted" || bad "delete player" "got $code"
+
+USERS=$(curl -s "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW")
+echo "$USERS" | grep -q "$DOOM_ID" \
+  && bad "player is gone from the roster" "still listed" \
+  || ok "player is gone from the roster"
+
+# The whole point: the song stays, and reads as unclaimed rather than vanishing.
+APLAYS=$(curl -s "$BASE/api/admin/plays" -H "X-Admin-Password: $ADMIN_PW")
+echo "$APLAYS" | grep -q "$DOOM_PLAY" \
+  && ok "their song is still on record" || bad "song survives delete" "$DOOM_PLAY missing"
+echo "$APLAYS" | grep -q "\"id\":\"$DOOM_PLAY\"[^}]*\"dj_name\":null" \
+  && ok "the song lost its DJ rather than its row" \
+  || bad "song is unclaimed after delete" "$APLAYS"
+
+# Votes are DELETED, not voided: votes.user_id is NOT NULL and references
+# users(id), so there is no row to leave behind. Same visible effect.
+curl -s -b "$JAR" "$BASE/api/plays/$VPLAY/results" | grep -q '"upvotes":0' \
+  && ok "their votes stopped counting" \
+  || bad "votes after delete" "$(curl -s -b "$JAR" "$BASE/api/plays/$VPLAY/results")"
+
+curl -s -b "$JAR" "$BASE/api/devices/unclaimed" | grep -q "$DOOM_HASH" \
+  && ok "their phone is claimable again" || bad "phone unclaimed after delete" "$DOOM_HASH"
+
+# Deleted is not deactivated: the same name signs up fresh as a new person,
+# rather than being told it was removed by an admin.
+REBORN=$(curl -s -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Temp\",\"last_name\":\"$DOOM_LAST\"}")
+REBORN_ID=$(echo "$REBORN" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$REBORN_ID" ] && [ "$REBORN_ID" != "$DOOM_ID" ] \
+  && ok "the name is free again and signs up as a new player" \
+  || bad "re-signup after delete" "$REBORN"
+
+echo "== deleting a phone =="
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/admin/devices/$DOOM_HASH")
+[ "$code" = "401" ] && ok "deleting a phone needs the admin password" || bad "device delete auth" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/admin/devices/nope" \
+  -H "X-Admin-Password: $ADMIN_PW")
+[ "$code" = "404" ] && ok "deleting an unknown phone is 404" || bad "delete unknown phone" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/admin/devices/$DOOM_HASH" \
+  -H "X-Admin-Password: $ADMIN_PW")
+[ "$code" = "200" ] && ok "phone deleted" || bad "delete phone" "got $code"
+
+curl -s "$BASE/api/admin/devices" -H "X-Admin-Password: $ADMIN_PW" | grep -q "$DOOM_HASH" \
+  && bad "phone is gone from the list" "still listed" || ok "phone is gone from the list"
+curl -s "$BASE/api/admin/plays" -H "X-Admin-Password: $ADMIN_PW" | grep -q "$DOOM_PLAY" \
+  && ok "the song it played is still on record" || bad "song survives phone delete" "missing"
+
+rm -f "$DJAR"
+
 echo "== heartbeat =="
 curl -s -X POST "$BASE/api/heartbeat" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' -d '{"speaker_name":"Locker Room Speaker"}' > /dev/null
