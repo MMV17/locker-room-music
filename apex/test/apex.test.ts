@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/types";
 
@@ -221,6 +221,33 @@ describe("brute-force throttling", () => {
     const res = await go("KNIGHTS", {} as Env);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?e=KNIGHTS");
+  });
+
+  it("SHOUTS when the limiter is missing, instead of failing open in silence", async () => {
+    // Degrading silently was the wrong call for a security control, and it
+    // cost real time: the throttle was deployed, appeared to do nothing, and
+    // there was no way to tell a missing binding from a working one. An
+    // absent limiter means the front door is answering unlimited guesses at
+    // the only gate a school's data has — that belongs in the log.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await go("KNIGHTS", {} as Env);
+      expect(spy).toHaveBeenCalled();
+      expect(String(spy.mock.calls[0][0])).toMatch(/RATE_LIMITER/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("says nothing when the limiter is present and allowing", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { env } = limiterEnv(true);
+      await go("KNIGHTS", env);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("explains the throttle instead of showing a bare error code", async () => {

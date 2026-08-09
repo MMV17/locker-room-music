@@ -94,6 +94,20 @@ export default {
         if (!success) {
           return html(renderLanding(code, "Too many tries. Wait a minute and try again."), 429);
         }
+      } else {
+        // Loud on purpose. The binding is optional so a local `wrangler dev`,
+        // or a rollback, degrades to no throttling rather than a 500 on every
+        // miss — but "degrades silently" was the wrong call for a security
+        // control and it cost real time: the throttle was deployed, did
+        // nothing, and there was no way to tell a missing binding from a
+        // working one. An absent limiter means this door is answering
+        // unlimited guesses at the only gate a school's data has.
+        //
+        // Visible with: cd apex && npx wrangler tail
+        console.error(
+          "RATE_LIMITER binding is MISSING — /go is answering unlimited guesses. " +
+            "Check [[unsafe.bindings]] in apex/wrangler.toml reached the deploy.",
+        );
       }
 
       // Back to the form with what they typed, so it can be corrected rather

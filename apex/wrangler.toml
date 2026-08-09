@@ -81,6 +81,20 @@ not_found_handling = "none"
 # Deliberately a stopgap. Ten guesses a minute from one IP is still 14,400 a
 # day, and a mascot wordlist is not much longer than that. The real fix is the
 # QR path, which removes the apex's need to validate anything at all.
+# MEASURED 2026-08-09: this deploys cleanly and DOES NOT WORK. 72 wrong codes
+# from one IP produced zero 429s, because `env.RATE_LIMITER` is never
+# populated — `wrangler deploy --dry-run` reports it as "Unsafe Metadata"
+# rather than a binding, and the runtime does not turn that into one.
+#
+# `[[ratelimits]]` is the correct modern form and is WORSE here: wrangler
+# 3.114 silently ignores it entirely ("No bindings found"), so it produces no
+# throttle and no warning. It needs wrangler 4, which in turn needs a
+# @cloudflare/workers-types bump — deliberately not done in the middle of an
+# incident.
+#
+# Left in place because it is harmless and is the right shape once the tooling
+# catches up. src/index.ts now logs loudly when the binding is absent, so this
+# can never again look like it is working. See `npx wrangler tail`.
 [[unsafe.bindings]]
 name = "RATE_LIMITER"
 type = "ratelimit"
