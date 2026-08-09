@@ -275,7 +275,7 @@ class SessionManager:
                 log.info("%s is waiting for the aux", alias)
                 # Now two phones are connected, so a filter is needed where it
                 # was not before.
-                self._schedule_aux_resync()
+                await self._resync_aux()
 
     def _holder(self, at: datetime) -> Session | None:
         """The session entitled to the speaker right now, if any.
@@ -304,8 +304,18 @@ class SessionManager:
         # back seconds later would sit inside a stale cooldown and get to play
         # into the void un-paused.
         session.last_paused_at = None
+        # Taking the aux IS activity, and stamping it here rather than leaving
+        # it to the caller is load-bearing: _aux_target asks _holder who owns
+        # the aux, and _holder needs last_active_at to be current. The handlers
+        # do not stamp it until after this returns, so without this line a
+        # target computed right now sees a session that looks idle past
+        # AUX_GRACE and can name the phone that just LOST the aux.
+        #
+        # This was invisible while every re-point was deferred by six seconds,
+        # because by then the caller had stamped it.
+        session.last_active_at = now()
         log.info("aux granted to %s (%s)", session.alias, session.mac)
-        self._schedule_aux_resync()
+        await self._resync_aux()
 
     def _aux_target(self) -> str | None:
         """Which MAC the audio player should be filtered to. None = no filter.
@@ -327,20 +337,52 @@ class SessionManager:
         # that is not one where both are audible.
         return max(self._sessions.values(), key=lambda s: s.last_active_at).mac
 
-    def _schedule_aux_resync(self) -> None:
-        """Re-point the audio player, once things have stopped moving.
+    async def _resync_aux(self) -> None:
+        """Re-point the audio player.
 
-        Deferred rather than immediate because restarting the player during a
-        connection's setup window destroys it - see AUX_SETTLE. Coalesced,
-        because a burst of connects should cost one restart, not one each.
+        Immediately when it is safe, deferred when it is not. The deferral
+        exists for exactly one hazard: restarting the player releases the A2DP
+        transport, and doing that while a phone is still negotiating one
+        destroys the connection (see AUX_SETTLE).
+
+        That hazard needs a phone inside its setup window. A handover between
+        two phones that have been connected for minutes has none, and delaying
+        it is not free - the play opens the instant the aux changes hands, so
+        every deferred second is a second of a song that plays to nobody.
+        Measured in production 2026-08-09: six seconds of silence after taking
+        the aux, which reads as "it let me play but nothing came out".
+
+        Restarting under an ACTIVE stream is fine, and was verified on hardware
+        before any of this deferral existed.
         """
         if self._aux_task is not None:
             self._aux_task.cancel()
-        self._aux_task = asyncio.create_task(self._resync_aux_after_settle())
+            self._aux_task = None
 
-    async def _resync_aux_after_settle(self) -> None:
+        moment = now()
+        settling = [
+            s for s in self._sessions.values() if moment - s.connected_at < AUX_SETTLE
+        ]
+        if not settling:
+            # Nobody is mid-connection, so there is nothing to protect. Done
+            # inline rather than as a zero-delay task: the caller already holds
+            # the lock, and going through the scheduler would cost a loop turn
+            # and a re-acquisition for no reason. "Immediately" should mean
+            # immediately.
+            await self._aux.route(self._aux_target())
+            return
+
+        # Wait out the longest remaining setup window, not a flat AUX_SETTLE:
+        # a phone that connected five seconds ago needs one more, not six.
+        delay = max(
+            (AUX_SETTLE - (moment - s.connected_at)).total_seconds() for s in settling
+        )
+        self._aux_task = asyncio.create_task(self._resync_aux_after_settle(delay=delay))
+
+    async def _resync_aux_after_settle(self, delay: float) -> None:
         try:
-            await asyncio.sleep(AUX_SETTLE.total_seconds())
+            if delay > 0:
+                await asyncio.sleep(delay)
         except asyncio.CancelledError:
             return
         async with self._lock:
@@ -416,7 +458,7 @@ class SessionManager:
             if waiting:
                 await self._grant(waiting[0])
             else:
-                self._schedule_aux_resync()
+                await self._resync_aux()
 
     async def on_track_changed(
         self,

@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import lockerroom.lifecycle as lifecycle_mod  # noqa: E402
-from lockerroom.lifecycle import SessionManager  # noqa: E402
+from lockerroom.lifecycle import SessionManager, now as now_  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -843,3 +843,38 @@ async def test_a_burst_of_connections_costs_one_re_point():
     await settle_aux()
 
     assert len(aux.routed) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_handover_between_settled_phones_is_routed_at_once():
+    """Measured in production 2026-08-09: the aux changed hands correctly and
+    the play opened, but audio did not arrive for six seconds — long enough to
+    read as "it let me play but nothing came out", and six seconds of the song
+    lost either way.
+
+    AUX_SETTLE exists to protect a phone that is still negotiating its A2DP
+    transport. Two phones that have been connected for minutes have no such
+    window, and delaying them buys nothing. Restarting the player under an
+    ACTIVE stream is fine — verified on hardware at 16:01, where a handover
+    was routed one second in and the audio was unaffected.
+    """
+    from datetime import timedelta
+    aux = FakeAux()
+    mgr = manager(FakeStore(), aux)
+    await connect(mgr)
+    await connect_other(mgr)
+    await settle_aux()
+    aux.routed.clear()
+
+    # Both phones are long past their setup window, and the holder has gone
+    # idle, so OTHER takes the aux by pressing play.
+    old = now_() - timedelta(minutes=5)
+    for s in mgr._sessions.values():
+        s.connected_at = old
+        s.last_active_at = old
+
+    await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
+
+    # No settle_aux(): the point is that it is already routed.
+    assert aux.hears(OTHER_MAC)
+    assert not aux.hears(MAC)
