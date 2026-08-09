@@ -6,7 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .storage import Store
 
@@ -27,6 +27,27 @@ DURATION_BUFFER = timedelta(seconds=5)
 # the idle can land first. Closing on it immediately ended a play at the exact
 # instant it was paused - see on_transport_state_changed.
 TRANSPORT_IDLE_GRACE = timedelta(seconds=5)
+# How long a phone keeps the aux after the music stops.
+#
+# A2DP is not exclusive. Two phones can be connected and streaming at the same
+# time, and the speaker mixes them - so "one song at a time" has to be enforced
+# by refusing the second phone, not assumed.
+#
+# The hold itself lasts as long as there is an open play, which already covers
+# a track change (the old play closes and the new one opens inside one locked
+# handler) and a pause (PAUSE_GRACE keeps the play open for 60s). This grace
+# covers the remaining gap: a phone that stops playback for a few seconds
+# between songs, which is precisely the moment a newcomer would grab the aux
+# out from under it.
+#
+# It is deliberately short. Every second here is a second the next DJ waits
+# after the previous one is genuinely done, and a phone left connected in
+# somebody's pocket must not hold the room hostage - past this, a new phone
+# takes over and the idle one is dropped.
+AUX_GRACE = timedelta(seconds=45)
+# A hung D-Bus call must not hold the session lock, and therefore every
+# lifecycle event, indefinitely.
+DISCONNECT_TIMEOUT_S = 5.0
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -107,6 +128,9 @@ class Session:
     mac: str
     alias: str
     connected_at: datetime
+    # Last moment this phone did anything with the aux: connected, opened a
+    # play, paused, resumed, or ended one. AUX_GRACE is measured from here.
+    last_active_at: datetime = field(default_factory=now)
     current_play: Play | None = None
     # Last track seen on this session, so playback resuming after a stop can
     # be recorded without waiting for the phone to re-send metadata (it will
@@ -132,6 +156,18 @@ class SessionManager:
         # internal that assumes it is held. Internals must call each other, never
         # the public method, or they deadlock.
         self._lock = asyncio.Lock()
+        # Set by main.py to BluezWatcher.disconnect. Optional so the whole
+        # lifecycle stays testable without a D-Bus bus; see _drop.
+        self._disconnect: Callable[[str], Awaitable[None]] | None = None
+
+    def set_disconnect(self, disconnect: Callable[[str], Awaitable[None]]) -> None:
+        """Give the manager a way to hang up on a phone.
+
+        Injected rather than imported because BluezWatcher takes this object in
+        its constructor - wiring it the other way round is a cycle - and
+        because it keeps every test in test_lifecycle.py free of D-Bus.
+        """
+        self._disconnect = disconnect
 
     def open_play_state(self, at: datetime | None = None) -> dict[str, Any] | None:
         """The play currently on the speaker, for the beacon to report.
@@ -161,11 +197,70 @@ class SessionManager:
     async def on_device_connected(self, device_path: str, mac: str, alias: str) -> None:
         async with self._lock:
             if device_path in self._sessions:
+                # Same phone, already on the aux. BlueZ re-announces devices on
+                # a listener restart, and iOS reconnects on its own after a
+                # lock screen; neither is a newcomer.
                 return
+
+            moment = now()
+            holder = self._holder(moment)
+            if holder is not None:
+                # Somebody is on the aux. Refuse this one BEFORE it gets a
+                # session: a session is what turns AVRCP metadata into a play,
+                # and if the disconnect below fails for any reason, the wrong
+                # answer is two songs recorded on top of each other.
+                log.info(
+                    "aux is taken by %s (%s); dropping %s (%s)",
+                    holder.alias, holder.mac, alias, mac,
+                )
+                await self._drop(device_path, "aux already held")
+                return
+
+            # Nobody holds it, so anything still connected is idle past the
+            # grace - a phone left in a pocket. Hang up on it, or it keeps
+            # streaming over whatever the new DJ plays.
+            for stale_path, stale in list(self._sessions.items()):
+                self._sessions.pop(stale_path, None)
+                if stale.current_play is not None:
+                    await self._close_play(stale, stale.current_play, reason="aux_taken_over")
+                log.info("aux taken over from idle %s (%s)", stale.alias, stale.mac)
+                await self._drop(stale_path, "idle, aux taken over")
+
             self._sessions[device_path] = Session(
-                device_path=device_path, mac=mac, alias=alias, connected_at=now()
+                device_path=device_path,
+                mac=mac,
+                alias=alias,
+                connected_at=moment,
+                last_active_at=moment,
             )
             log.info("session open: %s (%s)", alias, mac)
+
+    def _holder(self, at: datetime) -> Session | None:
+        """The session that currently owns the aux, if any."""
+        for session in self._sessions.values():
+            play = session.current_play
+            if play is not None and not play.closed:
+                return session
+            if at - session.last_active_at < AUX_GRACE:
+                return session
+        return None
+
+    async def _drop(self, device_path: str, why: str) -> None:
+        if self._disconnect is None:
+            log.warning(
+                "no way to disconnect %s (%s) - two phones are connected at "
+                "once and their audio will mix",
+                device_path, why,
+            )
+            return
+        try:
+            await asyncio.wait_for(
+                self._disconnect(device_path), timeout=DISCONNECT_TIMEOUT_S
+            )
+        except Exception:
+            # A phone we cannot hang up on is a bad afternoon, not a reason to
+            # take the listener down with it.
+            log.exception("could not disconnect %s (%s)", device_path, why)
 
     async def on_device_disconnected(self, device_path: str) -> None:
         async with self._lock:
@@ -215,6 +310,9 @@ class SessionManager:
         new_key = track_key(title, artist)
         current = session.current_play
         moment = now()
+        # Real metadata from this phone means it is using the aux, even if the
+        # re-emit check below decides it is not a new play.
+        session.last_active_at = moment
 
         if current is not None and new_key == current.key and not _force:
             if self._is_genuine_restart(current, position_ms, moment):
@@ -276,6 +374,9 @@ class SessionManager:
         session = self._sessions.get(device_path)
         if session is None:
             return
+        # Any AVRCP status at all is this phone using the aux, including the
+        # "stopped" that ends a song - that is what starts AUX_GRACE running.
+        session.last_active_at = now()
 
         if session.current_play is None:
             # Playback restarting after a stop. The phone will not re-send
@@ -443,6 +544,9 @@ class SessionManager:
             return
         play.closed = True
         moment = end_at or now()
+        # The aux stays this phone's for AUX_GRACE past the end of the song,
+        # so nobody can take it in the gap before the next one starts.
+        session.last_active_at = max(session.last_active_at, moment)
 
         # Never cancel the task we are running on. _close_play is called from
         # inside these watchdogs, and cancelling the caller means the very next

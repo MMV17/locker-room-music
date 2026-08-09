@@ -77,6 +77,18 @@ class BluezWatcher:
         om_iface.on_interfaces_removed(self._on_interfaces_removed)
         log.info("bluez watcher started, tracking %d existing device(s)", len(self._device_paths))
 
+    async def disconnect(self, device_path: str) -> None:
+        """Hang up on a phone.
+
+        Wired into SessionManager.set_disconnect so it can keep one phone on
+        the aux: A2DP is not exclusive, and two connected phones stream into
+        the same speaker at once. Raises on failure - the caller decides what a
+        failed hang-up means.
+        """
+        proxy = await self._get_proxy(device_path)
+        await proxy.get_interface(DEVICE_IFACE).call_disconnect()
+        log.info("disconnected %s", device_path)
+
     async def _get_proxy(self, path: str) -> ProxyObject:
         assert self._bus is not None
         introspection = await self._bus.introspect(BLUEZ_SERVICE, path)

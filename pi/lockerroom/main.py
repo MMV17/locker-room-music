@@ -40,6 +40,12 @@ async def async_main() -> None:
     store = Store(cfg.db_path)
     session_manager = SessionManager(store)
     watcher = BluezWatcher(session_manager)
+    # One phone on the aux at a time. A2DP is not exclusive - two connected
+    # phones stream into the same speaker and it mixes them - so the session
+    # manager needs a way to hang up on the second one. Wired after
+    # construction because the watcher already takes the manager as its sink,
+    # and doing it in either constructor would be a cycle.
+    session_manager.set_disconnect(watcher.disconnect)
 
     await watcher.start()
 
