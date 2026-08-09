@@ -709,3 +709,46 @@ async def test_the_lifecycle_runs_without_any_aux_wiring_at_all():
     await settle()
 
     assert len(store.opened()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_phone_is_not_paused_over_and_over(monkeypatch):
+    """iOS resumes on its own after an external pause, so pausing every time
+    it does turns into a fight. Measured on hardware 2026-08-09: 12 AVRCP
+    pauses in 41 seconds, which on the phone looks like music stuttering.
+
+    Losing that fight is fine — the audio is going nowhere either way. The
+    pause is a courtesy, so it backs off instead of hammering D-Bus."""
+    from datetime import timedelta
+    monkeypatch.setattr(lifecycle_mod, "PAUSE_COOLDOWN", timedelta(seconds=0.05))
+    bluez = FakeBluez()
+    mgr = manager(FakeStore(), bluez=bluez)
+    await connect(mgr)
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await connect_other(mgr)
+
+    for _ in range(5):
+        await mgr.on_status_changed(OTHER, "playing")
+    assert bluez.paused == [OTHER]
+
+    await asyncio.sleep(0.06)
+    await mgr.on_status_changed(OTHER, "playing")
+    assert bluez.paused == [OTHER, OTHER]
+
+
+@pytest.mark.asyncio
+async def test_taking_the_aux_clears_the_pause_cooldown():
+    """Otherwise a phone that just handed the aux back sits inside a stale
+    cooldown and gets to play into the void un-paused."""
+    bluez = FakeBluez()
+    mgr = manager(FakeStore(), bluez=bluez)
+    await connect(mgr)
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await connect_other(mgr)
+    await mgr.on_status_changed(OTHER, "playing")   # paused, cooldown starts
+
+    assert mgr._sessions[OTHER].last_paused_at is not None
+    await mgr._grant(mgr._sessions[OTHER])
+    assert mgr._sessions[OTHER].last_paused_at is None

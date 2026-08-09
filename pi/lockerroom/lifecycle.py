@@ -51,6 +51,17 @@ AUX_GRACE = timedelta(seconds=45)
 # A hung D-Bus call must not hold the session lock, and therefore every
 # lifecycle event, indefinitely.
 PAUSE_COMMAND_TIMEOUT_S = 5.0
+# How long to leave a waiting phone alone after pausing it.
+#
+# iOS resumes on its own after an external AVRCP pause, so pausing every time
+# it does is a fight neither side wins. Measured on hardware 2026-08-09: a
+# waiting iPhone took 12 pauses in 41 seconds, which on the phone reads as
+# music stuttering on and off rather than as "you are not on the aux".
+#
+# Backing off is safe because the pause was never the enforcement - the audio
+# is going nowhere regardless (see aux.py). All that is lost is that their
+# playlist advances in ten-second bites instead of being held still.
+PAUSE_COOLDOWN = timedelta(seconds=10)
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -139,6 +150,9 @@ class Session:
     # be recorded without waiting for the phone to re-send metadata (it will
     # not, if the track has not changed).
     last_track: dict[str, Any] | None = None
+    # When this phone was last paused for playing without the aux. See
+    # PAUSE_COOLDOWN — None means "free to pause".
+    last_paused_at: datetime | None = None
 
 
 class NullAux:
@@ -267,6 +281,11 @@ class SessionManager:
     async def _grant(self, session: Session) -> None:
         """Point the speaker at one phone."""
         self._aux_path = session.device_path
+        # They are audible now, so nothing about the last time they were told
+        # to wait should carry forward. Left set, a phone that hands the aux
+        # back seconds later would sit inside a stale cooldown and get to play
+        # into the void un-paused.
+        session.last_paused_at = None
         log.info("aux granted to %s (%s)", session.alias, session.mac)
         await self._aux.route(session.mac)
 
@@ -297,6 +316,18 @@ class SessionManager:
         """
         if self._pause is None:
             return
+
+        moment = now()
+        if (
+            session.last_paused_at is not None
+            and moment - session.last_paused_at < PAUSE_COOLDOWN
+        ):
+            return
+        # Stamped BEFORE the call, not after: a pause that hangs until its
+        # timeout must not leave the door open for a storm of retries behind
+        # it.
+        session.last_paused_at = moment
+
         try:
             await asyncio.wait_for(
                 self._pause(session.device_path), timeout=PAUSE_COMMAND_TIMEOUT_S
