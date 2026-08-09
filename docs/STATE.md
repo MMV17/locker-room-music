@@ -164,6 +164,86 @@ confusion `check-code` exists to prevent.
   is async and takes `env` specifically so it can become a D1 query without a
   signature change.
 
+### When IT unblocks the domain, flip one line
+
+`Team.url` in `apex/src/teams.ts` currently points at
+`https://locker-room-music.mmvinton17.workers.dev/` because the pretty
+hostname is filtered on campus. Once IT recategorises the domain:
+
+```ts
+url: "https://hc.auxgoat.com/",
+```
+
+**Nothing else needs testing.** Every apex behaviour was verified against the
+real `auxgoat.com` hostname on 2026-08-09 from an unfiltered network — landing
+page, `www` canonicalisation with path and query preserved, `/go` both ways,
+`/api/*` 404, stray-path redirect, the font, and the whole flow end to end in a
+browser typing a lowercase code.
+
+Two things to know before flipping:
+
+- **Everyone gets signed out.** The session cookie is host-only, so players who
+  joined on `workers.dev` land on Join at `hc.auxgoat.com`. Re-joining recovers
+  their history rather than forking it (signup is idempotent on
+  `identity_key`), but they retype their name. Flip between sessions, never
+  mid-practice.
+- **Ask IT for the whole zone**, `auxgoat.com` *and* `*.auxgoat.com`. The block
+  hit `hc.auxgoat.com` too, which is what made the team's own site unreachable.
+
+## "Now on aux" outlived the song by four days (2026-08-09)
+
+Reported as: the site says I am on aux when I am not even connected to the
+speaker.
+
+`/api/now` selected `ORDER BY started_at DESC LIMIT 1` with **no liveness
+condition at all** — not `ended_at`, not recency, nothing. So the last song
+ever played stayed on screen forever. The row it was showing:
+
+```
+started 2026-08-05T20:17:11   ended 2026-08-05T20:19:03   Drake - Hoe Phase
+```
+
+Started and ended four days earlier, and **closed correctly** — this was not a
+Pi lifecycle bug. Nothing was ever going to take it off the screen.
+
+Fixed with `presentablePlay()` in `voteWindow.ts`: the newest row is only a
+*candidate*, and it is shown only while its vote window is open. Reusing that
+rule rather than inventing one is the point — the screen exists so someone can
+rate what is on the speaker, so when voting closes there is nothing to say. It
+also inherits everything that logic already gets right: the 30s grace stays
+votable, a PAUSED song stays up because the Pi keeps stamping `keepalive_at`,
+and the two plays the Pi opened and never closed fall out on the wall-clock
+fallback instead of haunting the screen forever.
+
+Eight tests in `backend/test/nowPlaying.test.ts`, including the exact
+production timestamps above.
+
+### The speaker still does not report who is connected
+
+**This is a real gap and the fix above does not close it.** It makes the screen
+stop lying about a stale song; it does not let the product say "someone is
+connected but not playing" or "nobody is connected".
+
+The Pi already knows all of it. `SessionManager` in `pi/lockerroom/lifecycle.py`
+holds a `Session` per connected device with `mac`, `alias` and `connected_at`;
+`bluez_watcher.py` watches `Connected` on `org.bluez.Device1` and fires
+`on_device_connected` / `on_device_disconnected`, and a disconnect already
+closes the open play with `reason="disconnect"`.
+
+**That state simply never leaves the Pi.** The beacon payload in `control.py`
+carries `speaker_name`, `at`, `current_play` and `result` — nothing about
+connections. So a connected phone playing nothing is indistinguishable from no
+phone at all.
+
+Closing it means: add connection state to the beacon, store it (a column on
+`heartbeats` is probably enough — one speaker, one connection), return it from
+`/api/now`, and give the header a third state alongside Speaker online/offline.
+
+**It needs a Pi deploy, which is currently expensive.** SSH is reachable only
+by physical access over USB-C ethernet — HCGuest filters TCP/22 between guest
+clients, and there is no allowlisted command to push code. Bundle it with the
+next physical visit rather than making a trip for it.
+
 ## Phase 4 result (2026-08-03)
 
 The Pi's config now points at the production Worker. On restart it drained

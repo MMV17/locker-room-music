@@ -11,7 +11,7 @@ import {
   fallbackColor,
 } from "./crypto";
 import { trackKey, normalize } from "./trackKey";
-import { isVoteWindowOpen, voteWindowClosesAt } from "./voteWindow";
+import { isVoteWindowOpen, voteWindowClosesAt, presentablePlay } from "./voteWindow";
 import { trackScore } from "./scoring";
 import { lookupArtwork } from "./artwork";
 import { boards } from "./leaderboards";
@@ -458,9 +458,14 @@ app.get("/api/roster", requireSession, async (c) => {
 app.get("/api/now", requireSession, async (c) => {
   const userId = c.get("userId");
 
-  const play = await c.env.DB.prepare(
+  // The newest row is only a CANDIDATE. Without presentablePlay() the last
+  // song ever played stays on screen forever — production read "Now on aux:
+  // Mack Vinton" on 2026-08-09 for a play that started and ended on 08-05,
+  // with nobody connected to the speaker.
+  const latest = await c.env.DB.prepare(
     `SELECT * FROM plays WHERE voided = 0 ORDER BY started_at DESC LIMIT 1`,
   ).first<PlayRow>();
+  const play = presentablePlay(latest);
 
   const hb = await c.env.DB.prepare(
     "SELECT last_seen_at FROM heartbeats ORDER BY last_seen_at DESC LIMIT 1",

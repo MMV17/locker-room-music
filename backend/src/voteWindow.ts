@@ -49,3 +49,32 @@ export function isVoteWindowOpen(play: PlayRow, now: number = Date.now()): boole
   if (play.voided) return false;
   return now < voteWindowClosesAt(play, now);
 }
+
+/**
+ * The play the now-playing screen is allowed to call "now", or null.
+ *
+ * `/api/now` used to hand back `ORDER BY started_at DESC LIMIT 1` with no
+ * liveness condition at all, which meant the last song ever played stayed on
+ * screen forever. Found in production 2026-08-09: the site read
+ * "Now on aux: Mack Vinton" with nobody connected to the speaker, showing a
+ * play that had started AND ended four days earlier. The Pi had closed it
+ * correctly; nothing was ever going to take it off the screen.
+ *
+ * The vote window is the right rule rather than a new one, and reusing it is
+ * the point. This screen exists so someone can rate what is on the speaker —
+ * once voting has closed there is nothing to do here, so the screen should say
+ * nothing is playing. It also inherits every case that logic already gets
+ * right: the 30s grace stays votable, a PAUSED song stays up because the Pi is
+ * still stamping keepalive_at, and a play the Pi opened and never closed falls
+ * out on the wall-clock fallback instead of hanging around forever.
+ *
+ * NOTE this says nothing about whether a phone is CONNECTED to the speaker.
+ * The Pi knows — SessionManager tracks mac, alias and connected_at — but that
+ * never reaches the server, because the beacon only carries the open play. A
+ * connected phone playing nothing is indistinguishable here from no phone at
+ * all. Closing that gap needs a Pi deploy; see STATE.md.
+ */
+export function presentablePlay(play: PlayRow | null, now: number = Date.now()): PlayRow | null {
+  if (!play) return null;
+  return isVoteWindowOpen(play, now) ? play : null;
+}
