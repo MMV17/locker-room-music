@@ -1,6 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, post } from "./../api";
 import { navigate } from "./../router";
+import { Spinner } from "./../components";
+
+/**
+ * A team code handed over by the front door at auxgoat.com, which already
+ * asked for it once. Nobody should type the same word twice in one sitting.
+ *
+ * It arrives in the URL FRAGMENT rather than the query string, and that is a
+ * privacy decision, not a style one: a fragment is never sent to the server
+ * and never appears in a Referer header. This app loads artwork via <img>
+ * straight from Deezer and iTunes, so a `?code=` would hand the team code to
+ * Apple and Deezer with every cover it fetches — and that code is currently
+ * the only gate on the whole team's data.
+ */
+function codeFromHash(): string | null {
+  if (typeof location === "undefined" || !location.hash) return null;
+  const code = new URLSearchParams(location.hash.replace(/^#/, "")).get("code");
+  return code && code.trim() ? code.trim() : null;
+}
 
 /**
  * Team code, then your own name and number. No admin-curated roster and no
@@ -13,7 +31,11 @@ import { navigate } from "./../router";
  * switching phones does not split your history.
  */
 export function Join({ teamName, onJoined }: { teamName: string; onJoined: () => void }) {
-  const [code, setCode] = useState("");
+  const [handed] = useState(codeFromHash);
+  const [code, setCode] = useState(handed ?? "");
+  // Start verifying immediately when a code was handed over, so the code form
+  // never flashes on screen before being skipped past.
+  const [verifying, setVerifying] = useState(handed !== null);
   const [step, setStep] = useState<"code" | "name">("code");
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -22,6 +44,43 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
   const [busy, setBusy] = useState(false);
 
   const ready = first.trim() !== "" && last.trim() !== "";
+
+  /**
+   * Verify a handed-over code before skipping the step, rather than trusting
+   * the redirect. The apex's team map and this Worker's TEAM_CODE secret are
+   * independent, so a rotated code would otherwise sail past here and fail at
+   * the final submit — which is exactly the "sent back three fields later"
+   * confusion that check-code was added to kill.
+   */
+  useEffect(() => {
+    if (handed === null) return;
+
+    // Take it out of the address bar. It has done its job, and leaving a team
+    // code in a URL invites it into a screenshot, a shared link, or the tab
+    // someone hands to a friend.
+    history.replaceState(null, "", location.pathname + location.search);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        await post("/api/session/check-code", { team_code: handed });
+        if (!cancelled) setStep("name");
+      } catch (err) {
+        if (cancelled) return;
+        setError(
+          err instanceof ApiError && err.code === "wrong_team_code"
+            ? "That team code isn't right."
+            : "Could not check that code. Try again.",
+        );
+      } finally {
+        if (!cancelled) setVerifying(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handed]);
 
   const join = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,7 +124,13 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
 
       {error && <div className="banner is-bad">{error}</div>}
 
-      {step === "code" ? (
+      {verifying ? (
+        // The code came from the front door and is being checked. Showing the
+        // form here would flash a field the player is about to skip past.
+        <div className="center" style={{ paddingTop: 24 }}>
+          <Spinner />
+        </div>
+      ) : step === "code" ? (
         <form
           onSubmit={async (e) => {
             e.preventDefault();

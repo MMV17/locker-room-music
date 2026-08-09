@@ -93,16 +93,34 @@ describe("/go resolves a team code", () => {
   const go = (code: string) =>
     get(`https://auxgoat.com/go?code=${encodeURIComponent(code)}`);
 
+  const DEST = "https://locker-room-music.mmvinton17.workers.dev/";
+
   it("redirects a known code to that school's site", async () => {
     const res = await go("CRUSADERS");
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("https://locker-room-music.mmvinton17.workers.dev/");
+    expect(res.headers.get("location")).toBe(`${DEST}#code=CRUSADERS`);
   });
 
   it("redirects regardless of casing or padding", async () => {
     for (const typed of ["crusaders", "  Crusaders  "]) {
-      expect((await go(typed)).headers.get("location")).toBe("https://locker-room-music.mmvinton17.workers.dev/");
+      expect((await go(typed)).headers.get("location")).toBe(`${DEST}#code=CRUSADERS`);
     }
+  });
+
+  it("hands the code on in a fragment, never a query string", async () => {
+    // A fragment is not sent to the server and never appears in a Referer
+    // header. The team app loads artwork via <img> from Deezer and iTunes, so
+    // a ?code= would leak the team code to Apple and Deezer on every cover.
+    const loc = (await go("CRUSADERS")).headers.get("location")!;
+    expect(loc).toContain("#code=");
+    expect(loc).not.toContain("?code=");
+  });
+
+  it("normalises the code it passes on", async () => {
+    // So the field the player lands on shows what they were told to type,
+    // not "  crusaders  ".
+    const loc = (await go("  crusaders  ")).headers.get("location")!;
+    expect(loc.endsWith("#code=CRUSADERS")).toBe(true);
   });
 
   it("bounces an unknown code back to the form, keeping what was typed", async () => {

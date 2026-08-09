@@ -238,6 +238,40 @@ unpredictable and the type is the identity.
 The latin-ext subset is deliberately **not** shipped. The app needs it for
 track titles; this page has a fixed English string and an uppercase code field.
 
+### Typing the code once
+
+The first version asked for the code at the apex and then again on the team
+site — the same word twice in one sitting, which is exactly the kind of thing
+a first-timer does once and gives up on.
+
+`/go` now hands the code to the destination in the **URL fragment**:
+
+```
+https://locker-room-music.mmvinton17.workers.dev/#code=CRUSADERS
+```
+
+**A fragment, never a query string, and that is a privacy decision.** A
+fragment is never sent to the server and never appears in a `Referer` header.
+The team app loads artwork via `<img>` directly from Deezer and iTunes, so a
+`?code=` would hand the team code to Apple and Deezer with every cover it
+fetches — and that code is currently the only gate on the whole team's data.
+
+`Join.tsx` reads it on mount, immediately strips it with `history.replaceState`
+so it cannot end up in a screenshot or a shared link, and shows a spinner
+rather than flashing a field the player is about to skip.
+
+**It still calls `check-code` before skipping the step.** The apex's team map
+and the school's `TEAM_CODE` secret are independent sources, so a rotated code
+would otherwise be waved through and fail at the *final* submit — reviving the
+"sent back three fields later" confusion that `check-code` was added to kill.
+A handed-over code that fails lands on the code step, prefilled, with the
+normal error.
+
+Verified in the browser against a real backend, all three paths: a good code
+goes straight to "Who are you?"; a wrong one shows "That team code isn't
+right." with the field prefilled; and no fragment behaves exactly as before,
+which is the regression that mattered.
+
 ### Visual direction
 
 Neutral, and expected to be adjusted later. Tokens come from the existing
@@ -444,9 +478,9 @@ Other things that bite:
 
 ## Out of scope
 
-- Prefilling the code on the destination site via `?code=`. Nice, and cheap,
-  but it puts a team code in browser history and a referrer; worth deciding on
-  its own rather than as a rider here.
+- ~~Prefilling the code on the destination site.~~ **Built** — see below. It
+  was listed here because a `?code=` would leak the code; a fragment does not,
+  which is what changed the answer.
 - Any second school. The map has one entry and that is honest.
 - `/d/:serial`, device binding, and everything else in the provisioning design.
 - A rate-limiting rule on `/go`. Required before this is advertised, but it is

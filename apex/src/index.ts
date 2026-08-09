@@ -19,6 +19,7 @@
 import type { Env } from "./types";
 import { resolveTeam } from "./teams";
 import { renderLanding } from "./page";
+import { normalizeTeamCode } from "../../backend/src/crypto";
 
 const APEX = "auxgoat.com";
 const WWW = `www.${APEX}`;
@@ -53,9 +54,23 @@ export default {
     if (url.pathname === "/go") {
       const code = url.searchParams.get("code") ?? "";
       const team = await resolveTeam(env, code);
-      // team.url, not a URL built from the slug — see the comment on Team.url.
-      // The school's pretty hostname is filtered on its own campus.
-      if (team) return redirect(team.url);
+      if (team) {
+        // team.url, not a URL built from the slug — see the comment on
+        // Team.url. The school's pretty hostname is filtered on its own campus.
+        //
+        // The code rides along in a FRAGMENT so the player types it once. A
+        // fragment is never sent to the server and never appears in a Referer
+        // header; the team app loads artwork via <img> from Deezer and iTunes,
+        // so a ?code= would hand the team code to Apple and Deezer with every
+        // cover it fetches.
+        //
+        // The destination still verifies it. This map and the school's
+        // TEAM_CODE secret are independent sources, so a rotated code would
+        // otherwise be waved through here and fail at the final submit —
+        // reviving the "sent back three fields later" bug that cost a real
+        // debugging session.
+        return redirect(`${team.url}#code=${encodeURIComponent(normalizeTeamCode(code))}`);
+      }
 
       // Back to the form with what they typed, so it can be corrected rather
       // than retyped. encodeURIComponent is load-bearing, not tidiness: this
