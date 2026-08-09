@@ -459,6 +459,47 @@ curl -s "$BASE/api/admin/plays" -H "X-Admin-Password: $ADMIN_PW" | grep -q "$DOO
 
 rm -f "$DJAR"
 
+echo "== clearing history =="
+# The leaderboards are cumulative, so a test run sits on top of the first real
+# session forever without this. Voids rather than deletes: a voided row drops
+# out of every ranking but stays on disk.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/plays/void-all")
+[ "$code" = "401" ] && ok "clearing history needs the admin password" || bad "void-all auth" "got $code"
+
+# A play still on the speaker must survive: voiding the song a room is
+# mid-vote on is a confusing way to lose it.
+LIVE_PLAY=$(gen_id)
+curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"play_id\":\"$LIVE_PLAY\",\"device_mac\":\"$DEVICE_MAC\",\"title\":\"Still Going\",\"artist\":\"Live Fixture\",\"duration_ms\":240000,\"started_at\":\"$STARTED\"}" > /dev/null
+
+CLEARED=$(curl -s -X POST "$BASE/api/admin/plays/void-all" -H "X-Admin-Password: $ADMIN_PW")
+echo "$CLEARED" | grep -q '"ok":true' && ok "history cleared" || bad "void-all" "$CLEARED"
+# At least one, not exactly one: local D1 persists between runs and carries
+# open plays from earlier ones, which is the same trap this file warns about
+# for play ids. The check that it spared THE RIGHT one is below.
+echo "$CLEARED" | grep -qE '"spared":[1-9]' \
+  && ok "a song still on the speaker was spared" || bad "spared count" "$CLEARED"
+
+# Everything finished is now voided, so /api/history is empty of them.
+HIST=$(curl -s -b "$JAR" "$BASE/api/history")
+echo "$HIST" | grep -q "$PLAY_ID" \
+  && bad "cleared songs drop out of history" "still listed" \
+  || ok "cleared songs drop out of history"
+
+# But the rows are still there — voided, not deleted.
+APLAYS=$(curl -s "$BASE/api/admin/plays" -H "X-Admin-Password: $ADMIN_PW")
+echo "$APLAYS" | grep -q "$PLAY_ID" \
+  && ok "cleared songs are voided, not deleted" || bad "rows survive clearing" "gone"
+
+# And the live one is untouched, so a second clear has something to do later.
+echo "$APLAYS" | grep -q "\"id\":\"$LIVE_PLAY\"[^}]*\"voided\":0" \
+  && ok "the live song is still counting" || bad "live song voided" "$APLAYS"
+
+AGAIN=$(curl -s -X POST "$BASE/api/admin/plays/void-all" -H "X-Admin-Password: $ADMIN_PW")
+echo "$AGAIN" | grep -q '"voided":0' \
+  && ok "clearing twice is a no-op, not an error" || bad "second clear" "$AGAIN"
+
 echo "== heartbeat =="
 curl -s -X POST "$BASE/api/heartbeat" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}' > /dev/null

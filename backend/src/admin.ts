@@ -203,6 +203,12 @@ admin.get("/api/admin/devices", async (c) => {
 });
 
 admin.get("/api/admin/plays", async (c) => {
+  // `total` is every play on record, not the 50 below. The clear-history
+  // confirm has to name how many songs it is about to void, and naming 50
+  // when it means 300 is worse than saying nothing.
+  const total = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM plays WHERE voided = 0",
+  ).first<{ n: number }>();
   const { results } = await c.env.DB.prepare(
     `SELECT p.id, p.started_at, p.counted, p.voided,
             t.title, t.artist,
@@ -213,7 +219,7 @@ admin.get("/api/admin/plays", async (c) => {
      ORDER BY p.started_at DESC
      LIMIT 50`,
   ).all();
-  return c.json({ plays: results });
+  return c.json({ plays: results, total: total?.n ?? 0 });
 });
 
 /* Un-claim a device */
@@ -264,6 +270,32 @@ admin.post("/api/admin/plays/:id/void", async (c) => {
     .run();
   if (!r.meta.changes) return c.json({ error: "Unknown play" }, 404);
   return c.json({ ok: true });
+});
+
+/**
+ * Void every song on record at once.
+ *
+ * For the end of a test run or the start of a season: the leaderboards are
+ * cumulative, so a week of experiments would otherwise sit on top of the first
+ * real one forever.
+ *
+ * Voids rather than deletes, like every other corrective action here — a
+ * season of data is not reproducible, and a voided row drops out of every
+ * ranking while staying on disk. Nothing in the UI un-voids, but the rows are
+ * all still there if it ever needs to be undone by hand.
+ *
+ * A play still on the speaker is deliberately spared. "History" is what has
+ * finished; voiding the song currently playing would pull it out from under a
+ * room that is mid-vote on it, which is a confusing way to lose a song.
+ */
+admin.post("/api/admin/plays/void-all", async (c) => {
+  const r = await c.env.DB.prepare(
+    "UPDATE plays SET voided = 1 WHERE voided = 0 AND ended_at IS NOT NULL",
+  ).run();
+  const stillPlaying = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM plays WHERE voided = 0 AND ended_at IS NULL",
+  ).first<{ n: number }>();
+  return c.json({ ok: true, voided: r.meta.changes ?? 0, spared: stillPlaying?.n ?? 0 });
 });
 
 admin.post("/api/admin/votes/:id/void", async (c) => {

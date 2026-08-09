@@ -476,10 +476,15 @@ function Devices({ call }: { call: Call }) {
  */
 function Plays({ call }: { call: Call }) {
   const [plays, setPlays] = useState<AdminPlay[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    call<{ plays: AdminPlay[] }>("/api/admin/plays")
-      .then((r) => setPlays(r.plays))
+    call<{ plays: AdminPlay[]; total: number }>("/api/admin/plays")
+      .then((r) => {
+        setPlays(r.plays);
+        setTotal(r.total);
+      })
       .catch(() => setPlays([]));
   }, [call]);
 
@@ -491,14 +496,44 @@ function Plays({ call }: { call: Call }) {
     load();
   };
 
+  // For the end of a test run or the start of a season. The leaderboards are
+  // cumulative, so without this a week of experiments sits on top of the first
+  // real session forever.
+  const clearAll = async () => {
+    // Two prompts, deliberately. This wipes every ranking on the site at once,
+    // and the count is the part worth reading — a muscle-memory OK on a single
+    // dialog is exactly how someone clears a real season.
+    if (!window.confirm(`Clear history? All ${total} ${total === 1 ? "song" : "songs"} stop counting toward every ranking, and the leaderboards go empty.`)) {
+      return;
+    }
+    if (!window.confirm("Last check — this cannot be undone from here.")) return;
+    setError(null);
+    try {
+      const r = await call<{ voided: number; spared: number }>(
+        "/api/admin/plays/void-all",
+        { method: "POST" },
+      );
+      if (r.spared) {
+        setError(
+          `Cleared ${r.voided}. The song on the speaker right now was left alone — clear again once it finishes.`,
+        );
+      }
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not clear history");
+    }
+  };
+
   return (
     <Section title="Recent plays">
+      {error && <div className="banner is-bad">{error}</div>}
       {!plays ? (
         <Spinner />
       ) : plays.length === 0 ? (
         <p className="t-sub">Nothing has played yet.</p>
       ) : (
-        <div className="rows">
+        <>
+          <div className="rows">
           {plays.map((p) => (
             <div key={p.id} className="row">
               <span className="row-main">
@@ -518,7 +553,18 @@ function Plays({ call }: { call: Call }) {
               )}
             </div>
           ))}
-        </div>
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <p className="t-sub" style={{ marginBottom: 8 }}>
+              Voided songs stay on record but stop counting toward every ranking.
+              Clearing is how you throw away a test run without losing the songs
+              themselves.
+            </p>
+            <button className="btn is-danger" onClick={clearAll} disabled={!total}>
+              Clear history ({total})
+            </button>
+          </div>
+        </>
       )}
     </Section>
   );
