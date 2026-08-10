@@ -93,7 +93,9 @@ describe("/go resolves a team code", () => {
   const go = (code: string) =>
     get(`https://auxgoat.com/go?code=${encodeURIComponent(code)}`);
 
-  const DEST = "https://locker-room-music.mmvinton17.workers.dev/";
+  // The school's own hostname. Was workers.dev while the zone was SNI-filtered
+  // on campus; restored 2026-08-10 after IT whitelisted it. See Team.url.
+  const DEST = "https://hc.auxgoat.com/";
 
   it("redirects a known code to that school's site", async () => {
     const res = await go("CRUSADERS");
@@ -198,7 +200,7 @@ describe("brute-force throttling", () => {
     const { env, keys } = limiterEnv(false);
     const res = await go("CRUSADERS", env);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toContain("locker-room-music");
+    expect(res.headers.get("location")).toContain("hc.auxgoat.com");
     expect(keys).toEqual([]);
   });
 

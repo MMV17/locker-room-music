@@ -22,13 +22,22 @@ describe("resolveTeam", () => {
     expect(team?.name).toBe("Holy Cross");
   });
 
-  it("carries an explicit destination rather than deriving one from the slug", async () => {
-    // The obvious `https://<slug>.auxgoat.com/` is wrong on the network that
-    // matters. The whole auxgoat.com zone is SNI-filtered on campus, so a
-    // derived URL would hand someone a blocked destination from a front door
-    // that worked. Every team names where it actually lives.
+  it("sends CRUSADERS to the school's own hostname", async () => {
+    // NOTE what this test can no longer prove. It used to guard `url` being
+    // stated explicitly rather than built as `https://<slug>.auxgoat.com/`,
+    // and it could, because the two differed: the zone was SNI-filtered on
+    // campus so the destination was workers.dev while the slug stayed "hc".
+    //
+    // IT whitelisted the domain on 2026-08-10 and the value moved back, so the
+    // explicit answer and the derived one are now the same string. Asserting it
+    // would pass either way and is no longer evidence of anything.
+    //
+    // The property still matters — it is what let this point somewhere else
+    // for two days without touching the slug — but it is now carried by the
+    // comment on Team.url and by the fallback list there, not by this test.
+    // Restoring the guard needs a second school whose URL is not derivable.
     const team = await resolveTeam(env, "CRUSADERS");
-    expect(team?.url).toBe("https://locker-room-music.mmvinton17.workers.dev/");
+    expect(team?.url).toBe("https://hc.auxgoat.com/");
   });
 
   it("points every team at an absolute https URL", async () => {

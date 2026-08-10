@@ -74,16 +74,22 @@ const TEAMS = new Map<string, Team>([
     {
       slug: "hc",
       name: "Holy Cross",
-      // NOT hc.auxgoat.com, which is filtered on the school's network. The
-      // workers.dev hostname returned 200 from that same network at the exact
-      // moment the whole auxgoat.com zone was refused, so it is the one that
-      // reaches players where they actually are.
+      // The school's own hostname, restored 2026-08-10 after IT whitelisted the
+      // domain. It had been pointed at locker-room-music.mmvinton17.workers.dev
+      // since 2026-08-08, because the whole auxgoat.com zone was SNI-filtered
+      // and a pretty URL that does not load is worse than an ugly one that does.
       //
-      // lockerroom.finestkindfarms.com is the other proven-unfiltered option
-      // and is what the Pi points at; prefer it if workers.dev is ever turned
-      // off. Move this back to https://hc.auxgoat.com/ once the filter lapses
-      // or IT recategorises the domain.
-      url: "https://locker-room-music.mmvinton17.workers.dev/",
+      // Verified before switching, on BOTH networks that matter — they filter
+      // separately and the wired result says nothing about the wifi:
+      //   wired    hc.auxgoat.com -> 200, cert CN=auxgoat.com
+      //   HCGuest  hc.auxgoat.com -> loads on a phone
+      //
+      // www.auxgoat.com is still blocked and is deliberately not used anywhere.
+      //
+      // IF IT REGRESSES, this is the one line to change, and there are two
+      // proven-unfiltered fallbacks: locker-room-music.mmvinton17.workers.dev,
+      // and lockerroom.finestkindfarms.com, which is what the Pi points at.
+      url: "https://hc.auxgoat.com/",
     },
   ],
 ]);
