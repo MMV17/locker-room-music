@@ -288,30 +288,45 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Everything is deployed and working. Go use it.** As of 2026-08-09 15:10 EDT:
-front door live, team code typed once, stale "now on aux" fixed, Pi healthy on
-wifi and beaconing, watchdog fixed and verified on hardware. There is no
-plumbing left to do before a real session.
+**Everything is deployed and working, and the database is a clean slate.** As
+of 2026-08-10: one phone on the aux enforced and verified on two real iPhones,
+the site says whose turn it is, admin can delete players and phones and clear
+history, the Pi runs on HCGuest with no cable. All 75 test plays are voided, so
+the first real session starts from zero.
 
 Open the front door at **`https://auxgoat.mmvinton17.workers.dev`**, type
-`CRUSADERS`, and you land in the app. (Use that hostname, not `auxgoat.com`,
-anywhere the school filter is active.)
+`CRUSADERS`. (That hostname, not `auxgoat.com`, anywhere the school filter is
+active.)
 
-**The whole remaining list is product, not code:**
+**Nothing here blocks a session. In rough order of what is worth doing:**
 
-- **Verify the three lifecycle fixes on real hardware.** Oldest open item, from
-  2026-08-05, still only proven by unit test. Play three songs, pause one
-  mid-track for over a minute, let one run to its natural end. Then check D1
-  holds exactly three plays, all with a non-null `ended_at`, and that the site
-  showed **Paused** rather than jumping to Ended. ~15 minutes.
-- **The results reveal has never fired for anyone.** It is the moment the
-  product is built around and nobody has seen it land.
-- **No leaderboard has ever rendered from real votes.**
-- **Vote volume is untested.** The 7.5s poll is sized for 75 players × 2 hours;
-  nothing has stressed it.
-
-Known and deliberately not blocking: the `/go` throttle is inert (see above),
-and the speaker cannot yet report who is connected over Bluetooth.
+- **Nobody has used this for real yet.** The reveal has never fired for
+  anyone, no leaderboard has rendered from real votes, and vote volume is
+  untested — the 7.5s poll is sized for 75 players × 2 hours and nothing has
+  stressed it. Everything below is smaller than this.
+- **The new aux screens have never been seen on a phone.** Built and deployed
+  2026-08-09, verified only by e2e. Two phones and two minutes settles it:
+  "Someone else has the aux" on the idle screen, and the waiting banner for the
+  person who is actually waiting.
+- **Orphaned plays will keep happening.** A listener restart mid-song leaves a
+  play open forever: no `ended_at`, so invisible in history, but `counted`
+  defaults to 1 so it silently counts on every leaderboard. Six had built up by
+  2026-08-09. Clearing history now reaches them, but that is the cleanup, not
+  the cause — nothing closes a play the Pi forgot. A sweep on the server (close
+  anything whose window expired with no `ended_at`) would end it.
+- **The `/go` throttle is inert** (see above): unlimited team-code guesses at
+  the front door.
+- **netwatch misdiagnoses a poisoned resolver.** Measured 2026-08-09: a dead
+  ethernet cable put itself first in `resolv.conf`, so netwatch's DNS-dependent
+  probe reported "no egress on wlan0" while wlan0 was perfectly healthy. It
+  bounced the wifi and would have rebooted the box at 15 failures, into the
+  same state. This is exactly the ROUTE_TRAP case it has a DROP_ROUTE action
+  for; it just cannot see it. Matters most on campus, where there is no SSH.
+  Fix: resolve once and probe by IP, so another interface cannot poison it.
+- **Naming for more than one box**, which the PCB work needs: every speaker
+  called `AuxGoat` collides in a Bluetooth list, and a phone paired to one will
+  auto-connect to another. `AuxGoat 4F2C` or `AuxGoat — Crusaders`. Same
+  decision as the QR sticker, so decide both together.
 
 ### The speaker is called AuxGoat now (2026-08-09)
 
@@ -443,7 +458,11 @@ Answered on 2026-08-05, so do not re-litigate these:
 - **No Time Machine destination.** Git covers the source now, but not
   `backend/.secrets.local`. Mack confirmed `MAC_SALT` is saved off-laptop.
 - **`TEAM_CODE` is still `CRUSADERS`** and is still the only gate.
-- **A routing artifact got in as a real play.** Seen 2026-08-05 20:12 from a
+- ~~**A routing artifact got in as a real play.**~~ RESOLVED 2026-08-10, not by
+  a fix but by Clear history voiding every play on record. The signature below
+  is kept because the quirk itself is still live and will recur.
+
+  Seen 2026-08-05 20:12 from a
   MacBook: artist `Listening on MacBook Pro`, title `sdp interlude • Travis
   Scott`, 187s, `counted = 1`. This is the transitional metadata quirk in
   "AVRCP quirks found on a real iPhone" #4 — but the 2s create-grace only
