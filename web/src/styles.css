@@ -947,6 +947,15 @@ input {
   color: var(--down);
 }
 
+/* Same reasoning as .btn:disabled — a destructive control that is inert must
+   not still read as red and tappable. Clear history is disabled when there is
+   nothing left to clear, and without this it looked armed. */
+.btn-quiet:disabled {
+  color: var(--muted);
+  text-decoration: none;
+  cursor: not-allowed;
+}
+
 .field {
   display: block;
   width: 100%;

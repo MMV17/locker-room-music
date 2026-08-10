@@ -525,7 +525,21 @@ function Plays({ call }: { call: Call }) {
   };
 
   return (
-    <Section title="Recent plays">
+    <Section
+      title="Recent plays"
+      action={
+        <button
+          className="btn-quiet is-danger"
+          onClick={clearAll}
+          disabled={!total}
+          /* Right padding dropped so it sits flush with the section edge;
+             the vertical padding stays, because it is the tap target. */
+          style={{ flexShrink: 0, padding: "8px 0 8px 10px" }}
+        >
+          Clear history ({total})
+        </button>
+      }
+    >
       {error && <div className="banner is-bad">{error}</div>}
       {!plays ? (
         <Spinner />
@@ -554,28 +568,42 @@ function Plays({ call }: { call: Call }) {
             </div>
           ))}
           </div>
-          <div style={{ marginTop: 14 }}>
-            <p className="t-sub" style={{ marginBottom: 8 }}>
-              Voided songs stay on record but stop counting toward every ranking.
-              Clearing is how you throw away a test run without losing the songs
-              themselves.
-            </p>
-            <button className="btn is-danger" onClick={clearAll} disabled={!total}>
-              Clear history ({total})
-            </button>
-          </div>
         </>
       )}
     </Section>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/**
+ * `action` sits on the heading row rather than under the content.
+ *
+ * Recent plays is fifty rows long, so anything below it is a scroll away —
+ * which is exactly where Clear history was, and it is the control most likely
+ * to be wanted before reading any of them.
+ */
+function Section({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section style={{ marginBottom: 30 }}>
-      <h2 className="t-section" style={{ marginBottom: 12 }}>
-        {title}
-      </h2>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <h2 className="t-section">{title}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );
