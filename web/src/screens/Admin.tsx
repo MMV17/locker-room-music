@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./../api";
-import { Spinner, formatWhen } from "./../components";
+import { Spinner, formatWhen, useConfirm } from "./../components";
 import { useNavigate } from "./../router";
 import { applyTheme, cacheTheme } from "./../theme";
 import type { Theme } from "./../theme";
@@ -253,6 +253,7 @@ function Appearance({ call }: { call: Call }) {
 }
 
 function Roster({ call }: { call: Call }) {
+  const { confirm, dialog } = useConfirm();
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -310,7 +311,13 @@ function Roster({ call }: { call: Call }) {
     const lost = u.votes
       ? `, and their ${u.votes} ${u.votes === 1 ? "vote stops" : "votes stop"} counting`
       : "";
-    if (!window.confirm(`Delete ${u.name}? ${kept}${lost}. This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: `Delete ${u.name}?`,
+      body: `${kept}${lost}. This cannot be undone.`,
+      confirmLabel: "Delete player",
+      danger: true,
+    });
+    if (!ok) return;
     setError(null);
     try {
       await call(`/api/admin/users/${u.id}`, { method: "DELETE" });
@@ -322,6 +329,7 @@ function Roster({ call }: { call: Call }) {
 
   return (
     <Section title="Roster">
+      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input
@@ -389,6 +397,7 @@ function Roster({ call }: { call: Call }) {
 }
 
 function Devices({ call }: { call: Call }) {
+  const { confirm, dialog } = useConfirm();
   const [devices, setDevices] = useState<AdminDevice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -416,9 +425,13 @@ function Devices({ call }: { call: Call }) {
         ? `Its ${d.plays} ${d.plays === 1 ? "song stays" : "songs stay"} on record with ${d.owner_name}.`
         : `Its ${d.plays} unclaimed ${d.plays === 1 ? "song stays" : "songs stay"} on record, and nobody will be able to claim ${d.plays === 1 ? "it" : "them"} afterwards.`
       : "It has played nothing.";
-    if (!window.confirm(`Delete ${name}? ${cost} It comes back if that phone plays again.`)) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Delete ${name}?`,
+      body: `${cost} It comes back if that phone plays again.`,
+      confirmLabel: "Delete phone",
+      danger: true,
+    });
+    if (!ok) return;
     setError(null);
     try {
       await call(`/api/admin/devices/${d.mac_hash}`, { method: "DELETE" });
@@ -430,6 +443,7 @@ function Devices({ call }: { call: Call }) {
 
   return (
     <Section title="Phones">
+      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
         Un-claiming leaves the songs on record but removes DJ credit for them. Deleting
@@ -475,6 +489,7 @@ function Devices({ call }: { call: Call }) {
  * API-only; picking one vote out of a tally is not a phone-screen task.
  */
 function Plays({ call }: { call: Call }) {
+  const { confirm, dialog } = useConfirm();
   const [plays, setPlays] = useState<AdminPlay[] | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -491,7 +506,13 @@ function Plays({ call }: { call: Call }) {
   useEffect(load, [load]);
 
   const voidPlay = async (p: AdminPlay) => {
-    if (!window.confirm(`Void "${p.title}"? It stops counting toward every ranking.`)) return;
+    const ok = await confirm({
+      title: `Void "${p.title}"?`,
+      body: "It stays on record but stops counting toward every ranking.",
+      confirmLabel: "Void song",
+      danger: true,
+    });
+    if (!ok) return;
     await call(`/api/admin/plays/${p.id}/void`, { method: "POST" });
     load();
   };
@@ -500,13 +521,17 @@ function Plays({ call }: { call: Call }) {
   // cumulative, so without this a week of experiments sits on top of the first
   // real session forever.
   const clearAll = async () => {
-    // Two prompts, deliberately. This wipes every ranking on the site at once,
-    // and the count is the part worth reading — a muscle-memory OK on a single
-    // dialog is exactly how someone clears a real season.
-    if (!window.confirm(`Clear history? All ${total} ${total === 1 ? "song" : "songs"} stop counting toward every ranking, and the leaderboards go empty.`)) {
-      return;
-    }
-    if (!window.confirm("Last check — this cannot be undone from here.")) return;
+    // One dialog, not two. The second prompt existed because a native
+    // confirm's button just says OK, so the only way to slow someone down was
+    // to ask twice. A button that says "Clear 66 songs" is stronger protection
+    // than a second identical prompt, and does not train anyone to double-tap.
+    const ok = await confirm({
+      title: "Clear history?",
+      body: `All ${total} ${total === 1 ? "song stops" : "songs stop"} counting toward every ranking and the leaderboards go empty. The songs stay on record, but this cannot be undone from here.`,
+      confirmLabel: `Clear ${total} ${total === 1 ? "song" : "songs"}`,
+      danger: true,
+    });
+    if (!ok) return;
     setError(null);
     try {
       const r = await call<{ voided: number; spared: number }>(
@@ -540,6 +565,7 @@ function Plays({ call }: { call: Call }) {
         </button>
       }
     >
+      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
       {!plays ? (
         <Spinner />
@@ -619,6 +645,7 @@ function Section({
  * hang.
  */
 function Speaker({ call }: { call: Call }) {
+  const { confirm, dialog } = useConfirm();
   const [commands, setCommands] = useState<PiCommand[] | null>(null);
   const [allowed, setAllowed] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -637,7 +664,15 @@ function Speaker({ call }: { call: Call }) {
 
   const send = async (command: string) => {
     // Reboot cuts audio for whoever is DJing right now.
-    if (command === "reboot" && !confirm("Reboot the speaker? Music stops for about a minute.")) return;
+    if (command === "reboot") {
+      const ok = await confirm({
+        title: "Reboot the speaker?",
+        body: "Music stops for about a minute, and whoever is DJing is cut off.",
+        confirmLabel: "Reboot",
+        danger: true,
+      });
+      if (!ok) return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -658,6 +693,7 @@ function Speaker({ call }: { call: Call }) {
 
   return (
     <Section title="Speaker">
+      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
         The speaker checks in about once a minute, so a command can take that long to

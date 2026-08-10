@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { IconDjs, IconHistory, IconNow, IconSongs } from "./icons";
 import { useNavigate, useRoute } from "./router";
@@ -142,6 +142,109 @@ export function Tabs<T extends string>({
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * An in-page confirmation, replacing window.confirm.
+ *
+ * The native dialog is rendered by the browser, not the page: it cannot be
+ * styled, it is prefixed with the bare hostname
+ * ("locker-room-music.mmvinton17.workers.dev says"), and on a phone it reads
+ * more like a security warning than like part of the product. For a control
+ * that deletes a player or empties every leaderboard, looking untrustworthy is
+ * the wrong problem to have.
+ *
+ * The API stays promise-shaped so call sites read the same as before:
+ *
+ *     if (!(await confirm({ ... }))) return;
+ */
+export interface ConfirmOptions {
+  title: string;
+  body: ReactNode;
+  /** The destructive action, named. "OK" is what people click without reading. */
+  confirmLabel: string;
+  danger?: boolean;
+}
+
+export function useConfirm() {
+  const [options, setOptions] = useState<ConfirmOptions | null>(null);
+  const resolve = useRef<((ok: boolean) => void) | null>(null);
+
+  const confirm = useCallback(
+    (opts: ConfirmOptions) =>
+      new Promise<boolean>((res) => {
+        resolve.current = res;
+        setOptions(opts);
+      }),
+    [],
+  );
+
+  const settle = useCallback((ok: boolean) => {
+    setOptions(null);
+    // Always resolve, including on a cancel. A dismissed dialog that never
+    // settles leaves the caller awaiting forever, which looks like a hang
+    // rather than a decline.
+    resolve.current?.(ok);
+    resolve.current = null;
+  }, []);
+
+  const dialog = options ? (
+    <ConfirmDialog {...options} onSettle={settle} />
+  ) : null;
+
+  return { confirm, dialog };
+}
+
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  onSettle,
+}: ConfirmOptions & { onSettle: (ok: boolean) => void }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    // Focus lands on CANCEL, never on the destructive button — a stray Return
+    // keypress should walk away from the action, not into it.
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onSettle(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onSettle]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      // Tapping outside dismisses, matching every sheet on a phone. Guarded on
+      // the target so a click that started inside the card does not close it.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onSettle(false);
+      }}
+    >
+      <div className="modal" role="alertdialog" aria-modal="true" aria-label={title}>
+        <h2 className="t-section" style={{ marginBottom: 8 }}>
+          {title}
+        </h2>
+        <p className="t-sub" style={{ marginBottom: 18 }}>
+          {body}
+        </p>
+        <div className="modal-actions">
+          <button ref={cancelRef} className="btn" onClick={() => onSettle(false)}>
+            Cancel
+          </button>
+          <button
+            className={"btn is-primary" + (danger ? " is-destructive" : "")}
+            onClick={() => onSettle(true)}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { normalize } from "./trackKey";
 import { PI_COMMANDS, isPiCommand } from "./piControl";
 import { runBackup, listBackups } from "./backup";
 import { lookupArtwork } from "./artwork";
+import { isVoteWindowOpen } from "./voteWindow";
+import type { PlayRow } from "./types";
 
 export const admin = new Hono<{ Bindings: Env }>();
 
@@ -289,13 +291,35 @@ admin.post("/api/admin/plays/:id/void", async (c) => {
  * room that is mid-vote on it, which is a confusing way to lose a song.
  */
 admin.post("/api/admin/plays/void-all", async (c) => {
-  const r = await c.env.DB.prepare(
-    "UPDATE plays SET voided = 1 WHERE voided = 0 AND ended_at IS NOT NULL",
-  ).run();
-  const stillPlaying = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM plays WHERE voided = 0 AND ended_at IS NULL",
-  ).first<{ n: number }>();
-  return c.json({ ok: true, voided: r.meta.changes ?? 0, spared: stillPlaying?.n ?? 0 });
+  // "Still on the speaker" is isVoteWindowOpen, NOT `ended_at IS NULL`.
+  //
+  // That distinction is the whole correctness of this endpoint. A play the Pi
+  // opened and never closed — killed by a listener restart mid-song, so the
+  // close never reached the outbox — also has a null ended_at, and production
+  // had six of them, the oldest five days old.
+  //
+  // Sparing those was worse than cosmetic. /api/history requires ended_at, so
+  // they were invisible; but `counted` DEFAULTS to 1, and the leaderboards
+  // filter on `counted = 1 AND voided = 0`, so they had been quietly inflating
+  // DJ play counts and dragging track scores down with zero votes the whole
+  // time. Clearing history has to reach them, and now does.
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM plays WHERE voided = 0",
+  ).all<PlayRow>();
+  const live = results.filter((p) => isVoteWindowOpen(p));
+  const liveIds = live.map((p) => p.id);
+
+  // Usually zero or one id, so the NOT IN stays tiny. Built with placeholders
+  // rather than interpolation — these are database values, not literals.
+  const holes = liveIds.map(() => "?").join(",");
+  const sql = liveIds.length
+    ? `UPDATE plays SET voided = 1 WHERE voided = 0 AND id NOT IN (${holes})`
+    : "UPDATE plays SET voided = 1 WHERE voided = 0";
+  const r = await c.env.DB.prepare(sql)
+    .bind(...liveIds)
+    .run();
+
+  return c.json({ ok: true, voided: r.meta.changes ?? 0, spared: liveIds.length });
 });
 
 admin.post("/api/admin/votes/:id/void", async (c) => {

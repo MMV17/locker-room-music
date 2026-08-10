@@ -68,11 +68,12 @@ export function isVoteWindowOpen(play: PlayRow, now: number = Date.now()): boole
  * still stamping keepalive_at, and a play the Pi opened and never closed falls
  * out on the wall-clock fallback instead of hanging around forever.
  *
- * NOTE this says nothing about whether a phone is CONNECTED to the speaker.
- * The Pi knows — SessionManager tracks mac, alias and connected_at — but that
- * never reaches the server, because the beacon only carries the open play. A
- * connected phone playing nothing is indistinguishable here from no phone at
- * all. Closing that gap needs a Pi deploy; see STATE.md.
+ * NOTE this says nothing about whether a phone is CONNECTED to the speaker,
+ * and deliberately still does not. That gap was closed elsewhere on
+ * 2026-08-09: the beacon now carries who holds the aux and who is waiting, and
+ * /api/now exposes it as `aux`. It is kept out of HERE because this function
+ * answers "can this song still be voted on", which is a question about the
+ * song and not about the room.
  */
 export function presentablePlay(play: PlayRow | null, now: number = Date.now()): PlayRow | null {
   if (!play) return null;

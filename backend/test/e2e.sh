@@ -107,6 +107,27 @@ gen_id() {
     printf 'test-%s-%s-%s\n' "$$" "$(date +%s)" "$RANDOM$RANDOM"
   fi
 }
+
+# /api/pi/beacon is NOT read-only: it hands out any queued command. So a beacon
+# sent from a test that is not about commands will silently swallow one — which
+# broke five assertions in "pi remote control" and wedged the NEXT run's queue,
+# because the drain there expects to be the first thing to see a leftover.
+#
+# Any beacon outside that section goes through here, which reports back
+# whatever it is handed, exactly as a real Pi would.
+beacon() {
+  local resp id
+  resp=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+    -H 'content-type: application/json' -d "$1")
+  id=$(echo "$resp" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  if [ -n "$id" ]; then
+    curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
+      -H 'content-type: application/json' \
+      -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$id\",\"ok\":true,\"output\":\"drained by a non-command beacon\"}}" > /dev/null
+  fi
+  printf '%s' "$resp"
+}
+
 PLAY_ID=$(gen_id)
 MAC_PREFIX="5C:AD:BA:F0"
 MAC_TAIL=$(printf '%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)))
@@ -190,6 +211,59 @@ HASH=$(echo "$UNCLAIMED" | sed -n 's/.*"mac_hash":"\([^"]*\)".*/\1/p')
 curl -s -b "$JAR" -X POST "$BASE/api/devices/$HASH/claim" > /dev/null
 code=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X POST "$BASE/api/devices/$HASH/claim")
 [ "$code" = "409" ] && ok "double claim rejected" || bad "double claim" "got $code"
+
+# NOTE ON PLACEMENT: /api/pi/beacon is not a read-only endpoint — it hands out
+# any queued command. Run after "pi remote control" these beacons swallowed the
+# commands those tests had just queued and left them outstanding, which failed
+# five assertions there and wedged the NEXT run's queue too. It lives here, before
+# anything queues a command, and must stay ahead of that section.
+echo "== who has the aux =="
+# The Pi reports the holder and the waiting queue on every beacon. The site
+# needs it so the "Nothing playing" screen stops telling a blocked player to
+# connect over Bluetooth.
+#
+# DEVICE_MAC is Jake's claimed phone, so the holder must resolve to a PERSON,
+# not just a phone alias.
+WAIT_MAC="$MAC_PREFIX:$(printf '%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)))"
+beacon "{\"speaker_name\":\"AuxGoat\",\"aux\":{\"holder\":{\"mac\":\"$DEVICE_MAC\",\"alias\":\"Jake's iPhone\"},\"waiting\":[{\"mac\":\"$WAIT_MAC\",\"alias\":\"Visitor phone\"}]}}" > /dev/null
+
+AUX=$(curl -s -b "$JAR" "$BASE/api/now")
+echo "$AUX" | grep -q "\"name\":\"$FIRST $LAST\"" \
+  && ok "the aux holder resolves to a person, not a phone" || bad "aux holder name" "$AUX"
+echo "$AUX" | grep -q '"is_you":true' \
+  && ok "the holder is told it is them" || bad "is_you" "$AUX"
+echo "$AUX" | grep -q '"waiting":1' \
+  && ok "the waiting queue is reported" || bad "waiting count" "$AUX"
+
+# Non-negotiable #3 again: a raw MAC must never leave the API, and this is a
+# brand new path that carries them.
+echo "$AUX" | grep -q "$DEVICE_MAC" \
+  && bad "raw MAC absent from the aux report" "leaked: $DEVICE_MAC" \
+  || ok "raw MAC absent from the aux report"
+echo "$AUX" | grep -q "$WAIT_MAC" \
+  && bad "raw waiting MAC absent from the API" "leaked" \
+  || ok "raw waiting MAC absent from the API"
+
+# Jake is the holder, so he is not waiting. Nobody should see the waiting
+# banner just because somebody is.
+echo "$AUX" | grep -q '"you_are_waiting":false' \
+  && ok "the holder is not told they are waiting" || bad "you_are_waiting" "$AUX"
+
+# Now flip it: Jake's phone is the one waiting.
+beacon "{\"speaker_name\":\"AuxGoat\",\"aux\":{\"holder\":{\"mac\":\"$WAIT_MAC\",\"alias\":\"Visitor phone\"},\"waiting\":[{\"mac\":\"$DEVICE_MAC\",\"alias\":\"Jake's iPhone\"}]}}" > /dev/null
+FLIPPED=$(curl -s -b "$JAR" "$BASE/api/now")
+echo "$FLIPPED" | grep -q '"you_are_waiting":true' \
+  && ok "the waiting player is told it is them" || bad "you_are_waiting flipped" "$FLIPPED"
+# An unclaimed holder has no person to name, so the alias carries it.
+echo "$FLIPPED" | grep -q '"alias":"Visitor phone"' \
+  && ok "an unclaimed holder is named by its phone" || bad "holder alias" "$FLIPPED"
+
+# Nobody connected at all means the aux is FREE, and the site can only learn
+# that from a write. A stale holder would keep telling everyone to wait.
+beacon '{"speaker_name":"AuxGoat","aux":{"holder":null,"waiting":[]}}' > /dev/null
+FREE=$(curl -s -b "$JAR" "$BASE/api/now")
+echo "$FREE" | grep -q '"holder":null' \
+  && ok "an empty room reports the aux as free" || bad "aux freed" "$FREE"
 
 echo "== leaderboards =="
 DJS=$(curl -s -b "$JAR" "$BASE/api/leaderboard/djs")
@@ -459,60 +533,6 @@ curl -s "$BASE/api/admin/plays" -H "X-Admin-Password: $ADMIN_PW" | grep -q "$DOO
 
 rm -f "$DJAR"
 
-echo "== who has the aux =="
-# The Pi reports the holder and the waiting queue on every beacon. The site
-# needs it so the "Nothing playing" screen stops telling a blocked player to
-# connect over Bluetooth.
-#
-# DEVICE_MAC is Jake's claimed phone, so the holder must resolve to a PERSON,
-# not just a phone alias.
-WAIT_MAC="$MAC_PREFIX:$(printf '%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)))"
-curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' \
-  -d "{\"speaker_name\":\"AuxGoat\",\"aux\":{\"holder\":{\"mac\":\"$DEVICE_MAC\",\"alias\":\"Jake's iPhone\"},\"waiting\":[{\"mac\":\"$WAIT_MAC\",\"alias\":\"Visitor phone\"}]}}" > /dev/null
-
-AUX=$(curl -s -b "$JAR" "$BASE/api/now")
-echo "$AUX" | grep -q "\"name\":\"$FIRST $LAST\"" \
-  && ok "the aux holder resolves to a person, not a phone" || bad "aux holder name" "$AUX"
-echo "$AUX" | grep -q '"is_you":true' \
-  && ok "the holder is told it is them" || bad "is_you" "$AUX"
-echo "$AUX" | grep -q '"waiting":1' \
-  && ok "the waiting queue is reported" || bad "waiting count" "$AUX"
-
-# Non-negotiable #3 again: a raw MAC must never leave the API, and this is a
-# brand new path that carries them.
-echo "$AUX" | grep -q "$DEVICE_MAC" \
-  && bad "raw MAC absent from the aux report" "leaked: $DEVICE_MAC" \
-  || ok "raw MAC absent from the aux report"
-echo "$AUX" | grep -q "$WAIT_MAC" \
-  && bad "raw waiting MAC absent from the API" "leaked" \
-  || ok "raw waiting MAC absent from the API"
-
-# Jake is the holder, so he is not waiting. Nobody should see the waiting
-# banner just because somebody is.
-echo "$AUX" | grep -q '"you_are_waiting":false' \
-  && ok "the holder is not told they are waiting" || bad "you_are_waiting" "$AUX"
-
-# Now flip it: Jake's phone is the one waiting.
-curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' \
-  -d "{\"speaker_name\":\"AuxGoat\",\"aux\":{\"holder\":{\"mac\":\"$WAIT_MAC\",\"alias\":\"Visitor phone\"},\"waiting\":[{\"mac\":\"$DEVICE_MAC\",\"alias\":\"Jake's iPhone\"}]}}" > /dev/null
-FLIPPED=$(curl -s -b "$JAR" "$BASE/api/now")
-echo "$FLIPPED" | grep -q '"you_are_waiting":true' \
-  && ok "the waiting player is told it is them" || bad "you_are_waiting flipped" "$FLIPPED"
-# An unclaimed holder has no person to name, so the alias carries it.
-echo "$FLIPPED" | grep -q '"alias":"Visitor phone"' \
-  && ok "an unclaimed holder is named by its phone" || bad "holder alias" "$FLIPPED"
-
-# Nobody connected at all means the aux is FREE, and the site can only learn
-# that from a write. A stale holder would keep telling everyone to wait.
-curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" \
-  -H 'content-type: application/json' \
-  -d '{"speaker_name":"AuxGoat","aux":{"holder":null,"waiting":[]}}' > /dev/null
-FREE=$(curl -s -b "$JAR" "$BASE/api/now")
-echo "$FREE" | grep -q '"holder":null' \
-  && ok "an empty room reports the aux as free" || bad "aux freed" "$FREE"
-
 echo "== clearing history =="
 # The leaderboards are cumulative, so a test run sits on top of the first real
 # session forever without this. Voids rather than deletes: a voided row drops
@@ -549,6 +569,35 @@ echo "$APLAYS" | grep -q "$PLAY_ID" \
 # And the live one is untouched, so a second clear has something to do later.
 echo "$APLAYS" | grep -q "\"id\":\"$LIVE_PLAY\"[^}]*\"voided\":0" \
   && ok "the live song is still counting" || bad "live song voided" "$APLAYS"
+
+# A play the Pi opened and NEVER closed. Production had six, the oldest five
+# days old — killed by a listener restart mid-song, so the close never reached
+# the outbox. They have a null ended_at exactly like the live song does, which
+# is why "spare the live one" cannot be written as "spare null ended_at".
+#
+# Sparing them was worse than untidy: /api/history requires ended_at so they
+# were invisible, but `counted` DEFAULTS to 1 and the leaderboards filter on
+# `counted = 1 AND voided = 0`, so they had been quietly inflating DJ play
+# counts and dragging track scores down with zero votes.
+# Two minutes old with a one-second duration, NOT hours old: the window closes
+# at started + duration + 30s so this is long expired, while still sorting into
+# the 50 rows /api/admin/plays returns. Dating it three hours back pushed it off
+# the end of that list and the assertion below could not see it at all.
+STALE_PLAY=$(gen_id)
+LONG_AGO=$(date -u -v-2M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"play_id\":\"$STALE_PLAY\",\"device_mac\":\"$DEVICE_MAC\",\"title\":\"Orphan\",\"artist\":\"Never Closed\",\"duration_ms\":1000,\"started_at\":\"$LONG_AGO\"}" > /dev/null
+
+curl -s -X POST "$BASE/api/admin/plays/void-all" -H "X-Admin-Password: $ADMIN_PW" > /dev/null
+STALE_CHECK=$(curl -s "$BASE/api/admin/plays" -H "X-Admin-Password: $ADMIN_PW")
+echo "$STALE_CHECK" | grep -q "\"id\":\"$STALE_PLAY\"[^}]*\"voided\":1" \
+  && ok "a play that was never closed is cleared too" \
+  || bad "stale open play survived the clear" "$STALE_CHECK"
+
+# And the genuinely live one still is not, on the same pass.
+echo "$STALE_CHECK" | grep -q "\"id\":\"$LIVE_PLAY\"[^}]*\"voided\":0" \
+  && ok "the live song survived that same clear" || bad "live song voided" "$STALE_CHECK"
 
 AGAIN=$(curl -s -X POST "$BASE/api/admin/plays/void-all" -H "X-Admin-Password: $ADMIN_PW")
 echo "$AGAIN" | grep -q '"voided":0' \

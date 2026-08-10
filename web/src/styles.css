@@ -1076,3 +1076,52 @@ input {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Confirmation dialog
+ *
+ * Replaces window.confirm, which the browser draws itself: unstyleable,
+ * prefixed with the bare hostname, and on a phone indistinguishable from a
+ * security warning. See useConfirm in components.tsx.
+ * ------------------------------------------------------------------ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  /* Enough to sit the card forward without hiding which screen you are on —
+     the dialog names a player or a count, and the list behind it is the
+     context for that. */
+  background: rgba(20, 23, 28, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-lift);
+  padding: 22px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-actions .btn {
+  flex: 1;
+}
+
+/* Destructive confirm. Red rather than the team colour: this is the one place
+   the brand must not make an irreversible action look inviting, and it is the
+   same reason the thumbs stay green and red whatever the school picks. */
+.btn.is-primary.is-destructive {
+  background: var(--down);
+  color: #ffffff;
+}
