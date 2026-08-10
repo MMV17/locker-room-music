@@ -1031,6 +1031,17 @@ input {
   color: var(--up);
 }
 
+/* "You're waiting for the aux." Deliberately neutral rather than red or
+   green: nothing has gone wrong and nothing has succeeded, someone is just
+   ahead of you. Red would read as an error the player caused. */
+.banner.is-info {
+  background: var(--hairline);
+  /* --ink-2, not --muted: muted on this background is about 2.3:1, which is
+     unreadable for a line whose whole job is explaining why nothing happened.
+     ink-2 clears 6.5:1 on the same fill. */
+  color: var(--ink-2);
+}
+
 .spinner {
   width: 26px;
   height: 26px;

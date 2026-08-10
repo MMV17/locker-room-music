@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get, post } from "./../api";
-import type { MyDj, NowPlay, NowResponse } from "./../api";
+import type { AuxState, MyDj, NowPlay, NowResponse } from "./../api";
 import { Artwork, Empty, Spinner, formatClock } from "./../components";
 import { IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
@@ -160,9 +160,10 @@ export function NowPlaying({ teamName }: { teamName: string }) {
         </header>
 
         {error && <div className="banner is-bad">{error}</div>}
+        <WaitingBanner aux={now?.aux ?? null} />
 
         {!play ? (
-          <NothingPlaying online={now?.speaker_online ?? false} />
+          <NothingPlaying online={now?.speaker_online ?? false} aux={now?.aux ?? null} />
         ) : (
           <>
             <Artwork
@@ -217,13 +218,57 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   );
 }
 
-function NothingPlaying({ online }: { online: boolean }) {
-  return online ? (
+/**
+ * The screen a blocked player is looking at.
+ *
+ * "Connect to AuxGoat over Bluetooth to DJ" was true when anyone could, and
+ * became a lie the moment one phone at a time was enforced — it told the one
+ * person who could NOT get audio to go and do the thing that would not work.
+ * So it asks who has the speaker before saying anything.
+ */
+function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null }) {
+  if (!online) {
+    return <Empty title="Speaker offline">Songs and votes resume when it reconnects.</Empty>;
+  }
+
+  const holder = aux?.holder;
+  if (holder && !holder.is_you) {
+    // Roster name when the phone is claimed, Bluetooth name when it is not —
+    // an unclaimed phone has nothing else, and naming it still beats silence.
+    const who = holder.name ?? holder.alias ?? "Someone else";
+    return (
+      <Empty title="Someone else has the aux">
+        {who} is connected. You can connect too — you&rsquo;ll be able to play once
+        they&rsquo;re done.
+      </Empty>
+    );
+  }
+
+  if (holder?.is_you) {
+    return <Empty title="You have the aux">Press play on your phone.</Empty>;
+  }
+
+  return (
     <Empty title="Nothing playing">
       Connect to <strong>AuxGoat</strong> over Bluetooth to DJ.
     </Empty>
-  ) : (
-    <Empty title="Speaker offline">Songs and votes resume when it reconnects.</Empty>
+  );
+}
+
+/**
+ * The only thing that tells a specific person the silence is about them.
+ *
+ * Shown while a song IS playing, because that is exactly when someone is
+ * waiting — and it reuses the banner slot under the header rather than adding
+ * a permanent line naming the holder, which would just repeat the DJ chip.
+ */
+function WaitingBanner({ aux }: { aux: AuxState | null }) {
+  if (!aux?.you_are_waiting) return null;
+  return (
+    <div className="banner is-info">
+      You&rsquo;re connected, but {aux.holder?.name ?? aux.holder?.alias ?? "someone else"} has
+      the aux. Press play once they&rsquo;re done and it&rsquo;s yours.
+    </div>
   );
 }
 

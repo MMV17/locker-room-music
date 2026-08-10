@@ -246,6 +246,31 @@ class SessionManager:
             }
         return None
 
+    def aux_state(self) -> dict[str, Any]:
+        """Who has the speaker, and who is connected but cannot be heard.
+
+        The site needs this to stop telling a blocked player to connect. It is
+        only answerable because a waiting phone STAYS connected — under the
+        old design it was hung up on, so there was nothing to report but a
+        refusal that had already happened.
+
+        MACs go out raw and the server hashes them with MAC_SALT, exactly as it
+        does for a play. That is what lets it name the person rather than the
+        phone, when the phone has been claimed.
+        """
+        holder = self._sessions.get(self._aux_path or "")
+        return {
+            "holder": {"mac": holder.mac, "alias": holder.alias} if holder else None,
+            # Oldest first, so "you are next" means something. Dict order would
+            # follow whatever BlueZ happened to announce, which is not the
+            # queue anyone in the room experienced.
+            "waiting": [
+                {"mac": s.mac, "alias": s.alias}
+                for s in sorted(self._sessions.values(), key=lambda s: s.connected_at)
+                if s is not holder
+            ],
+        }
+
     # -- BluezWatcher.LifecycleSink protocol --------------------------------
 
     async def on_device_connected(self, device_path: str, mac: str, alias: str) -> None:

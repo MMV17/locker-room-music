@@ -15,11 +15,15 @@ from lockerroom.control import play_signature  # noqa: E402
 
 
 class FakeSessions:
-    def __init__(self, state):
+    def __init__(self, state, aux=None):
         self.state = state
+        self.aux = aux or {"holder": None, "waiting": []}
 
     def open_play_state(self):
         return self.state
+
+    def aux_state(self):
+        return self.aux
 
 
 class TestPlaySignature:
@@ -53,4 +57,40 @@ class TestPlaySignature:
 
         # A broken read must not kill the loop that also carries remote
         # commands — that is the only way back into an unreachable Pi.
+        assert play_signature(Broken()) is None
+
+
+class TestAuxInTheSignature:
+    """A phone that connects and is told to wait must not sit there for up to
+    a minute before the site can say so. The beacon wakes early on what the
+    site RENDERS, and whose turn it is is now part of that."""
+
+    HOLDER = {"holder": {"mac": "AA", "alias": "Mack's iPhone"}, "waiting": []}
+
+    def test_a_phone_starting_to_wait_is_a_change(self):
+        alone = FakeSessions(None, self.HOLDER)
+        joined = FakeSessions(None, {
+            "holder": {"mac": "AA", "alias": "Mack's iPhone"},
+            "waiting": [{"mac": "BB", "alias": "Ty's Pixel"}],
+        })
+        assert play_signature(alone) != play_signature(joined)
+
+    def test_the_aux_changing_hands_is_a_change(self):
+        a = FakeSessions(None, self.HOLDER)
+        b = FakeSessions(None, {"holder": {"mac": "BB", "alias": "Ty's Pixel"}, "waiting": []})
+        assert play_signature(a) != play_signature(b)
+
+    def test_an_idle_speaker_with_nobody_connected_is_still_nothing(self):
+        # Otherwise the loop would settle to the ACTIVE interval forever and
+        # beacon every 10s at an empty locker room.
+        assert play_signature(FakeSessions(None)) is None
+
+    def test_survives_an_aux_read_that_raises(self):
+        class Broken:
+            def open_play_state(self):
+                return None
+
+            def aux_state(self):
+                raise RuntimeError("d-bus went away")
+
         assert play_signature(Broken()) is None

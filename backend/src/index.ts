@@ -220,6 +220,42 @@ const touchHeartbeat = (env: Env, speakerName: string) =>
     .bind(speakerName, nowIso())
     .run();
 
+/** What the Pi reports about the aux. Raw MACs in, hashes only ever stored. */
+interface AuxReport {
+  holder?: { mac?: string; alias?: string } | null;
+  waiting?: { mac?: string; alias?: string }[];
+}
+
+/**
+ * Record who has the aux and who is waiting for it.
+ *
+ * MACs are hashed here and never stored raw, exactly as they are for a play —
+ * same salt, so the hash joins straight to `devices` and therefore to a
+ * person. That is what lets the site say "Mack has the aux" instead of naming
+ * a phone at someone.
+ *
+ * Written on every beacon, including when nothing is connected: the site has
+ * to be able to learn that the aux is FREE, and only a write can tell it that.
+ */
+async function recordAux(env: Env, speakerName: string, aux: AuxReport | undefined) {
+  if (!aux) return;
+  const holderHash = aux.holder?.mac
+    ? await hashMac(aux.holder.mac, env.MAC_SALT)
+    : null;
+  const waiting = [];
+  for (const w of aux.waiting ?? []) {
+    if (!w?.mac) continue;
+    waiting.push({ hash: await hashMac(w.mac, env.MAC_SALT), alias: w.alias ?? null });
+  }
+  await env.DB.prepare(
+    `UPDATE heartbeats
+        SET aux_holder_hash = ?, aux_holder_alias = ?, aux_waiting = ?
+      WHERE speaker_name = ?`,
+  )
+    .bind(holderHash, aux.holder?.alias ?? null, JSON.stringify(waiting), speakerName)
+    .run();
+}
+
 /**
  * Superseded by /api/pi/beacon, kept because the Pi's outbox may still hold
  * unsent rows addressed here. Removing it would strand them: the drain treats
@@ -244,10 +280,15 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       speaker_name?: string;
       result?: { id: string; ok: boolean; output?: string };
       current_play?: { id: string; status?: string; played_ms?: number };
+      aux?: AuxReport;
     }>()
     .catch(() => ({}) as any);
 
-  await touchHeartbeat(c.env, body.speaker_name ?? "AuxGoat");
+  const speakerName = body.speaker_name ?? "AuxGoat";
+  await touchHeartbeat(c.env, speakerName);
+  // After the heartbeat, never before: the UPDATE needs the row to exist, and
+  // on a brand new speaker the very first beacon is what creates it.
+  await recordAux(c.env, speakerName, body.aux);
 
   // The song still on the speaker. This is what keeps the vote window open
   // through a pause: without it the window closes on wall-clock time, which
@@ -455,6 +496,72 @@ app.get("/api/roster", requireSession, async (c) => {
  * they pile on, and the data stops measuring taste and starts measuring
  * social momentum.
  */
+/**
+ * Turn the speaker's raw aux report into something a screen can say.
+ *
+ * The holder is named by ROSTER NAME when their phone is claimed and by its
+ * Bluetooth alias when it is not — the alias is all that exists for an
+ * unclaimed phone, and "Molly's iPhone has the aux" still beats silence.
+ *
+ * `you_are_waiting` is the whole point of the waiting list being here. It is
+ * the only way a specific player learns that the reason nothing happened is
+ * them, rather than everyone reading a banner about somebody else.
+ */
+async function auxState(
+  env: Env,
+  hb: {
+    aux_holder_hash: string | null;
+    aux_holder_alias: string | null;
+    aux_waiting: string | null;
+  },
+  userId: string,
+) {
+  let waiting: { hash: string; alias: string | null }[] = [];
+  try {
+    waiting = hb.aux_waiting ? JSON.parse(hb.aux_waiting) : [];
+  } catch {
+    // Malformed JSON must not take down the whole now-playing screen for a
+    // decoration. An empty list reads as "nobody waiting", which is wrong but
+    // harmless, where a 500 is neither.
+    waiting = [];
+  }
+
+  const ownerOf = async (hash: string | null) =>
+    hash
+      ? await env.DB.prepare(
+          `SELECT TRIM(u.first_name || ' ' || u.last_name) AS name, u.id
+             FROM devices d JOIN users u ON u.id = d.user_id
+            WHERE d.mac_hash = ?`,
+        )
+          .bind(hash)
+          .first<{ name: string; id: string }>()
+      : null;
+
+  const holderOwner = await ownerOf(hb.aux_holder_hash);
+
+  let youAreWaiting = false;
+  for (const w of waiting) {
+    const owner = await ownerOf(w.hash);
+    if (owner?.id === userId) {
+      youAreWaiting = true;
+      break;
+    }
+  }
+
+  return {
+    // null means the aux is free — nobody is connected at all.
+    holder: hb.aux_holder_hash
+      ? {
+          name: holderOwner?.name ?? null,
+          alias: hb.aux_holder_alias,
+          is_you: holderOwner?.id === userId,
+        }
+      : null,
+    waiting: waiting.length,
+    you_are_waiting: youAreWaiting,
+  };
+}
+
 app.get("/api/now", requireSession, async (c) => {
   const userId = c.get("userId");
 
@@ -468,11 +575,24 @@ app.get("/api/now", requireSession, async (c) => {
   const play = presentablePlay(latest);
 
   const hb = await c.env.DB.prepare(
-    "SELECT last_seen_at FROM heartbeats ORDER BY last_seen_at DESC LIMIT 1",
-  ).first<{ last_seen_at: string }>();
+    `SELECT last_seen_at, aux_holder_hash, aux_holder_alias, aux_waiting
+       FROM heartbeats ORDER BY last_seen_at DESC LIMIT 1`,
+  ).first<{
+    last_seen_at: string;
+    aux_holder_hash: string | null;
+    aux_holder_alias: string | null;
+    aux_waiting: string | null;
+  }>();
   const speakerOnline = hb
     ? Date.now() - Date.parse(hb.last_seen_at) < 3 * 60_000
     : false;
+
+  // Who has the aux, resolved to a person where the phone has been claimed.
+  //
+  // Gated on speakerOnline: this is a snapshot of a moment, and a stale one is
+  // worse than none. Telling somebody "Molly has the aux" from a speaker that
+  // went offline twenty minutes ago would stop them connecting for no reason.
+  const aux = speakerOnline ? await auxState(c.env, hb!, userId) : null;
 
   const viewer = await c.env.DB.prepare(
     "SELECT id, TRIM(first_name || ' ' || last_name) AS name, jersey_number FROM users WHERE id = ?",
@@ -481,7 +601,16 @@ app.get("/api/now", requireSession, async (c) => {
     .first<{ id: string; name: string; jersey_number: string | null }>();
 
   if (!play) {
-    return c.json({ play: null, speaker_online: speakerOnline, viewer: viewer ?? null });
+    // `aux` matters MOST here. This is the "Nothing playing" screen, which
+    // used to tell everyone to connect over Bluetooth regardless of whether
+    // somebody else was already holding the speaker — and it is the exact
+    // screen a blocked player is looking at.
+    return c.json({
+      play: null,
+      speaker_online: speakerOnline,
+      viewer: viewer ?? null,
+      aux,
+    });
   }
 
   const track = await c.env.DB.prepare("SELECT * FROM tracks WHERE id = ?")
@@ -516,6 +645,8 @@ app.get("/api/now", requireSession, async (c) => {
 
   return c.json({
     speaker_online: speakerOnline,
+    // Who has the speaker. Null when it is offline or nothing has reported.
+    aux,
     // Who the caller is. The client cannot work this out on its own, and it
     // needs it for both the DJ state below and the switch-user affordance.
     viewer: viewer

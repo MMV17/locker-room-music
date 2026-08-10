@@ -84,7 +84,18 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 -- Liveness, so the site can show "speaker offline".
 CREATE TABLE IF NOT EXISTS heartbeats (
   speaker_name  TEXT PRIMARY KEY,
-  last_seen_at  TEXT NOT NULL
+  last_seen_at  TEXT NOT NULL,
+  -- Who has the aux, and who is connected but cannot be heard. Written by the
+  -- same beacon that writes last_seen_at, so it is exactly as fresh.
+  --
+  -- Here rather than in a table of its own: volatile state, one writer, no
+  -- history worth keeping, and reading it must never cost a join.
+  --
+  -- SHA-256(mac + MAC_SALT), never a raw MAC. Same hash as devices.mac_hash,
+  -- so it joins straight to a claimed device and therefore to a person.
+  aux_holder_hash   TEXT,
+  aux_holder_alias  TEXT,   -- Bluetooth name, for a phone nobody has claimed
+  aux_waiting       TEXT    -- JSON [{hash, alias}], oldest first
 );
 
 -- Remote control for the Pi (see POST /api/pi/beacon).

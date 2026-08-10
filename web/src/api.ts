@@ -100,10 +100,32 @@ export interface NowPlay {
      important rule in the project. Do not add them to this type. */
 }
 
+/**
+ * Who has the speaker right now, straight from the Pi.
+ *
+ * Null when the speaker is offline — a stale snapshot is worse than none, and
+ * naming a holder from twenty minutes ago would stop somebody connecting for
+ * no reason.
+ */
+export interface AuxState {
+  /** Null means the aux is free: nobody is connected at all. */
+  holder: {
+    /** Roster name, when their phone has been claimed. */
+    name: string | null;
+    /** Bluetooth name, which is all an unclaimed phone has. */
+    alias: string | null;
+    is_you: boolean;
+  } | null;
+  waiting: number;
+  /** Your own phone is connected but not audible. The reason nothing happened. */
+  you_are_waiting: boolean;
+}
+
 export interface NowResponse {
   speaker_online: boolean;
   viewer: Viewer | null;
   play: NowPlay | null;
+  aux: AuxState | null;
 }
 
 export interface Results {

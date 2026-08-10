@@ -878,3 +878,73 @@ async def test_a_handover_between_settled_phones_is_routed_at_once():
     # No settle_aux(): the point is that it is already routed.
     assert aux.hears(OTHER_MAC)
     assert not aux.hears(MAC)
+
+
+# -- reporting the aux to the site -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aux_state_names_the_holder_and_who_is_waiting():
+    mgr = manager(FakeStore())
+    await connect(mgr)
+    await connect_other(mgr)
+
+    state = mgr.aux_state()
+
+    assert state["holder"] == {"mac": MAC, "alias": "Mack's iPhone"}
+    assert state["waiting"] == [{"mac": OTHER_MAC, "alias": "Ty's Pixel"}]
+
+
+@pytest.mark.asyncio
+async def test_aux_state_with_nobody_connected():
+    mgr = manager(FakeStore())
+
+    assert mgr.aux_state() == {"holder": None, "waiting": []}
+
+
+@pytest.mark.asyncio
+async def test_a_lone_phone_is_the_holder_and_nobody_waits():
+    mgr = manager(FakeStore())
+    await connect(mgr)
+
+    state = mgr.aux_state()
+
+    assert state["holder"]["mac"] == MAC
+    assert state["waiting"] == []
+
+
+@pytest.mark.asyncio
+async def test_waiting_is_ordered_oldest_first():
+    """So "you are next" means something. Dict order would follow whatever
+    BlueZ happened to announce, which is not the queue anyone experienced."""
+    mgr = manager(FakeStore())
+    await connect(mgr)
+    await connect_other(mgr)
+    await mgr.on_device_connected("/org/bluez/hci0/dev_11_22_33_44_55_66",
+                                  "11:22:33:44:55:66", "Molly's iPhone")
+
+    from datetime import timedelta
+    mgr._sessions[OTHER].connected_at = now_() - timedelta(seconds=5)
+
+    waiting = [w["alias"] for w in mgr.aux_state()["waiting"]]
+    assert waiting == ["Ty's Pixel", "Molly's iPhone"]
+
+
+@pytest.mark.asyncio
+async def test_aux_state_follows_a_handover():
+    """The site reads this to say whose turn it is; it has to track the aux
+    actually moving, not just who connected first."""
+    from datetime import timedelta
+    mgr = manager(FakeStore())
+    await connect(mgr)
+    await connect_other(mgr)
+    old = now_() - timedelta(minutes=5)
+    for s in mgr._sessions.values():
+        s.connected_at = old
+        s.last_active_at = old
+
+    await mgr.on_track_changed(OTHER, track("Chun-Li", "Nicki Minaj"), 0)
+
+    state = mgr.aux_state()
+    assert state["holder"]["alias"] == "Ty's Pixel"
+    assert [w["alias"] for w in state["waiting"]] == ["Mack's iPhone"]

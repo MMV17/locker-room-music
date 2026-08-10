@@ -70,9 +70,18 @@ def _run(name: str) -> tuple[bool, str]:
 
 def play_signature(sessions) -> tuple | None:
     """
-    The part of the open play that the site *renders*: which song, and whether
-    it is playing. Position is excluded on purpose — it changes every
-    millisecond, and beaconing on that would be a busy loop.
+    The part of the speaker's state that the site *renders*: which song, whether
+    it is playing, who has the aux, and who is waiting for it. Position is
+    excluded on purpose — it changes every millisecond, and beaconing on that
+    would be a busy loop.
+
+    The aux belongs here for the same reason the pause did. A player whose
+    phone connects and is told to wait would otherwise sit looking at a screen
+    telling them to connect for up to a full beacon interval.
+
+    Returns None when there is nothing to say at all — no song and nobody
+    connected — so an empty locker room settles back to the slow interval
+    instead of beaconing every ten seconds all night.
     """
     if sessions is None:
         return None
@@ -80,10 +89,34 @@ def play_signature(sessions) -> tuple | None:
         state = sessions.open_play_state()
     except Exception:
         log.exception("could not read open play state")
+        state = None
+
+    try:
+        aux = sessions.aux_state()
+    except AttributeError:
+        # Older SessionManager, or a fake in a test that predates this.
+        aux = None
+    except Exception:
+        log.exception("could not read aux state")
+        aux = None
+
+    play_part = (state.get("id"), state.get("status")) if state else None
+
+    aux_part = None
+    if aux:
+        holder = aux.get("holder")
+        # Aliases are excluded: a phone renaming itself is not news the room
+        # needs within a second, and MACs alone keep this cheap to compare.
+        aux_part = (
+            holder.get("mac") if holder else None,
+            tuple(w.get("mac") for w in aux.get("waiting", [])),
+        )
+        if aux_part == (None, ()):
+            aux_part = None
+
+    if play_part is None and aux_part is None:
         return None
-    if state is None:
-        return None
-    return (state.get("id"), state.get("status"))
+    return (play_part, aux_part)
 
 
 async def beacon_loop(
@@ -133,6 +166,14 @@ async def beacon_loop(
                             payload["current_play"] = state
                     except Exception:
                         log.exception("could not read open play state")
+                    # Who has the aux and who is waiting for it, so the site can
+                    # stop telling a blocked player to connect. Sent every
+                    # beacon rather than only on change: the server stores the
+                    # latest, so a dropped beacon self-heals on the next one.
+                    try:
+                        payload["aux"] = sessions.aux_state()
+                    except Exception:
+                        log.exception("could not read aux state")
                 if pending_result is not None:
                     payload["result"] = pending_result
 
