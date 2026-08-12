@@ -1,0 +1,48 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP AUXGOAT_PWR
+D AuxGoat carrier: USB-C input, protection, 5V rail, analog 3V3 LDO
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_CM4
+D AuxGoat carrier: Raspberry Pi CM4 module and its two DF40 connectors
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_AUDIO
+D AuxGoat carrier: PCM5102A I2S DAC, -6dB pad, 3.5mm line out
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_LED
+D AuxGoat carrier: five-state RGB status indicator, plain GPIO
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_BTN
+D AuxGoat carrier: long-press provisioning button, debounced
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_SEC
+D AuxGoat carrier: ATECC608B secure element on I2C1
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_USB_DEV
+D AuxGoat carrier: rpiboot USB device port and nRPIBOOT jumper
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_USB_HOST
+D AuxGoat carrier: current-limited USB 2.0 host port
+K auxgoat carrier cm4
+$ENDCMP
+#
+$CMP AUXGOAT_THERM
+D AuxGoat carrier: fan header, not populated
+K auxgoat carrier cm4
+$ENDCMP
+#
+#End Doc Library

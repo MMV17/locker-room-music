@@ -1,0 +1,223 @@
+net,block,ref,pin,type,note
+# ---------------------------------------------------------------------------
+# AuxGoat carrier board - net-by-net connection table.
+#
+# This is the source of truth for the schematic. Work through it net by net in
+# Flux; every row is one pin on one net. flux/make-lib.py reads this file to
+# generate the block symbols, so the two cannot drift.
+#
+# CM4 pins are named by their DATASHEET SIGNAL NAME, never by connector pin
+# number. Pin numbers come from the official Raspberry Pi CM4 symbol - do not
+# hand-type 200 of them, that is how a board gets spun twice.
+#
+# type: power_in | power_out | passive | in | out | bidi | nc
+# ---------------------------------------------------------------------------
+
+# === VBUS / input protection ================================================
+VBUS,PWR,J3,VBUS,power_out,USB-C power in. All four VBUS pins tied together.
+VBUS,PWR,F1,1,passive,
+VBUS_F,PWR,F1,2,passive,Polyfuse 3A hold / 6A trip
+VBUS_F,PWR,D3,1,passive,TVS cathode
+VBUS_F,PWR,FB1,1,passive,
+GND,PWR,D3,2,passive,TVS anode
+GND,PWR,J3,GND,power_out,
+GND,PWR,J3,SHIELD,passive,Shield to GND through a 0R (fit) - see layout notes
+CC1,PWR,J3,CC1,passive,
+CC1,PWR,R1,1,passive,
+GND,PWR,R1,2,passive,5.1k - marks the board as a 3A sink to a Type-C source
+CC2,PWR,J3,CC2,passive,
+CC2,PWR,R2,1,passive,
+GND,PWR,R2,2,passive,5.1k
+NC,PWR,J3,DP1,nc,No data on the power port. Deliberate - see USB_DEV block.
+NC,PWR,J3,DN1,nc,
+NC,PWR,J3,SBU1,nc,
+NC,PWR,J3,SBU2,nc,
+
+# === +5V rail ===============================================================
++5V,PWR,FB1,2,passive,Ferrite 600R@100MHz 3A - keeps CM4 switcher noise off VBUS
++5V,PWR,C1,1,passive,100uF
++5V,PWR,C2,1,passive,100uF
++5V,PWR,C3,1,passive,10uF
++5V,PWR,C4,1,passive,100nF
+GND,PWR,C1,2,passive,
+GND,PWR,C2,2,passive,
+GND,PWR,C3,2,passive,
+GND,PWR,C4,2,passive,
++5V,PWR,D2,A,passive,Power LED green
+PWR_LED_K,PWR,D2,K,passive,
+PWR_LED_K,PWR,R3,1,passive,
+GND,PWR,R3,2,passive,1k
+
+# === +3V3_A - low-noise analog rail for the DAC =============================
++5V,PWR,U3,VIN,power_in,MCP1700T-3302E - separate rail so the audio does not
++3V3_A,PWR,U3,VOUT,power_out,share a plane with the CM4 switchers
+GND,PWR,U3,GND,power_in,
++5V,PWR,C5,1,passive,1uF input cap
+GND,PWR,C5,2,passive,
++3V3_A,PWR,C6,1,passive,1uF output cap - MCP1700 needs >=1uF ceramic to be stable
+GND,PWR,C6,2,passive,
++3V3_A,PWR,C7,1,passive,100nF
+GND,PWR,C7,2,passive,
+
+# === CM4 module =============================================================
++5V,CM4,J1,+5V,power_in,ALL +5V pins on both connectors. Do not populate a subset.
++5V,CM4,J2,+5V,power_in,
+GND,CM4,J1,GND,power_in,ALL GND pins on both connectors.
+GND,CM4,J2,GND,power_in,
++3V3_CM4,CM4,J2,+3.3V,power_out,Generated on the module. CONFIRM the carrier-side
++3V3_CM4,CM4,C10,1,passive,current budget in the CM4 datasheet before adding load.
+GND,CM4,C10,2,passive,100nF
+I2S_BCLK,CM4,J2,GPIO18,out,PCM_CLK
+I2S_LRCLK,CM4,J2,GPIO19,out,PCM_FS
+I2S_DOUT,CM4,J2,GPIO21,out,PCM_DOUT. GPIO20 (PCM_DIN) unused - output only.
+I2C1_SDA,CM4,J2,GPIO2,bidi,
+I2C1_SCL,CM4,J2,GPIO3,out,
+LED_R,CM4,J2,GPIO5,out,
+LED_G,CM4,J2,GPIO6,out,
+LED_B,CM4,J2,GPIO13,out,
+BTN_N,CM4,J2,GPIO16,in,Provisioning button. Active low.
+USB_OTG_DP,CM4,J1,USB_OTG_DP,bidi,rpiboot only
+USB_OTG_DM,CM4,J1,USB_OTG_DM,bidi,
+USB2_DP,CM4,J1,USB2_DP,bidi,The one general-purpose USB 2.0 host port
+USB2_DM,CM4,J1,USB2_DM,bidi,
+nRPIBOOT,CM4,J2,nRPIBOOT,in,Low = boot from USB. MANDATORY on an eMMC board.
+GLOBAL_EN,CM4,J2,GLOBAL_EN,in,Test point only. No reset button - see design doc.
+GLOBAL_EN,CM4,TP1,1,passive,
+RUN_PG,CM4,J2,RUN_PG,out,Power-good out. Test point.
+RUN_PG,CM4,TP2,1,passive,
+WL_nDISABLE,CM4,J2,WL_nDISABLE,in,
+WL_nDISABLE,CM4,R60,1,passive,
++3V3_CM4,CM4,R60,2,passive,10k pull-up. Belt and braces - this product is dead
+BT_nDISABLE,CM4,J2,BT_nDISABLE,in,without both radios and a floating disable pin
+BT_nDISABLE,CM4,R61,1,passive,is a silent way to lose one. 10k.
++3V3_CM4,CM4,R61,2,passive,
+NC,CM4,J1,HDMI*,nc,No display. Every HDMI/DSI/CSI pin left unconnected.
+NC,CM4,J1,PCIE*,nc,No PCIe. Saves four layers of length matching.
+NC,CM4,J1,ETH*,nc,No ethernet - see design doc for why that is on purpose.
+NC,CM4,J2,SD_*,nc,eMMC part. SDIO unused.
+
+# === Audio - PCM5102A I2S DAC ===============================================
++3V3_A,AUDIO,U1,DVDD,power_in,
++3V3_A,AUDIO,U1,AVDD,power_in,
++3V3_A,AUDIO,U1,CPVDD,power_in,
+GND,AUDIO,U1,DGND,power_in,
+GND,AUDIO,U1,AGND,power_in,
+GND,AUDIO,U1,CPGND,power_in,
+I2S_BCLK,AUDIO,U1,BCK,in,
+I2S_LRCLK,AUDIO,U1,LRCK,in,
+I2S_DOUT,AUDIO,U1,DIN,in,
+GND,AUDIO,U1,SCK,in,Tied low = use the internal PLL. This is the wiring the
+GND,AUDIO,U1,FMT,in,hifiberry-dac overlay expects. FMT low = I2S.
+GND,AUDIO,U1,FLT,in,Normal latency filter
+GND,AUDIO,U1,DEMP,in,De-emphasis off
+XSMT,AUDIO,U1,XSMT,in,High = unmuted
+XSMT,AUDIO,R14,1,passive,
++3V3_A,AUDIO,R14,2,passive,10k
+XSMT,AUDIO,C14,1,passive,100nF - RC delays unmute past the rail coming up so
+GND,AUDIO,C14,2,passive,the speaker does not pop on every boot
+CAPP,AUDIO,U1,CAPP,passive,
+CAPP,AUDIO,C11,1,passive,
+CAPM,AUDIO,C11,2,passive,2.2uF flying cap for the charge pump
+CAPM,AUDIO,U1,CAPM,passive,
+VNEG,AUDIO,U1,VNEG,power_out,
+VNEG,AUDIO,C12,1,passive,
+GND,AUDIO,C12,2,passive,2.2uF
++3V3_A,AUDIO,C13,1,passive,100nF x3 - one per supply pin, placed at the pin
+GND,AUDIO,C13,2,passive,
+OUTL,AUDIO,U1,OUTL,out,2.1 Vrms full scale - hot for a consumer aux input
+OUTL,AUDIO,R10,1,passive,
+AUDIO_L,AUDIO,R10,2,passive,470R series
+AUDIO_L,AUDIO,R12,1,passive,
+GND,AUDIO,R12,2,passive,470R shunt - fixed -6dB pad. See design doc.
+AUDIO_L,AUDIO,C15,1,passive,
+GND,AUDIO,C15,2,passive,470pF - RF shunt at the jack
+OUTR,AUDIO,U1,OUTR,out,
+OUTR,AUDIO,R11,1,passive,
+AUDIO_R,AUDIO,R11,2,passive,470R series
+AUDIO_R,AUDIO,R13,1,passive,
+GND,AUDIO,R13,2,passive,470R shunt
+AUDIO_R,AUDIO,C16,1,passive,
+GND,AUDIO,C16,2,passive,470pF
+AUDIO_L,AUDIO,J6,TIP,passive,3.5mm TRS out to the speaker aux in
+AUDIO_R,AUDIO,J6,RING,passive,
+GND,AUDIO,J6,SLEEVE,passive,
+
+# === Status LED =============================================================
+LED_R,LED,R20,1,passive,
+LED_R_A,LED,R20,2,passive,180R
+LED_R_A,LED,D1,RA,passive,
+LED_G,LED,R21,1,passive,
+LED_G_A,LED,R21,2,passive,100R - green Vf ~3.0V leaves little headroom at 3.3V
+LED_G_A,LED,D1,GA,passive,
+LED_B,LED,R22,1,passive,
+LED_B_A,LED,R22,2,passive,100R
+LED_B_A,LED,D1,BA,passive,
+GND,LED,D1,K,passive,Common cathode. GPIO high = lit.
+
+# === Provisioning button ====================================================
+BTN_RAW,BTN,SW1,1,passive,
+GND,BTN,SW1,2,passive,
+BTN_RAW,BTN,R30,1,passive,
++3V3_CM4,BTN,R30,2,passive,10k external pull-up - do not rely on the internal one
+BTN_RAW,BTN,C30,1,passive,
+GND,BTN,C30,2,passive,100nF debounce
+BTN_RAW,BTN,R31,1,passive,
+BTN_N,BTN,R31,2,passive,1k series - survives GPIO16 being misconfigured as an output
+
+# === Secure element =========================================================
++3V3_CM4,SEC,U2,VCC,power_in,
+GND,SEC,U2,GND,power_in,
+I2C1_SDA,SEC,U2,SDA,bidi,
+I2C1_SCL,SEC,U2,SCL,in,
+I2C1_SDA,SEC,R40,1,passive,
++3V3_CM4,SEC,R40,2,passive,4.7k. The CM4 module has NO I2C pull-ups - unlike a
+I2C1_SCL,SEC,R41,1,passive,Pi 4B where they are on the main board.
++3V3_CM4,SEC,R41,2,passive,4.7k
++3V3_CM4,SEC,C40,1,passive,100nF
+GND,SEC,C40,2,passive,
+
+# === USB device port - rpiboot / eMMC flashing ==============================
+USB_OTG_DP,USB_DEV,J4,DP1,bidi,
+USB_OTG_DM,USB_DEV,J4,DN1,bidi,
+NC,USB_DEV,J4,VBUS,nc,DELIBERATELY NOT CONNECTED. Board is powered from J3;
+GND,USB_DEV,J4,GND,power_out,tying both VBUS rails together back-feeds the host.
+CC1_D,USB_DEV,J4,CC1,passive,
+CC1_D,USB_DEV,R42,1,passive,
+GND,USB_DEV,R42,2,passive,5.1k
+CC2_D,USB_DEV,J4,CC2,passive,
+CC2_D,USB_DEV,R43,1,passive,
+GND,USB_DEV,R43,2,passive,5.1k
+USB_OTG_DP,USB_DEV,D4,IO1,passive,USBLC6-2SC6 ESD array
+USB_OTG_DM,USB_DEV,D4,IO2,passive,
+GND,USB_DEV,D4,GND,passive,
++5V,USB_DEV,D4,VBUS,passive,
+nRPIBOOT,USB_DEV,JP1,1,passive,Fit the jumper to boot from USB. Ships unfitted.
+GND,USB_DEV,JP1,2,passive,
+
+# === USB host port ==========================================================
++5V,USB_HOST,U4,IN,power_in,AP2553W6 current-limited switch
+USB_VBUS,USB_HOST,U4,OUT,power_out,
++3V3_CM4,USB_HOST,U4,EN,in,Always enabled. A GPIO here would let software power
+GND,USB_HOST,U4,GND,power_in,cycle a wedged dongle - see design doc open items.
+ILIM,USB_HOST,U4,ILIM,passive,
+ILIM,USB_HOST,R50,1,passive,
+GND,USB_HOST,R50,2,passive,Sets ~1.1A limit
+FLAG_N,USB_HOST,U4,FLG,out,
+FLAG_N,USB_HOST,R51,1,passive,
++3V3_CM4,USB_HOST,R51,2,passive,10k pull-up. Open-drain fault flag, test point only.
+USB_VBUS,USB_HOST,C50,1,passive,150uF - USB 2.0 requires >=120uF on a host port
+GND,USB_HOST,C50,2,passive,
+USB_VBUS,USB_HOST,C51,1,passive,100nF
+GND,USB_HOST,C51,2,passive,
+USB_VBUS,USB_HOST,J5,VBUS,power_in,USB-A host
+USB2_DP,USB_HOST,J5,DP,bidi,
+USB2_DM,USB_HOST,J5,DM,bidi,
+GND,USB_HOST,J5,GND,power_in,
+USB2_DP,USB_HOST,D5,IO1,passive,USBLC6-2SC6
+USB2_DM,USB_HOST,D5,IO2,passive,
+GND,USB_HOST,D5,GND,passive,
+USB_VBUS,USB_HOST,D5,VBUS,passive,
+
+# === Thermal - not populated ================================================
++5V,THERM,J7,1,power_out,2-pin JST-PH. Footprint only, DNP. Runs a 5V fan flat
+GND,THERM,J7,2,power_out,out if one is ever needed. No PWM - see design doc.
