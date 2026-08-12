@@ -32,6 +32,13 @@ scp -q -r "${REPO_ROOT}/pi/lockerroom" "${PI_HOST}:/tmp/lockerroom_pkg"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-listener.service" "${PI_HOST}:/tmp/lockerroom-listener.service"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-netwatch.service" "${PI_HOST}:/tmp/lockerroom-netwatch.service"
 scp -q "${REPO_ROOT}/pi/systemd/bluealsa-aplay-aux.conf" "${PI_HOST}:/tmp/bluealsa-aplay-aux.conf"
+# These two were installed by hand when the first box was built, and were
+# therefore missing from every deploy — which only showed up when a card died
+# and the rebuild produced a speaker that would not pair or stay visible.
+# Shipping them means a provisioned box plus one deploy is a complete speaker.
+scp -q "${REPO_ROOT}/pi/systemd/bt-agent.service" "${PI_HOST}:/tmp/bt-agent.service"
+scp -q "${REPO_ROOT}/pi/systemd/keep-discoverable.service" "${PI_HOST}:/tmp/keep-discoverable.service"
+scp -q "${REPO_ROOT}/pi/scripts/keep-discoverable.sh" "${PI_HOST}:/tmp/keep-discoverable.sh"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -40,6 +47,10 @@ sudo mv /tmp/lockerroom_pkg /opt/lockerroom/lockerroom
 sudo find /opt/lockerroom/lockerroom -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 sudo mv /tmp/lockerroom-listener.service /etc/systemd/system/lockerroom-listener.service
 sudo mv /tmp/lockerroom-netwatch.service /etc/systemd/system/lockerroom-netwatch.service
+# Auto-accept pairing, and stay visible to the next DJ.
+sudo mv /tmp/bt-agent.service /etc/systemd/system/bt-agent.service
+sudo mv /tmp/keep-discoverable.service /etc/systemd/system/keep-discoverable.service
+sudo install -m 755 /tmp/keep-discoverable.sh /usr/local/bin/keep-discoverable.sh
 # Teaches bluealsa-aplay to play one phone instead of mixing every connected
 # one. Restarted below so a changed drop-in actually takes effect; the listener
 # re-points it within a second of the next connection either way.
@@ -58,9 +69,16 @@ sudo systemctl restart lockerroom-listener
 # nothing and the journal still showed a PID from 49 minutes earlier.
 sudo systemctl enable lockerroom-netwatch
 sudo systemctl restart lockerroom-netwatch
+# Pairing and visibility. `enable` so they survive a reboot, `restart` because
+# --now only starts a stopped unit and would silently skip a changed one — the
+# same trap that made every netwatch deploy a no-op until 2026-08-09.
+sudo systemctl enable bt-agent keep-discoverable
+sudo systemctl restart bt-agent keep-discoverable
 sleep 3
 systemctl is-active lockerroom-listener
 systemctl is-active lockerroom-netwatch
+systemctl is-active bt-agent
+systemctl is-active keep-discoverable
 REMOTE
 
 echo "Deployed."
