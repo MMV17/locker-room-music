@@ -1262,6 +1262,19 @@ standard answers are blocked there, measured directly:
   the Worker 200.
 - SSH between guest clients is filtered: ICMP passes (ping succeeds, 0% loss)
   but TCP/22 times out, so a laptop on HCGuest cannot reach the Pi either.
+- **Outbound TCP/22 is blocked too, so `git push` does not work on campus.**
+  Measured 2026-08-12 from `10.104.252.169`: `ssh -T git@github.com` times out.
+  **Fixed — the remote now uses GitHub's SSH-over-443 endpoint**, which
+  authenticates fine on campus with the same key:
+
+  ```bash
+  git remote set-url origin ssh://git@ssh.github.com:443/MMV17/locker-room-music.git
+  ```
+
+  Verified in both directions from campus wifi: port 22 times out, port 443
+  returns `Hi MMV17! You've successfully authenticated`. So the filter is not
+  blocking GitHub — it is blocking the port. Do not set this back to
+  `git@github.com:...` or pushing from school silently stops working again.
 
 So SSH is reachable **only by physical access** (USB-C ethernet + Internet
 Sharing). For the common case there is now a control channel instead — see
