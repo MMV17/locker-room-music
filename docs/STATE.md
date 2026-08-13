@@ -1,8 +1,13 @@
 # Project state — resume here
 
-Last worked: **2026-08-08**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-08-12**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
+
+**THE SPEAKER IS DEAD. The Pi 4B stopped booting on 2026-08-12, and the BOARD
+is the failure, not the SD card** — read "The Pi 4B died" below before buying
+or diagnosing anything. Nothing server-side is affected: both Workers, D1, and
+every player, play and vote are untouched. What is gone is the box in the room.
 
 **THE CAMPUS FILTER IS BACK, AND IT BLOCKS THE WHOLE `auxgoat.com` ZONE** —
 including `hc.auxgoat.com`, not just the apex. Re-measured 2026-08-08; see
@@ -46,6 +51,121 @@ Build order status (spec section 10):
 | 7 | Admin and device claiming | **Done — deployed; claiming exercised once** |
 
 ---
+
+## The Pi 4B died (2026-08-12) — the board, not the card
+
+**The speaker does not boot from anything.** Diagnosed across a full session,
+the evidence is complete, and there is no field repair. Buy a replacement.
+
+Symptom: red PWR LED solid, green ACT LED gives **one flicker and then
+nothing**. It never reaches the firmware stage, so it never loads a kernel,
+never brings up a network, and **cannot be SSHed into — there is no operating
+system running on it.** `/var/db/dhcpd_leases` on the Mac still held only the
+Aug 9 lease and was never touched again, which is what "it did not boot" looks
+like from the other end. Do not go hunting for a networking fix.
+
+Everything tried, all producing the identical one-flicker stop:
+
+| boot device | result |
+|---|---|
+| original SD card (flashed 2026-08-02) | one flicker, stop |
+| SD card provisioned 2026-08-11 | one flicker, stop |
+| Imager **Bootloader / SD Card Boot** recovery image | one flicker, stop |
+| USB flash drive, SD slot empty | one flicker, stop |
+
+Power was the official Raspberry Pi 5.1V/3A USB-C supply throughout and the red
+LED stayed solid, so the 5V rail held above the 4.63V supervisor threshold the
+whole time. **Power is not implicated.**
+
+### The card was never the problem — and neither was the 08-11 card
+
+**This matters, because it means 2026-08-11 was misdiagnosed.** The original
+card, pulled from the dead Pi, measured on the Mac:
+
+- `diskutil list` — both partitions present and correctly typed: `bootfs`
+  (FAT32, 537MB) and `Linux` (63.3GB)
+- `diskutil info` — **`Media Read-Only: No`**. It has NOT flipped to hardware
+  write-protect
+- `dd if=/dev/rdisk4 of=/dev/null bs=1m` — **91.5 MB/s, clean, zero I/O errors**
+- macOS wrote `.fseventsd` to it mid-session, so it demonstrably accepts writes
+- `bootfs` holds every file a Pi 4B needs at sane sizes: `start4.elf`,
+  `fixup4.dat`, `config.txt`, `cmdline.txt`, `kernel8.img`, `initramfs8`,
+  `bcm2711-rpi-4-b.dtb`, `overlays/`
+
+That card is healthy. And `cmdline.txt` carries `fsck.repair=yes`, so even a
+genuinely corrupt ext4 root would have auto-repaired on the next boot rather
+than persisting.
+
+So the 08-11 event recorded in `provision.sh`'s header — *"a card stopped
+accepting writes"* — was **most likely the board failing gradually, not a worn
+card.** Linux mounts ext4 with `errors=remount-ro` by default: on any I/O error
+the kernel remounts the root filesystem read-only, and to a human that is
+indistinguishable from "the card stopped accepting writes." An hour went into a
+rebuild that probably fixed nothing. `provision.sh` is still worth having — but
+the reason it gives for existing is wrong.
+
+### The trap: a recovery card CANNOT exonerate the board
+
+Counter-intuitive, and it cost part of the session. `recovery.bin` is the Pi 4's
+mask-ROM fallback for a corrupt SPI EEPROM — but **it is loaded from the SD
+card.** A recovery card that does nothing therefore proves only that nothing
+reaches the SoC through the SD slot. It says nothing whatever about the EEPROM
+or the board.
+
+**USB boot is the test that uses an independent channel.** It does not touch the
+SD interface at all. Run it with the SD slot EMPTY before concluding anything —
+a card left in can hang the bootloader before it ever falls through to USB. Here
+it failed too, which is what makes this verdict conclusive rather than merely
+likely.
+
+### Any replacement needs ANALOG AUDIO OUT — this excludes the Pi 5
+
+`pi/systemd/bluealsa-aplay-aux.conf` runs `bluealsa-aplay -S $AUX_MAC` with
+**no `-D` flag**, so audio goes to the ALSA *default* device. With
+`dtparam=audio=on` in `config.txt` that is `snd_bcm2835` — the **3.5mm jack**.
+
+**The Pi 5 has no 3.5mm jack**, and no Pi 5 variant has one; Raspberry Pi
+removed analog output entirely. Putting this product on a Pi 5 means a USB DAC
+or an I2S HAT, a 5V/5A supply, and a `-D` flag or `/etc/asound.conf` to name a
+non-default device. The Pi 5 on the home network (see "There are TWO Raspberry
+Pis") is **not** a drop-in, for this reason.
+
+**Buy a Pi 4B.** It has the jack, and every AVRCP quirk in this document was
+found and fixed against this exact BlueZ-on-Pi-4B stack.
+
+### v2 hardware, in order of value
+
+- **Pi 4B**, 2GB is ample. The workload is one asyncio listener and a SQLite
+  outbox.
+- **Boot from a USB SSD, not an SD card and not a flash drive.** Cheap USB
+  flash drives are *worse* than SD cards here — SD is required to ship a
+  wear-levelling controller, cheap thumb drives frequently are not. A 120–240GB
+  SATA SSD in a USB3 enclosure has a real controller and SMART, so it can warn
+  before it dies. Check the bridge chipset: some JMicron/ASMedia revisions have
+  UAS bugs on the Pi 4, fixed with `usb-storage.quirks=<vid>:<pid>:u` in
+  `cmdline.txt`.
+- **A USB-to-TTL serial adapter (~$10). Highest operational value of anything
+  on this list.** `cmdline.txt` already carries `console=serial0,115200`, so an
+  adapter on GPIO 14/15 gives full firmware and kernel boot output. This whole
+  session was spent inferring machine state from one blinking LED; a serial
+  console would have made it ten minutes. For a box with no SSH on campus by
+  design, it is the only console that works when the network does not.
+- **A pre-provisioned spare boot device on a shelf.** Turns a mid-season death
+  into a swap instead of a rebuild.
+- **Consider an I2S DAC HAT.** The Pi 4's onboard jack is PWM-driven and
+  genuinely mediocre. This is the only item here that improves the *product*
+  rather than its reliability. Needs `-D` or `/etc/asound.conf`, and it
+  occupies the GPIO header.
+- **Think about the environment.** Nothing ever explained *why* this board
+  died. A locker room is humid, and an always-on box in a sealed case is hot.
+  Ventilation, heatsinks, and where it physically sits are all unexamined.
+- **Do NOT jump to a custom PCB yet.** See
+  `docs/superpowers/specs/2026-08-07-device-provisioning-design.md`, which
+  recommends CM4-on-a-carrier with eMMC and is right *for the product it
+  describes* — a sealed box a stranger sets up. That product does not exist
+  yet, and nobody has used this one even once. A USB SSD gets most of eMMC's
+  benefit this week. The trigger for the PCB is a **second school wanting a
+  box**, not this failure.
 
 ## Production deployment (as of 2026-08-03)
 
@@ -288,11 +408,21 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**Everything is deployed and working, and the database is a clean slate.** As
-of 2026-08-10: one phone on the aux enforced and verified on two real iPhones,
-the site says whose turn it is, admin can delete players and phones and clear
-history, the Pi runs on HCGuest with no cable. All 75 test plays are voided, so
-the first real session starts from zero.
+**THE SPEAKER IS DEAD — everything else is deployed and working.** The Pi 4B
+stopped booting on 2026-08-12 (see "The Pi 4B died" above). Both Workers, D1
+and the whole voting site are healthy and untouched, but nothing can be
+exercised end to end until there is a replacement box in the room.
+
+**First job: rebuild on a Pi 4B.** Flash a USB SSD, run
+`pi/scripts/provision.sh`, `nmcli device wifi connect HCGuest`, then copy
+`/etc/lockerroom/config.toml` from `backend/.secrets.local`. Leave
+`api_base_url` at `lockerroom.finestkindfarms.com` — it has survived both
+campus filter episodes untouched.
+
+The rest was true as of 2026-08-10 and still is server-side: one phone on the
+aux enforced and verified on two real iPhones, the site says whose turn it is,
+admin can delete players and phones and clear history. All 75 test plays are
+voided, so the first real session starts from zero.
 
 Open the front door at **`https://auxgoat.mmvinton17.workers.dev`**, type
 `CRUSADERS`. (That hostname, not `auxgoat.com`, anywhere the school filter is
