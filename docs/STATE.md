@@ -457,6 +457,37 @@ active.)
   called `AuxGoat` collides in a Bluetooth list, and a phone paired to one will
   auto-connect to another. `AuxGoat 4F2C` or `AuxGoat — Crusaders`. Same
   decision as the QR sticker, so decide both together.
+- **A wired input — "plug the phone in with a cord instead of pairing" — was
+  researched on 2026-08-17 and is NOT recommended.** Full write-up in
+  `docs/superpowers/specs/2026-08-17-wired-aux-input-feasibility.md`. The short
+  version, so it does not get re-investigated from scratch:
+
+  **The audio is easy and the audio is not the product.** A cord carries audio
+  and only audio. Every bit of what makes this a product rather than a speaker —
+  song title, artist, album, play boundaries, the 30s skip rule, whose phone it
+  was — arrives over AVRCP and dies with the Bluetooth connection. USB Audio
+  Class has no metadata channel; the protocol that carries track title over a
+  cable from an iPhone is **iAP2**, which needs Apple MFi licensing and an
+  authentication chip, so it is closed to us.
+
+  Also worth knowing before anyone tries it: **the Pi's 3.5mm jack is an output
+  only** — there is no analog in on the board, so an analog wired path needs a
+  USB sound card added. The one path needing no added hardware is USB gadget
+  mode (`dtoverlay=dwc2,dr_mode=peripheral` + `f_uac2`), and it costs the USB-C
+  power port — the board would have to be fed through the GPIO 5V header, which
+  bypasses the 4.63V supervisor that exonerated power in the 08-12 post-mortem.
+
+  Concrete damage if a metadata-less play is ever written: `trackKey("", "")` is
+  the single key `"|"`, so **every anonymous play in a season dedupes onto one
+  `(unknown)` track row** and it sits on the leaderboard collecting their votes.
+
+  **Two cheap experiments settle it and neither needs new hardware** — both in
+  the doc. (1) Pair a phone, start a song, then plug wired headphones into the
+  phone and change tracks: if `journalctl -u lockerroom-listener` still logs
+  `play opened`, iOS keeps sending AVRCP off a wired route and a hybrid is live.
+  (2) `avahi-browse -a` from the Pi on HCGuest: if mDNS crosses between guest
+  clients, `shairport-sync` gives a **non-Bluetooth path that keeps metadata**
+  (artist, title, album, cover art) and the whole cord question is moot.
 
 ### The speaker is called AuxGoat now (2026-08-09)
 
