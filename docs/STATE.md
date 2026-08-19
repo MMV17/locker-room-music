@@ -1,13 +1,18 @@
 # Project state — resume here
 
-Last worked: **2026-08-12**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-08-19**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
-**THE SPEAKER IS DEAD. The Pi 4B stopped booting on 2026-08-12, and the BOARD
-is the failure, not the SD card** — read "The Pi 4B died" below before buying
-or diagnosing anything. Nothing server-side is affected: both Workers, D1, and
-every player, play and vote are untouched. What is gone is the box in the room.
+**THE SPEAKER IS BEING REBUILT.** The old Pi 4B stopped booting on 2026-08-12
+and **the BOARD was the failure, not the SD card** — read "The Pi 4B died"
+below before diagnosing anything, because the obvious reading of that event is
+wrong twice over. Replacement hardware arrived 2026-08-19: **Pi 4B + SanDisk
+High Endurance 64GB + Argon ONE V2 case + CP2102 serial adapter.** See "What
+was actually bought" and "The Argon ONE V2 case" below.
+
+Nothing server-side was ever affected: both Workers, D1, and every player, play
+and vote are untouched. What was gone is only the box in the room.
 
 **THE CAMPUS FILTER IS BACK, AND IT BLOCKS THE WHOLE `auxgoat.com` ZONE** —
 including `hc.auxgoat.com`, not just the apex. Re-measured 2026-08-08; see
@@ -166,6 +171,282 @@ found and fixed against this exact BlueZ-on-Pi-4B stack.
   yet, and nobody has used this one even once. A USB SSD gets most of eMMC's
   benefit this week. The trigger for the PCB is a **second school wanting a
   box**, not this failure.
+
+### What was actually bought (2026-08-17, arrived 2026-08-19)
+
+The list above got narrowed to a real order. **The v2 box is a Pi 4B, a SanDisk
+High Endurance 64GB card, and an Argon ONE V2 case**, plus a CP2102 USB-serial
+adapter. No SSD, no DAC. The reasoning, because it is not obvious from the
+parts list:
+
+- **The endurance tier does not matter, and neither does SSD-vs-card, at this
+  write volume.** The box writes roughly 27 GB/year against endurance budgets
+  measured in tens of terabytes. High Endurance vs Max Endurance is ~10,000 vs
+  ~15,000 rated hours at 32GB and both are absurd overkill here. The SSD
+  recommendation above is still correct in principle; it is just not what was
+  killing this box, and the card was never the failure (see the correction
+  above). **Do not re-litigate the card.**
+- **Buy A1, not A2. A2 is actively worse on a Pi.** A2 depends on command
+  queuing, which the Pi's SD host controller does not implement, so A2 cards
+  fall back to A1-ish behaviour and some measure *slower* than a good A1 card.
+  The endurance rating measures large sequential writes — dashcam behaviour. A
+  Linux root filesystem does small random writes, which is what the A1 App
+  Performance Class (500 random write IOPS) actually covers.
+- **Where you buy matters far more than which you buy.** SanDisk is the most
+  counterfeited storage brand there is, and a fake card fails exactly the way
+  you are trying to avoid: works when flashed, dies in weeks. Bought first-party
+  from Best Buy, not a marketplace seller. 64GB over 32GB purely because
+  wear-levelling gets more blocks to spread across, for a couple of dollars.
+- **The DAC was deliberately deferred.** The chain is `phone -> Bluetooth A2DP
+  (lossy SBC, ~328 kbps) -> Pi -> amp -> tiled room`. The source is already
+  compressed and the room is hard and reflective; both cap the benefit long
+  before the DAC does. **Revisit only if somebody actually complains about
+  hiss** after a real session — that is a trigger, speculation is not.
+  - **If a DAC is ever added, set it as the system default in
+    `/etc/asound.conf`. Do NOT pass `-D` to `bluealsa-aplay`.** Every failure
+    path in `aux.py` and the systemd drop-in lands on plain `bluealsa-aplay -S`,
+    which plays to the ALSA default. Naming the DAC on the main path only leaves
+    the fallback pointing at a default device that no longer exists — which
+    silently converts the "never a silent speaker" invariant into a silent
+    speaker. Setting it as the default means every path inherits it, including
+    the ones nobody thought about.
+
+### The serial adapter (CP2102) — wiring, once, here
+
+CP2102 rather than CH340: it enumerates on modern macOS with no driver hunting.
+`cmdline.txt` already carries `console=serial0,115200`, so the only missing
+piece is `enable_uart=1` — **and the Argon setup script sets that for you**
+(see below), so on this box it is already handled.
+
+| adapter | Pi 40-pin header |
+|---|---|
+| GND | **pin 6** (GND) |
+| TX | **pin 10** (GPIO15 / RXD) |
+| RX | **pin 8** (GPIO14 / TXD) |
+
+TX and RX are **crossed** — that is correct, not a typo.
+
+- **Leave VCC/5V disconnected.** Power the Pi from its own supply. Connecting
+  both backfeeds power and is a good way to create a second dead Pi.
+- **3.3V logic**, if the board has a jumper.
+- **Do NOT use `dtoverlay=disable-bt`**, which every serial-console guide
+  recommends. It frees the good PL011 UART by turning off Bluetooth, which is
+  the entire product. `enable_uart=1` alone is enough: it pins the core clock so
+  the mini-UART's 115200 stays 115200 as the CPU scales.
+- **In the Argon case, pin 8 is shared with the case's power-cut monitor.**
+  Harmless as long as i2c code `0xff` is never sent — see "The case and the
+  serial adapter share pin 8" below.
+
+On the Mac: `ls /dev/cu.usbserial-*`, then `screen /dev/cu.usbserial-XXXX
+115200`. Exit with `Ctrl-A` then `K`.
+
+**Test it on the bench while the box is working.** The whole 2026-08-12 session
+was spent inferring machine state from one blinking LED. Finding a wiring
+mistake during the next outage is the failure this part exists to prevent.
+
+### A fresh image can boot with Bluetooth soft-blocked (2026-08-19)
+
+Found on the v2 box's first bare boot, on a stock Trixie flash. `rfkill` had
+`hci0` **soft blocked: yes** while wifi was clear.
+
+What it looks like, and why it is nasty: **every green light stays green.**
+`bluetooth.service` is active, the adapter enumerates, `bluetoothctl show`
+lists the right controller and advertises exactly the profiles this product
+needs (`Audio Sink`, `A/V Remote Control Target`). The only tells are
+`PowerState: off-blocked` in `show`, `power on` failing with
+`org.bluez.Error.Failed`, and any scan then failing `org.bluez.Error.NotReady`.
+No phone can see the speaker, and nothing anywhere says why.
+
+```bash
+rfkill list                      # look for "Soft blocked: yes" on hci0
+sudo rfkill unblock bluetooth
+```
+
+`provision.sh` now checks and unblocks this. systemd-rfkill persists the state,
+so it is a one-time fix — but **re-check it after any reboot during a build**,
+because a speaker that comes up blocked on campus is indistinguishable from a
+speaker that broke, and there is no SSH there to tell the difference.
+
+### The v2 box's addresses
+
+Recorded because `raspberrypi.local` ambiguity has cost a session before, and
+because these are how you identify the box on a LAN or in a Bluetooth list.
+Note these are **different interfaces** — do not confuse them, and do not
+confuse either with the old dead box's `e4:5f:01:c2:6e:a9`.
+
+| | address |
+|---|---|
+| static hostname | `auxgoat` (so `auxgoat.local`, not `raspberrypi.local`) |
+| wlan0 | `98:fe:54:34:14:12` |
+| Bluetooth controller | `98:fe:54:34:14:13` |
+
+The two are **consecutive**, and share the `98:FE:54` Raspberry Pi OUI. That is
+normal on a Pi 4 — wifi and Bluetooth get adjacent addresses — and it is
+convenient: sweeping a LAN for `98:fe:54:34:14:12` finds the box, and the
+Bluetooth address is that number plus one. The old dead board was
+`e4:5f:01:c2:6e:a9`, a different Raspberry Pi OUI entirely, so there is no way
+to confuse the two.
+
+**Mack's iPhone, for range testing:** `5C:AD:BA:F0:B2:61` (classic BR/EDR,
+stable — not the rotating BLE address it also advertises).
+
+## The Argon ONE V2 case (2026-08-19)
+
+Researched before assembly, because several things about it are load-bearing
+for *this* product specifically and are not obvious from the box.
+
+### The audio path survives, unchanged
+
+**This was the thing worth checking first, and it is fine.** The V2 ships a
+daughterboard that converts the micro-HDMI ports to full-size *and extends the
+Pi's own 3.5mm analog jack* to the rear of the case. So the rear jack is the
+Pi's `snd_bcm2835` output, and `bluealsa-aplay -S $AUX_MAC` with no `-D` still
+lands on it exactly as `bluealsa-aplay-aux.conf` assumes. Nothing in the audio
+config changes.
+
+**Ignore every "the 3.5mm jack needs the BLSTR DAC" result you will find.**
+That is the **V3/V5 (Pi 5)** case, where the Pi itself has no analog audio at
+all so the case has to supply a DAC. It does not apply to a V2 on a Pi 4B.
+
+### The setup script does more than advertised
+
+```bash
+curl https://download.argon40.com/argon1.sh | bash
+```
+
+Read the script before running it (2026-08-19, 822 lines). What it actually
+does, beyond the fan and button:
+
+- `raspi-config nonint do_i2c 0` — enables i2c, which the fan needs. Without it
+  the button works and **the fan silently does not.**
+- `do_serial_hw 0` — **sets `enable_uart=1`.** This is the serial-console
+  prerequisite, done for free. Note it enables the serial *hardware*, not a
+  getty; the kernel boot log arrives because `cmdline.txt` already names
+  `console=serial0,115200`.
+- `apt-get update && apt-get upgrade -y` **and `rpi-eeprom-update`.** This is
+  why the script must run on a blank image, before `provision.sh`, not on top
+  of a working listener.
+- Installs `argononed.service` plus a python daemon fetched at runtime.
+
+**Trixie:** older forum reports say the script fails on Trixie. The current
+version defaults to `CHECKGPIOMODE="libgpiod"` and installs `python3-libgpiod`
+rather than the `RPi.GPIO` path that broke on newer kernels, so those reports
+are probably stale — but this is **unverified on hardware**, so confirm the fan
+actually spins before trusting it. If it does fail, the fallback is a small i2c
+fan loop; that is a far cheaper problem than the alternative (see OS choice
+below).
+
+Default fan curve after install: 55°C -> 10%, 60°C -> 55%, 65°C -> 100%.
+
+### It does NOT come back after a power cut — fix this before it ships
+
+**Default Argon behaviour: power returns and the Pi stays OFF until a human
+presses the button.** For a box in a locker room, behind a filter, with no SSH,
+that is a silent end of season. Nothing in this repo can detect it, because
+nothing is running.
+
+Mode 2 ("Always ON"), device address `0x1a`:
+
+```bash
+sudo i2cdetect -y 1          # expect 1a to appear once the case is assembled
+sudo i2cset -y 1 0x01a 0xfe  # Mode 2 / Always ON   (0xfd = Mode 1 / default)
+```
+
+**The i2c code alone is reported not to stick.** Multiple users on Argon's own
+forum set Mode 2 and still had to press the button; the answer from Argon was
+that **an internal jumper also has to be moved.** Treat the i2c write and the
+jumper as one change, not two options.
+
+### The jumper: 3-pin header on the Argon board, 1-2 → 2-3
+
+**It is a dedicated 3-pin header on the Argon's own board. It is NOT the Pi's
+40-pin GPIO header.** Getting that wrong is expensive: on the Pi's header pin 2
+is **5V** and pin 3 is **GPIO2/SDA**, a 3.3V input that is also an i2c data
+line. Bridging those feeds 5V into a 3.3V GPIO and shorts an i2c bus.
+
+| jumper position | behaviour after a power cut |
+|---|---|
+| **1-2** (factory default) | Pi stays **off** until the button is pressed |
+| **2-3** | **Always ON** — power returns, the Pi boots by itself |
+
+**2-3 is what this box wants.** A speaker in a locker room that needs a human to
+press a button after every power blip is not a product.
+
+**Expect the fan to run at 100% while the jumper is on 2-3 and the Argon
+software is not yet installed.** That is normal, not a fault: with no daemon
+feeding it temperature the MCU defaults to full. It drops to the temperature
+curve as soon as `argon1.sh` has run and `argononed` is driving it — so do not
+chase a roaring fan between assembly and stage 3.
+
+**Then pull the wall plug on the bench and confirm it boots by itself.** Do not
+take this on trust; it is the single most expensive thing on this page to get
+wrong, and it is trivial to test while the box is on a desk.
+
+### The real risk to the product: 2.4GHz
+
+An aluminium shell plus copper ground pours around the Pi makes a partial
+Faraday cage. On the **M.2** variant this was severe enough to be measurable —
+PCB revisions before V2.2 could not hold a 2.4GHz connection 3.7m from an
+access point, while 5GHz was fine; Argon fixed it by clearing copper from both
+sides of the board over the antenna area. The plain V2 has no M.2 board and is
+the milder case, but the mechanism is the same and the Pi 4's antenna is etched
+into the PCB **right next to the micro-SD slot**, which is where case metal
+sits.
+
+**Why this matters here more than for a normal Pi project: Bluetooth is 2.4GHz
+exclusively.** Every other Pi-in-a-metal-case story ends "just use 5GHz." This
+product cannot. The speaker's entire job is holding an A2DP link to phones
+across a room, and HCGuest is 2.4GHz-capable but the *aux link* has no
+alternative band at all.
+
+**So range-test it, cased vs uncased, before it goes in the room.** Pair a phone
+at the far side of a room, watch for dropouts, and compare. If the case costs
+real range, the case loses — it is a cooling and tidiness upgrade, and the
+product is the radio.
+
+### The case and the serial adapter share pin 8 — know this before wiring
+
+The fan board extends the header up under the magnetic top cover, so the serial
+console does work with the case shut. But the Argon MCU uses **more of the
+header than a fan and a button would suggest**, and one of those pins is one
+the serial adapter needs. From Argon's own i2c-codes repo:
+
+| Argon function | GPIO | Physical pin |
+|---|---|---|
+| Power button | GPIO17 | 11 |
+| Shutdown monitor | GPIO4 | 7 |
+| IR receive / transmit | GPIO23 / GPIO22 | 16 / 15 |
+| Fan control (i2c) | GPIO0 / GPIO1 | 27 / 28 (ID EEPROM pins) |
+| **Monitor for power cut (TXD)** | **GPIO14** | **8** |
+
+**Pin 8 is the serial adapter's RX pin and the Argon's power-cut monitor at the
+same time.** In practice this is fine: the Pi drives pin 8 as an output, and
+both the adapter and the Argon are passive listeners on it — multiple listeners
+on one output line is normal. Pin 6 (GND) and pin 10 (GPIO15/RXD) are genuinely
+unused by the case.
+
+**But do NOT send i2c code `0xff`.** That puts the MCU into "watch UART TX
+voltage and cut power when it goes low" mode. With a serial console attached
+and pin 8 toggling constantly during boot logging, that is asking the case to
+cut power to a healthy Pi at an arbitrary moment. Only `0xfd` (Mode 1) and
+`0xfe` (Mode 2) should ever be sent to this box.
+
+Note also that the fan i2c is listed on **GPIO0/GPIO1 (pins 27/28)**, the ID
+EEPROM pins — not the usual pins 3/5. Users nonetheless find the MCU at `0x1a`
+on **bus 1**; if `i2cdetect -y 1` comes up empty, try `i2cdetect -y 0` before
+concluding the board is dead.
+
+### Other small things
+
+- **Assembly order matters**: SD card **out**, Pi into the bottom plate, seat
+  the daughterboard firmly onto *both* micro-HDMI ports and the 3.5mm jack,
+  thermal pads (peel *both* sides), then mate the GPIO header to the fan board.
+  A partly-seated daughterboard is the usual cause of "no HDMI" and would also
+  mean no audio here.
+- **The fan pulls room air through the box.** A locker room is humid, and
+  "environment" is still the only untested theory for why the first board died.
+  This case does not resolve that question — it changes it, and arguably makes
+  it worse. Worth revisiting if a second board dies.
 
 ## Production deployment (as of 2026-08-03)
 
@@ -408,16 +689,42 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**THE SPEAKER IS DEAD — everything else is deployed and working.** The Pi 4B
-stopped booting on 2026-08-12 (see "The Pi 4B died" above). Both Workers, D1
-and the whole voting site are healthy and untouched, but nothing can be
-exercised end to end until there is a replacement box in the room.
+**THE SPEAKER IS BEING REBUILT — everything else is deployed and working.**
+Both Workers, D1 and the whole voting site are healthy and untouched, but
+nothing can be exercised end to end until the replacement box is in the room.
 
-**First job: rebuild on a Pi 4B.** Flash a USB SSD, run
-`pi/scripts/provision.sh`, `nmcli device wifi connect HCGuest`, then copy
-`/etc/lockerroom/config.toml` from `backend/.secrets.local`. Leave
-`api_base_url` at `lockerroom.finestkindfarms.com` — it has survived both
+**BUILD IN PROGRESS as of 2026-08-19.** Stages 1-5 of
+`docs/runbook-v2-build.md` are **done and verified on hardware**: the box boots,
+the Argon script ran clean on Trixie, it **survives a power cut and reboots
+itself**, and the case costs **no measurable Bluetooth or wifi range**. Stage 6
+(serial console) is **parked unfinished** — see the runbook, and do not ship to
+campus without it. **Resume at stage 7, `provision.sh`.**
+
+Box as built: hostname `auxgoat`, `192.168.1.178` on the home LAN, reachable as
+`pi@auxgoat`. **`auxgoat.local` does not resolve** — use the bare name or the IP.
+
+**First job: build the v2 box.** The full bench procedure is
+`docs/runbook-v2-build.md` — follow that, not this paragraph. The short form,
+and the order is not arbitrary:
+
+```
+flash Trixie -> boot BARE and baseline the radio -> assemble the Argon case
+   -> argon1.sh -> Mode 2 + jumper + PROVE it survives a power cut
+   -> range-test cased vs uncased -> provision.sh -> join wifi
+   -> device_key into /etc/lockerroom/config.toml -> deploy.sh from the laptop
+```
+
+Leave `api_base_url` at `lockerroom.finestkindfarms.com` — it has survived both
 campus filter episodes untouched.
+
+**Flash Raspberry Pi OS Trixie (Debian 13) 64-bit, not Bookworm.** Trixie is
+both the newer release *and* the proven one here: the dead Pi ran Trixie with
+Python 3.13, and **every one of the eight AVRCP quirks documented below was
+found and fixed against that stack.** Bookworm ships **BlueZ 5.66 against
+Trixie's 5.82** — dropping back sixteen versions under code tuned on 5.82
+reintroduces the exact variable that cost the most to eliminate. The only thing
+Bookworm buys is a better-tested Argon fan script, and a fan script is a
+ten-line fallback; the AVRCP behaviour is not.
 
 The rest was true as of 2026-08-10 and still is server-side: one phone on the
 aux enforced and verified on two real iPhones, the site says whose turn it is,

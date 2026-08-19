@@ -9,9 +9,22 @@
 #   scp pi/scripts/provision.sh pi@<host>:
 #   ssh pi@<host> 'sudo bash provision.sh'
 #
-# Written 2026-08-11 after a card stopped accepting writes and the rebuild
-# turned out to be an hour of remembering which packages mattered. The second
-# box will need this too.
+# Written 2026-08-11 after what looked like a card that had stopped accepting
+# writes, and the rebuild turned out to be an hour of remembering which
+# packages mattered.
+#
+# CORRECTION (2026-08-12): that card was fine. It reads clean at 91.5 MB/s and
+# is not write-protected; the BOARD was failing, and ext4's default
+# `errors=remount-ro` made a dying board look exactly like a worn card. So the
+# reason this script was written is wrong. Keep the script anyway — the hour it
+# saves is real, and it is the only written record of which packages matter.
+# Just do not treat it as evidence that cards are the thing that kills this box.
+#
+# RUN THE ARGON CASE SCRIPT FIRST, if the box lives in an Argon ONE V2.
+# `argon1.sh` does `apt-get upgrade -y` and `rpi-eeprom-update`, which you want
+# happening on a blank image, not on top of a provisioned listener. It also
+# enables i2c and sets enable_uart=1, both of which you want anyway.
+# Order: flash -> boot bare -> assemble case -> argon1.sh -> THIS -> deploy.sh
 #
 # WHAT THIS DOES NOT DO, because both need a human:
 #   - wifi. Use `nmcli device wifi connect` or raspi-config; HCGuest is open,
@@ -51,6 +64,30 @@ echo "== the name phones see =="
 hostnamectl set-hostname --pretty "$SPEAKER_NAME"
 
 echo "== bluetooth adapter =="
+# rfkill first. A fresh Raspberry Pi OS image can come up with the Bluetooth
+# adapter SOFT-BLOCKED — found on the v2 box, 2026-08-19, on a stock Trixie
+# flash. `bluetoothctl show` reports `PowerState: off-blocked`, `power on`
+# fails with org.bluez.Error.Failed, and any scan then fails NotReady.
+#
+# This is worth asserting rather than assuming, because the failure is silent
+# in the worst way: bluetoothd is running, the unit is green, the adapter
+# enumerates and advertises the right UUIDs — and no phone can see the speaker.
+# On a box with no SSH on campus, that is indistinguishable from "it broke".
+#
+# systemd-rfkill persists the unblocked state across reboots, so this normally
+# runs once and is a no-op forever after. Left unguarded on purpose: if rfkill
+# is missing the adapter was never blocked in the first place.
+if command -v rfkill >/dev/null 2>&1; then
+  if rfkill list bluetooth | grep -q "Soft blocked: yes"; then
+    rfkill unblock bluetooth
+    echo "   bluetooth was soft-blocked — unblocked"
+  else
+    echo "   bluetooth not soft-blocked"
+  fi
+else
+  echo "   rfkill not present, skipping block check"
+fi
+
 # Class 0x200414 makes phones show this as a speaker rather than a generic
 # device. The timeouts being 0 is what keeps it permanently visible; BlueZ
 # still drops discoverability after some connect/disconnect cycles, which is
@@ -83,14 +120,15 @@ python3 -m venv /opt/lockerroom/venv
 /opt/lockerroom/venv/bin/pip install "dbus-fast>=2.21" "httpx>=0.27"
 
 echo "== stop grinding the SD card =="
-# The reason this script exists. A card died on 2026-08-11 after a week of
-# continuous logging: the filesystem was clean with zero errors, but writes had
-# stopped seven hours before the network did, which is what a worn card does.
+# Written when 2026-08-11 looked like a worn card. It was not — see the
+# CORRECTION at the top of this file. Keep this section regardless: continuous
+# journald writes to an SD card are a genuinely bad idea over a season, and
+# this costs nothing. It is prudence now, not a fix for a diagnosed fault.
 #
 # Volatile journal + a size cap keeps the log in RAM. The cost is that the
 # previous boot's log does not survive a reboot, which is a real loss when
-# debugging an overnight death — but a card that outlives the season is worth
-# more than a log nobody has yet needed.
+# debugging an overnight death — and on THIS box that cost is now covered by
+# the serial console, which sees the boot even when nothing is written down.
 install -d -m 755 /etc/systemd/journald.conf.d
 cat > /etc/systemd/journald.conf.d/volatile.conf <<'EOF'
 [Journal]
@@ -98,6 +136,26 @@ Storage=volatile
 RuntimeMaxUse=32M
 EOF
 rm -rf /var/log/journal
+
+# noatime on root. Raspberry Pi OS has shipped `defaults,noatime` in /etc/fstab
+# for years, so on a stock image this is a no-op and prints "already set" —
+# that is the expected result, not a failure. It is here to ASSERT the end
+# state rather than assume it, because a card restored from an older image, or
+# an fstab edited by hand, can lose it silently, and the symptom is invisible:
+# every file read writes back an access timestamp, which is pure wear on a box
+# that reads its venv and DB constantly.
+if grep -qE '^[^#].*\s/\s+ext4\s' /etc/fstab; then
+  if grep -qE '^[^#].*\s/\s+ext4\s+\S*noatime' /etc/fstab; then
+    echo "   noatime already set on /"
+  else
+    cp /etc/fstab /etc/fstab.bak
+    # Append to the existing option list on the root line only.
+    sed -i -E 's|^([^#]\S*\s+/\s+ext4\s+)(\S+)|\1\2,noatime|' /etc/fstab
+    echo "   added noatime to / (backup at /etc/fstab.bak) — takes effect on reboot"
+  fi
+else
+  echo "   WARNING: no ext4 root line found in /etc/fstab; check noatime by hand"
+fi
 
 echo "== config template =="
 if [ ! -f /etc/lockerroom/config.toml ]; then
