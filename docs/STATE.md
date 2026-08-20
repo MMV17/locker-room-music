@@ -57,6 +57,41 @@ Build order status (spec section 10):
 
 ---
 
+## The v2 box is built and beaconing (2026-08-19)
+
+Stages 1–5, 7 and 8 of `docs/runbook-v2-build.md` are done. The box pairs,
+plays audio out of the case's 3.5mm jack, and beacons 200 OK to production as
+**`AuxGoat 0001`**. Stage 6 (serial console) is still parked and stage 9 (a
+real end-to-end session) has not been run.
+
+**Three latent bugs surfaced while provisioning it, all fixed in the scripts:**
+
+- **`deploy.sh` never enabled `lockerroom-listener`.** Third instance of the
+  by-hand-on-the-first-box bug that `deploy.sh`'s own comment describes, and
+  the worst one: the listener is the service that does the job. A deployed box
+  that is not `enable`d plays audio perfectly and records **nothing** after the
+  next power cut, with every unit anyone checks still green.
+- **`provision.sh` ran `systemctl start bluetooth`, a no-op on a running
+  service.** The pretty hostname and `Class` landed on disk and never reached
+  the adapter, so the speaker advertised its old name. Now `restart`.
+- **No passwordless sudo on the Trixie image.** No
+  `/etc/sudoers.d/010_pi-nopasswd`, so `deploy.sh` dies partway. And because
+  `010_global-tty` turns off `tty_tickets`, one interactive `sudo` silently
+  makes everything work for 15 minutes — which reads as flaky SSH rather than
+  as a sudo policy. See the runbook's stage 8 for the one-line fix.
+
+**A fourth thing, not a bug but an ordering trap: reboot between `provision.sh`
+and `deploy.sh`.** Skipping it wedged systemd mid-deploy and the BCM2835
+hardware watchdog (1-minute timeout) reset the board. And because stage 7 sets
+`journald` to `Storage=volatile`, the previous boot's log was gone — so the
+cause had to be inferred rather than read. That is the second time the parked
+serial console has cost something real.
+
+**Still open on this box:** the serial console, a DHCP reservation for
+`98:fe:54:34:14:12` to settle the hostname flakiness, and SSH password auth is
+still enabled — which now means root, since sudo is passwordless. Turn it off
+before stage 10.
+
 ## The Pi 4B died (2026-08-12) — the board, not the card
 
 **The speaker does not boot from anything.** Diagnosed across a full session,
@@ -760,10 +795,22 @@ active.)
   same state. This is exactly the ROUTE_TRAP case it has a DROP_ROUTE action
   for; it just cannot see it. Matters most on campus, where there is no SSH.
   Fix: resolve once and probe by IP, so another interface cannot poison it.
-- **Naming for more than one box**, which the PCB work needs: every speaker
-  called `AuxGoat` collides in a Bluetooth list, and a phone paired to one will
-  auto-connect to another. `AuxGoat 4F2C` or `AuxGoat — Crusaders`. Same
-  decision as the QR sticker, so decide both together.
+- **Naming for more than one box** — **DECIDED 2026-08-19: serial numbers.**
+  The v2 box advertises as **`AuxGoat 0001`** (pretty hostname and
+  `speaker_name` both). Every speaker called `AuxGoat` collides in a Bluetooth
+  list and a phone paired to one auto-connects to another, so the next box is
+  `0002`.
+
+  **This did not have to wait for the QR sticker, and the note above was wrong
+  to couple them.** The QR has two halves and only one is contested: the
+  *hostname* is blocked on the campus filter (see the filter section — a QR
+  encoding `auxgoat.com/d/<serial>` is filtered), but the *serial* is not. The
+  `0001` in the Bluetooth name is the same serial a `/d/<serial>` QR would
+  carry once a permitted hostname is settled. Nothing is foreclosed; nothing
+  has been printed.
+
+  Still open, and genuinely blocked: **which hostname goes on a printed
+  sticker.**
 
 ### The speaker is called AuxGoat now (2026-08-09)
 
@@ -792,8 +839,15 @@ Two follow-ons:
   `ORDER BY last_seen_at DESC LIMIT 1`, so the newest row always wins — and it
   is left in place rather than deleting production data for tidiness.
 
-Still one shared name across every box. Fine with one; see the note in
-`pi/config.example.toml` before there are two.
+**Superseded 2026-08-19:** boxes are serial-numbered now, and this one is
+`AuxGoat 0001`. `provision.sh` takes `SPEAKER_NAME` and sets both the pretty
+hostname and `speaker_name` from it — **pass it, or a re-run silently renames
+the box back to the bare default.**
+
+Third stale `heartbeats` row incoming, alongside the `Locker Room Speaker` one:
+`speaker_online` reads `ORDER BY last_seen_at DESC LIMIT 1`, so the newest row
+still wins and this stays harmless. Worth knowing before two real boxes beacon
+at once, when the newest-wins read stops being obviously correct.
 
 ### One phone on the aux (2026-08-09) — VERIFIED ON HARDWARE
 
@@ -1540,9 +1594,18 @@ sudo nmcli connection modify HCGuest wifi.cloned-mac-address permanent
 
 `cloned-mac-address permanent` matters: NetworkManager randomises by default,
 and a guest network that meters or expires sessions per-MAC would see a brand
-new device on every reconnect. **wlan0 is `e4:5f:01:c2:6e:ab`** — a different
-MAC from eth0 (`...a9`), which is the one to hand over if the school ever adds
-device registration.
+new device on every reconnect.
+
+**The MACs below are the DEAD 2026-08-12 board's. The v2 box is different
+hardware:** wlan0 `98:fe:54:34:14:12`, Bluetooth `98:fe:54:34:14:13`. That is
+the pair to hand over if the school ever adds device registration, and the one
+to put in a DHCP reservation. Old board, for the record: wlan0
+`e4:5f:01:c2:6e:ab`, eth0 `...a9`.
+
+**Profile re-created on the v2 box 2026-08-19, off campus.** You do not need to
+be in range: `nmcli device wifi connect` scans and therefore does, but
+`nmcli connection add` writes the profile offline and NetworkManager joins when
+it first sees the SSID. Priority 20 against home wifi's 0.
 
 Verified with the ethernet cable physically unplugged: the Pi holds
 `10.104.239.147/19` and heartbeats reach production continuously.

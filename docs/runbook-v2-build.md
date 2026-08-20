@@ -20,15 +20,18 @@ Tick these off as you go:
 - [x] 3. `argon1.sh`, fan and button — **done**, all five checks pass on Trixie
 - [x] 4. Always-On mode + pull the plug — **PASSED, booted itself**
 - [x] 5. Range test, cased vs bare — **PASSED, no measurable loss**
-- [ ] 6. Serial console — **PARKED, unfinished. Finish before it ships.**
-- [ ] 7. `provision.sh`  ← **resume here**
-- [ ] 8. Wifi, `device_key`, `deploy.sh`
+- [x] 6. Serial console — **WORKING 2026-08-19**: wires were swapped, and
+      `stty`+`cat` mis-bauds on macOS. Use `sudo cu`.
+- [x] 7. `provision.sh` — **done 2026-08-19**, box advertises as `AuxGoat 0001`
+- [x] 8. Wifi, `device_key`, `deploy.sh` — **done 2026-08-19**, beaconing to production
+  ← **resume here: stage 9**
 - [ ] 9. End to end: a phone, a song, a row in D1
 - [ ] 10. Into the room
 
 **Box as built:** hostname `auxgoat`, `192.168.1.178` on the home LAN (reachable
 as `pi@auxgoat`; **`auxgoat.local` does not resolve** — use the bare name or the
-IP). wlan0 `98:fe:54:34:14:12`, Bluetooth `98:fe:54:34:14:13`.
+IP). wlan0 `98:fe:54:34:14:12`, Bluetooth `98:fe:54:34:14:13`. Advertises to
+phones as **`AuxGoat 0001`** — see stage 7 for why it is numbered.
 
 ---
 
@@ -65,7 +68,7 @@ Two reasons this stage exists:
    compare to.
 
 ```bash
-ssh pi@auxgoat.local
+ssh pi@auxgoat
 
 # Prove it is the right box and a healthy boot
 uptime
@@ -212,7 +215,7 @@ of the slot and the case will bend or snap it.
 Boot it. Confirm you can still SSH in, and that nothing got knocked loose:
 
 ```bash
-ssh pi@auxgoat.local
+ssh pi@auxgoat
 vcgencmd measure_temp
 ```
 
@@ -342,7 +345,7 @@ Nothing else in this runbook substitutes for this.
 2. **Pull the plug from the wall.** Not a soft shutdown — simulate an outage.
 3. Wait ten seconds.
 4. Plug it back in, and **do not touch the button.**
-5. It should boot on its own. Confirm with `ssh pi@auxgoat.local`.
+5. It should boot on its own. Confirm with `ssh pi@auxgoat`.
 
 If it does not come back by itself, stop and fix it here. Do not carry on and
 plan to sort it out later — later is in a locker room.
@@ -495,54 +498,56 @@ Nothing shows up? `ls` empty means the adapter did not enumerate (bad cable or a
 counterfeit chip — return it). Garbage characters mean a baud mismatch. Silence
 with a good device is usually TX/RX not crossed.
 
-### STATUS: PARKED, 2026-08-19 — unfinished, do not ship without it
+### RESOLVED, 2026-08-19 — two faults, neither of them on the Pi
 
-**No output on the serial line. Every software cause has been ruled out.** The
-box works and this does not block anything, so it was parked deliberately rather
-than abandoned. **Finish it before the box goes to campus** — a locker-room box
-with no SSH is the exact scenario this exists for, and it is the failure that
-cost a whole session on 2026-08-12.
+**It works.** Clean text both ways at 115200, em dash and all — no framing
+errors. Everything previously listed as "confirmed working, do not re-check"
+was correct the whole time and stayed correct; re-verified after the distro
+upgrade. `serial-getty@ttyS0` is `active`, so **the Pi transmits a login prompt
+continuously and you never need to reboot to test this.**
 
-Confirmed working, so **do not re-check these**:
+**Fault 1 — the data wires were swapped.** TX and RX crossed the other way from
+the runbook table above. Cheap CP2102 boards label their pins from
+inconsistent perspectives, so treat this as a coin flip to try FIRST, not the
+last resort it was listed as. Symptom was total silence.
 
-| | |
-|---|---|
-| `enable_uart` | `enable_uart=1` in `/boot/firmware/config.txt` |
-| kernel console | `console=serial0,115200` in `cmdline.txt` |
-| UART mapping | `/dev/serial0 -> ttyS0` — the mini-UART on GPIO14/15, correct for a Pi 4 with BT enabled |
-| adapter | enumerates on the Mac as **`/dev/cu.usbserial-0001`** |
-| port | opens cleanly; `lsof` shows nothing holding it |
+**Fault 2 — `stty -f` does not survive on macOS**, and this is the one that
+wasted the time. It opens the port, applies the baud, and CLOSES it; closing
+resets the line discipline, so the `cat` that follows opens a fresh port at the
+default 9600. Wiring perfect, output `??????.???`.
 
-**Two macOS gotchas already hit, so skip them next time:**
+**The tell is the character count, and it is worth knowing.** 8 lines of ~33
+characters were sent and about 10 arrived. Reading far slower than the sender
+loses most of the bytes and renders the rest unprintable. **Garbage that is
+also far too SHORT means baud, not wiring** — proportional garbage would mean
+wiring or noise. That distinction sends you to the right half of the problem.
 
-- `screen` fails with **"Sorry, could not find a PTY"**. Do not fight it. For
-  read-only monitoring use `stty -f /dev/cu.usbserial-0001 115200` then
-  `cat /dev/cu.usbserial-0001`. For an interactive terminal use `cu -l
-  /dev/cu.usbserial-0001 -s 115200` (exit `~.`) or `brew install picocom`.
-- **"Resource busy"** means a previous `screen`/`cat` still holds the port.
-  `lsof /dev/cu.usbserial-0001`, then kill it. Worth knowing this can make a
-  *working* setup look dead, because the second reader never gets the device.
+**So the working macOS recipe is one process that opens the port and sets the
+baud itself. Never `stty` then `cat`:**
 
-**Prime suspect: pin numbering on the Argon's top breakout header.** With the
-case assembled you are not on the Pi's own header — you are on the Argon's
-extension, and counting from the wrong end puts you on entirely different pins
-with everything else configured perfectly.
+```bash
+sudo cu -l /dev/cu.usbserial-0001 -s 115200      # exit: ~.
+```
 
-**Resume with a multimeter, which settles it in thirty seconds:**
+**`sudo` is required** and this was not previously written down. `cu` needs a
+lock file in `/var/spool/uucp`, which is `_uucp:wheel drwxr-xr-x` and not
+writable by uid 501. Without it you get a *"Permission denied"* on the lock
+followed by a misleading **`Line in use`** — which is `cu` assuming a holder
+after its lock failed, NOT a real second reader. Check with
+`lsof /dev/cu.usbserial-0001` before believing it.
 
-- pin 1 → **3.3V**, pins 2 and 4 → **5V**, pin 6 → **ground**
+`brew install picocom` avoids the lock-file business entirely:
+`picocom -b 115200 /dev/cu.usbserial-0001` (exit Ctrl-A Ctrl-X).
 
-That fixes the orientation for certain instead of inferring it from silkscreen.
-Then two tests, in this order:
+**Three dead ends on the Mac side, none on the Pi.** `screen` fails with "could
+not find a PTY", `stty`+`cat` silently mis-bauds, and `cu` needs root. On a
+console whose entire purpose is working when nothing else does, that is worth
+the space it takes here.
 
-1. **Does the Pi push bytes out at all?** With `cat` running on the Mac, on the
-   Pi: `sudo sh -c 'echo HELLO > /dev/ttyS0'`. Faster than rebooting.
-2. **Loopback**, to split Mac-side from Pi-side: pull both data wires off the Pi,
-   connect adapter TX straight to adapter RX, open `cu`, and type. Echo means the
-   Mac side is proven good and the fault is at the Pi end.
-
-And the one that costs nothing: **swap the two data wires.** Labelling on cheap
-CP2102 boards is inconsistent about whose perspective TX/RX are named from.
+**One note on `serial-getty@ttyS0`:** it reports `enabled-runtime`, not
+`enabled`. That is correct and not fragile — systemd's getty generator recreates
+it every boot from `console=serial0,115200` in `cmdline.txt`. Do not "fix" it by
+enabling it persistently.
 
 ---
 
@@ -551,9 +556,14 @@ CP2102 boards is inconsistent about whose perspective TX/RX are named from.
 Now, and not before, turn a blank Pi into a speaker.
 
 ```bash
-scp pi/scripts/provision.sh pi/scripts/keep-discoverable.sh pi@auxgoat.local:
-ssh pi@auxgoat.local 'sudo bash provision.sh'
+scp pi/scripts/provision.sh pi/scripts/keep-discoverable.sh pi@auxgoat:
+ssh pi@auxgoat 'sudo SPEAKER_NAME="AuxGoat 0001" bash provision.sh'
 ```
+
+**Pass `SPEAKER_NAME` or you get the bare default `AuxGoat`.** It sets two
+things at once: the pretty hostname phones see, and `speaker_name` in
+`config.toml`, which is the `heartbeats` PRIMARY KEY server-side. Re-running
+this script without the variable renames the box back.
 
 It installs bluez, bluez-alsa-utils, bluez-tools and the python venv, sets the
 Bluetooth class to `0x200414` so phones show it as a speaker, sets the pretty
@@ -567,13 +577,79 @@ Expected in the output: `noatime already set on /`. That is a pass, not a
 failure — Raspberry Pi OS ships it, and the check is there to catch an image
 that does not.
 
+### Result: PASSED, 2026-08-19 — but it needed one fix
+
+Both documented passes appeared: `bluetooth not soft-blocked` and `noatime
+already set on /`. `dbus-fast` installed from a prebuilt aarch64 wheel rather
+than falling back to a source build, which is the slow failure the package list
+in the script exists to avoid.
+
+| check | result |
+|---|---|
+| pretty hostname | `AuxGoat 0001` |
+| advertised BlueZ name | `AuxGoat 0001` **after a bluetooth restart** — see below |
+| device class | `0x6c0414` — low half `0x0414` is Audio/Video + Loudspeaker, as asked |
+| `keep-discoverable.sh` | installed `0755` to `/usr/local/bin` |
+| `config.toml` | written `0600`, `device_key` still `REPLACE_ME` |
+| journald | `Storage=volatile`, `/var/log/journal` removed |
+| rfkill | `Soft blocked: no` |
+
+**The bug this stage found: `provision.sh` ended with `systemctl start
+bluetooth`, which does nothing when bluetoothd is already running.** Everything
+landed correctly on disk — pretty hostname, `Class = 0x200414` in `main.conf` —
+and the adapter went on advertising `auxgoat` with a generic class, because
+nothing reloaded it. `docs/spec.md` has said since phase 1 that this is not
+picked up live. **Fixed in the script (`restart`, not `start`).** On a truly
+blank image the bug is invisible, which is why it survived this long.
+
+**Two things that look wrong here and are not:**
+
+- **`Discoverable: no`.** `DiscoverableTimeout = 0` means "never expire", not
+  "turn on". `keep-discoverable.sh` does the turning on, and its systemd unit
+  arrives with `deploy.sh` in stage 8.
+- **The class is not literally `0x200414`.** BlueZ recomputes the upper
+  *service*-class bits from the SDP profiles actually registered and only takes
+  the device-class half from `main.conf`. Expect it to change again once
+  `bluealsa` registers the A2DP sink. The half phones draw an icon from is
+  correct.
+
+**On the name.** Numbered rather than bare `AuxGoat` because STATE.md's open
+item said every box sharing one name collides in a Bluetooth list and a phone
+paired to one will auto-connect to another. STATE.md wanted this decided
+together with the QR sticker — but only the QR *hostname* is blocked on the
+campus filter, and the *serial* is not. `0001` is the same serial a
+`/d/<serial>` QR would carry whenever that hostname gets settled, so nothing is
+foreclosed and nothing has been printed.
+
 ---
 
 ## Stage 8 — wifi, the key, and the code
 
+**REBOOT FIRST, between stage 7 and this stage.** `provision.sh` installs
+`bluez` and `bluez-alsa-utils`, which queue systemd unit restarts; `deploy.sh`
+then restarts those same units. On 2026-08-19 that combination wedged systemd
+(`Transaction for bt-agent.service/restart is destructive`) and **the hardware
+watchdog reset the board mid-deploy** — `/dev/watchdog0` has a 1-minute
+timeout and systemd stopped petting it. The deploy half-finished. A reboot in
+between costs 40 seconds and avoids all of it.
+
 ```bash
-# On the Pi. HCGuest is open, no password, but must be joined once.
-sudo nmcli device wifi connect HCGuest
+sudo reboot
+```
+
+**You do NOT have to be on campus to set up HCGuest.** `nmcli device wifi
+connect` needs to scan, but `nmcli connection add` creates the profile offline
+and NetworkManager joins the moment it sees the SSID. Do it at the desk.
+
+```bash
+# Off-campus, ahead of time — the verified recipe from STATE.md.
+sudo nmcli connection add type wifi con-name HCGuest ifname wlan0 ssid HCGuest \
+  connection.autoconnect yes connection.autoconnect-priority 20 ipv4.method auto
+sudo nmcli connection modify HCGuest wifi.cloned-mac-address permanent
+
+# Priority 20 beats home wifi's 0, so it takes HCGuest at school and falls back
+# to home otherwise. `permanent` stops NetworkManager randomising the MAC, which
+# a guest network that meters per-MAC would see as a new device every time.
 
 # Then put the real key in. Copy DEVICE_KEY from backend/.secrets.local on the
 # laptop — it is NOT in git, and Cloudflare secrets are write-only, so that file
@@ -588,17 +664,55 @@ survived both campus filter episodes untouched, which is more than
 Then ship the code from the laptop:
 
 ```bash
-pi/scripts/deploy.sh pi@auxgoat.local
+pi/scripts/deploy.sh pi@auxgoat
 ```
 
 That installs the systemd units, the `bluealsa-aplay` drop-in, and the listener.
+
+### Result: PASSED, 2026-08-19 — after three fixes
+
+All seven units `active` **and** `enabled`, beaconing 200 OK to production.
+
+**Three things this stage found, all now fixed in the scripts:**
+
+1. **`deploy.sh` never enabled `lockerroom-listener`.** It enabled netwatch,
+   bt-agent and keep-discoverable but not the core service, which had only ever
+   been enabled by hand on the first box — the *same* omission that had already
+   bitten twice, this time on the thing that does the actual job. A box like
+   that plays audio perfectly and **records nothing after the next power cut**,
+   with every unit anyone thinks to check still green. Fixed in `deploy.sh`.
+2. **The Trixie image has no passwordless sudo.** There is no
+   `/etc/sudoers.d/010_pi-nopasswd`, so `deploy.sh` fails partway with
+   *"a terminal is required to read the password"*. Note `010_global-tty`
+   disables `tty_tickets`, which means one interactive `sudo` makes everything
+   work for 15 minutes and then mysteriously stops — easy to misread as flaky
+   SSH. Fix once, interactively:
+
+       echo 'pi ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/010_pi-nopasswd
+       sudo chmod 0440 /etc/sudoers.d/010_pi-nopasswd && sudo visudo -c
+
+3. **The watchdog reset described above.** Reboot between stages 7 and 8.
+
+**Unattended reboot verified 2026-08-19, watched over the serial console.** All
+of `lockerroom-listener`, `bt-agent`, `keep-discoverable`, `lockerroom-netwatch`,
+`bluealsa`, `bluealsa-aplay` and `argononed` came back `active` with nobody
+touching the box; the adapter returned as `AuxGoat 0001` and discoverable, the
+paired phone reconnected on its own, and a beacon reached production within
+seconds. **This is the test that catches the enable bug above** — run it on
+every future box rather than trusting `systemctl is-enabled`.
+
+**Also worth knowing:** `journald` is `Storage=volatile` as of stage 7, so when
+the box rebooted mid-deploy **the previous boot's log was gone** and the cause
+had to be inferred. The runbook says that cost is "covered by the serial
+console" — it is not, because stage 6 is parked. That is the second time the
+parked console has had a real cost.
 
 ---
 
 ## Stage 9 — end to end
 
 ```bash
-ssh pi@auxgoat.local
+ssh pi@auxgoat
 systemctl status lockerroom-listener bluetooth bluealsa bluealsa-aplay bt-agent keep-discoverable
 tail -f /var/log/lockerroom/listener.log
 ```

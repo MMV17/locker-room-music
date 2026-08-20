@@ -181,7 +181,13 @@ install -m 755 "$(dirname "$0")/keep-discoverable.sh" /usr/local/bin/keep-discov
 
 echo "== services =="
 systemctl enable bluetooth
-systemctl start bluetooth
+# RESTART, not start. `start` is a no-op when bluetoothd is already running,
+# and on a box that has been up since stage 1 it always is — so the pretty
+# hostname set above and the Class in main.conf never reach the adapter, and
+# the speaker keeps advertising its old name with a generic device class.
+# Caught on the v2 box 2026-08-19: everything was correct on disk and wrong
+# on the air. docs/spec.md has said "it is not picked up live" since phase 1.
+systemctl restart bluetooth
 
 echo
 echo "Provisioned. Remaining, in order:"

@@ -58,6 +58,14 @@ sudo mkdir -p /etc/systemd/system/bluealsa-aplay.service.d
 sudo mv /tmp/bluealsa-aplay-aux.conf /etc/systemd/system/bluealsa-aplay.service.d/aux.conf
 sudo systemctl daemon-reload
 sudo systemctl restart bluealsa-aplay
+# `enable` the listener too. It was missing here until 2026-08-19 and had only
+# ever been enabled BY HAND on the first box — the same omission that left
+# bt-agent and keep-discoverable out of every deploy, third time now, and this
+# time on the core service. A box that is deployed but not enabled plays audio
+# perfectly and records NOTHING after the next power cut, with every unit that
+# anyone thinks to check still green. That is the silent failure stage 4 of the
+# runbook exists to prevent, arriving by a different road.
+sudo systemctl enable lockerroom-listener
 sudo systemctl restart lockerroom-listener
 # `enable` so it survives an unattended reboot, which is exactly when nobody is
 # here to start it — and `restart` SEPARATELY, which is the part that matters.
