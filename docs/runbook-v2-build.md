@@ -471,13 +471,20 @@ grep enable_uart /boot/firmware/config.txt
 **Pi powered off. Adapter unplugged.** Lift the magnetic top cover to reach the
 header.
 
-| adapter | Pi physical pin |
-|---|---|
-| GND | **6** |
-| TX | **10** (GPIO15 / RXD) |
-| RX | **8** (GPIO14 / TXD) |
+**Verified working on the air 2026-08-19. This is the crossed wiring, and it
+is correct — do not invert it.**
 
-- TX and RX are **crossed**. That is correct.
+| adapter label | Pi physical pin | what the pin is |
+|---|---|---|
+| GND | **6** | ground |
+| **TXD** | **10** | GPIO15 / Pi's **RXD** |
+| **RXD** | **8** | GPIO14 / Pi's **TXD** |
+
+- TX and RX are **crossed**, which is correct and is what the labels above
+  already describe: the adapter's transmit goes to the Pi's receive. If you are
+  reading this after a silent console, swapping them is still the cheap thing to
+  try — cheap CP2102 boards do vary — but **this exact pairing is the one that
+  was proven to work on this kit**, so put it back afterwards.
 - **Leave VCC/5V disconnected.** The Pi has its own supply; connecting both
   backfeeds power and is a good way to make a second dead Pi.
 - Set the adapter to **3.3V** if it has a jumper.
@@ -498,7 +505,7 @@ Nothing shows up? `ls` empty means the adapter did not enumerate (bad cable or a
 counterfeit chip — return it). Garbage characters mean a baud mismatch. Silence
 with a good device is usually TX/RX not crossed.
 
-### RESOLVED, 2026-08-19 — two faults, neither of them on the Pi
+### RESOLVED, 2026-08-19 — the fault was on the Mac, not the Pi
 
 **It works.** Clean text both ways at 115200, em dash and all — no framing
 errors. Everything previously listed as "confirmed working, do not re-check"
@@ -506,15 +513,21 @@ was correct the whole time and stayed correct; re-verified after the distro
 upgrade. `serial-getty@ttyS0` is `active`, so **the Pi transmits a login prompt
 continuously and you never need to reboot to test this.**
 
-**Fault 1 — the data wires were swapped.** TX and RX crossed the other way from
-the runbook table above. Cheap CP2102 boards label their pins from
-inconsistent perspectives, so treat this as a coin flip to try FIRST, not the
-last resort it was listed as. Symptom was total silence.
+**The wiring was right all along.** The console ended up on exactly the pairing
+the table above always specified — adapter TXD to pin 10, RXD to pin 8. The
+wires were pulled and re-seated during debugging, so whether one was ever
+genuinely wrong cannot be established and is not worth claiming. What is
+certain is that the box now works on the documented wiring.
 
-**Fault 2 — `stty -f` does not survive on macOS**, and this is the one that
-wasted the time. It opens the port, applies the baud, and CLOSES it; closing
-resets the line discipline, so the `cat` that follows opens a fresh port at the
-default 9600. Wiring perfect, output `??????.???`.
+**The real fault: `stty -f` does not survive on macOS.** It opens the port,
+applies the baud, and CLOSES it — and closing resets the line discipline, so
+the `cat` that follows opens a fresh port at the default 9600. Wiring perfect,
+output `??????.???`. Every previous attempt at this stage used `stty` then
+`cat`, which means **this stage may never have had a hardware problem at all.**
+
+The lesson is about the tool, not the box: **a read-only `cat` cannot test a
+console.** It cannot send a newline, so it cannot make a getty print a prompt,
+and it silently reads at the wrong speed. Reach for `sudo cu` first.
 
 **The tell is the character count, and it is worth knowing.** 8 lines of ~33
 characters were sent and about 10 arrived. Reading far slower than the sender
