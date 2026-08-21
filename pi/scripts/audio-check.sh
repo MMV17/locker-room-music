@@ -146,8 +146,43 @@ for u in bluetooth bluealsa bluealsa-aplay lockerroom-listener; do
     problem "$u is not active. journalctl -u $u -n 50"
 done
 echo
+# The drop-in at /etc/systemd/system/bluealsa-aplay.service.d/aux.conf is what
+# puts a player on the ALSA device at all. If it is not in effect, bluealsa
+# still registers the A2DP sink — so the phone pairs, AVRCP metadata flows and
+# the website works perfectly — and NOTHING pulls the PCM through to ALSA.
+# Silent on every speaker, every cable, with all units green.
+#
+# Checked rather than assumed because upstream bluez-alsa has renamed the
+# daemon to `bluealsad` (unreleased; v4.3.1 and earlier are still `bluealsa`,
+# which is what Debian Trixie ships). When that lands in Debian, the unit this
+# drop-in is attached to stops existing and the drop-in silently stops
+# applying. This is the check that will catch that day.
 echo "bluealsa-aplay is really being run as:"
-systemctl show -p ExecStart --value bluealsa-aplay 2>/dev/null | sed 's/^/   /'
+EXEC="$(systemctl show -p ExecStart --value bluealsa-aplay 2>/dev/null)"
+if [ -z "$EXEC" ]; then
+  echo "   (nothing — no ExecStart, so the unit does not exist)"
+  ALT="$(systemctl list-unit-files --no-legend 2>/dev/null | awk '/bluealsa/{print $1}' | tr '\n' ' ')"
+  problem "There is no bluealsa-aplay unit, so nothing is pulling audio out of
+     bluealsa and into ALSA. The A2DP sink still registers, which is why
+     pairing, AVRCP and the website all look fine.${ALT:+ Units that do exist: $ALT}
+     If those names differ, bluez-alsa was renamed by a package update and
+     pi/systemd/bluealsa-aplay-aux.conf needs to follow it."
+else
+  echo "$EXEC" | sed 's/^/   /'
+  case "$EXEC" in
+    *bluealsa-aplay*) ;;
+    *) problem "The bluealsa-aplay unit's ExecStart does not run bluealsa-aplay." ;;
+  esac
+  # The drop-in clears ExecStart and re-sets it with -S. No -S means the
+  # drop-in is not in effect: either it was never installed, or daemon-reload
+  # did not run after deploy.sh put it there.
+  case "$EXEC" in
+    *" -S"*|*"-S "*) echo "   -> the aux drop-in IS in effect (-S present)" ;;
+    *) problem "The aux drop-in is not in effect — no -S in the effective
+     ExecStart. Check /etc/systemd/system/bluealsa-aplay.service.d/aux.conf
+     exists, then: sudo systemctl daemon-reload && sudo systemctl restart bluealsa-aplay" ;;
+  esac
+fi
 
 hr "the aux allowlist (which phone is allowed to be heard)"
 # A MAC here that is not the phone actually playing is silence with every unit

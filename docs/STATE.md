@@ -80,6 +80,24 @@ across a dead adapter is the most boring possible failure.** Prove it in 30
 seconds with wired headphones in the case's rear jack and `audio-check.sh
 --tone`.
 
+### A second speaker, WITH an aux input, was also silent
+
+**This is the important half of the evidence and it arrived after the Charge 6
+finding.** A different speaker that does have a 3.5mm aux input produced
+nothing either. So the Charge 6's missing analog input explains that one
+attempt and **does not explain the fault** — no audio reaches *any* speaker,
+which puts the fault upstream of every speaker: the Pi, its ALSA config, the
+case's rear jack, or the cable.
+
+That is entirely consistent with "the ALSA default was never set" below, which
+remains the leading hypothesis and is still **untested on the box** — every
+attempt so far has swapped speakers and cables rather than looking at what the
+Pi is doing. Two speakers is not two data points about the Pi; it is one.
+
+The decisive test needs no speaker at all: **wired headphones in the case's
+rear jack, `sudo audio-check.sh --tone`.** That removes the speaker, its input
+mode and the aux cable from the question in one move.
+
 ### Drive it over USB instead — this is better than the jack was
 
 The Pi 4 has USB-A host ports and the Charge 6 is a USB audio *device*, so the
