@@ -27,6 +27,8 @@ A football locker room has one speaker and ~100 people with different music tast
 
 Deployment note for the operator: the aux cable must stay plugged into the speaker. On most Bluetooth speakers, an occupied aux jack disables their own Bluetooth radio — that is the enforcement mechanism that stops people connecting to the speaker directly and bypassing the system.
 
+**Updated 2026-08-21: "most Bluetooth speakers have an aux jack" has expired.** Aux inputs are being dropped across the category — the JBL Charge line lost it at the Charge 5. The requirement is therefore not "has a 3.5mm jack" but **"has a wired input that disables its own Bluetooth while in use"**, which is satisfied by either a 3.5mm aux input or a USB audio input (the Charge 6 shuts its Bluetooth section off in USB audio mode). A speaker with neither cannot host this product, because the bypass cannot be closed. Verify it on the actual unit by trying to pair a phone to the speaker while the wired input is live. See "The speaker side" in `docs/STATE.md`.
+
 ---
 
 ## 3. Architecture

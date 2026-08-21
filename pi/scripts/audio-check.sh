@@ -55,6 +55,17 @@ else
      has not rebooted since. Nothing downstream can work until this is fixed."
 fi
 
+# A USB speaker or DAC shows up here as its own card, and on this project that
+# is not hypothetical: a JBL Charge 6 in USB audio mode enumerates as a USB
+# Audio Class device and is a valid — arguably better — output than the jack.
+# See "The speaker side" in docs/STATE.md.
+USB_CARDS="$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*USB.*/\1/p' /proc/asound/cards 2>/dev/null | tr -d ' ' || true)"
+if [ -n "$USB_CARDS" ]; then
+  echo "USB audio card(s) present: $USB_CARDS"
+  echo "   (to use one, pin it as the ALSA default in /etc/asound.conf by ID —"
+  echo "    never pass -D to bluealsa-aplay; see the DAC note in docs/STATE.md)"
+fi
+
 hr "analog audio enabled in firmware config"
 BOOT_CFG=""
 for c in /boot/firmware/config.txt /boot/config.txt; do
@@ -166,9 +177,52 @@ journalctl -u bluealsa-aplay -n 25 --no-pager 2>/dev/null | sed 's/^/   /'
 
 if [ "$TONE" = "1" ]; then
   hr "test tone (440Hz, straight at the ALSA default)"
-  echo "If you hear this, the analog path is fine and the fault is in Bluetooth."
-  echo "If you do not, the fault is everything above and Bluetooth is innocent."
-  speaker-test -D default -t sine -f 440 -c 2 -l 1 2>&1 | tail -5 | sed 's/^/   /'
+  echo "Listen. Then read the PCM state underneath, which is the part that"
+  echo "actually separates software from hardware:"
+  echo
+  # The tone alone cannot tell a dead driver from a dead cable — both are
+  # silence. /proc/asound/.../status can: it reports whether the kernel is
+  # genuinely clocking samples out of the SoC. state: RUNNING with a moving
+  # hw_ptr means every layer this script can see is working and the fault is
+  # PHYSICAL from the SoC pin onward — jack, daughterboard, cable, speaker.
+  TONE_LOG="$(mktemp)"
+  speaker-test -D default -t sine -f 440 -c 2 -l 1 >"$TONE_LOG" 2>&1 &
+  TONE_PID=$!
+  sleep 1
+  IDX=""
+  [ -n "$ANALOG" ] && IDX="$(card_index "$ANALOG")"
+  STATUS="/proc/asound/card${IDX:-0}/pcm0p/sub0/status"
+  if [ -r "$STATUS" ]; then
+    echo "   $STATUS while the tone plays:"
+    sed 's/^/      /' "$STATUS"
+    if grep -qi 'state: RUNNING' "$STATUS"; then
+      echo
+      echo "   -> The kernel IS clocking audio out of the analog card."
+      echo "      Every software layer is working. If the room is still silent,"
+      echo "      the fault is PHYSICAL and downstream of the SoC:"
+      echo "        - the 3.5mm cable (test it on a phone; they fail constantly)"
+      echo "        - the speaker or its input mode"
+      echo "        - the case daughterboard, only if headphones in the rear"
+      echo "          jack are ALSO silent"
+    else
+      echo
+      echo "   -> The PCM is not RUNNING. That is a software or driver fault,"
+      echo "      not a cable and not the daughterboard."
+    fi
+  else
+    echo "   (no $STATUS — the analog card is not open)"
+  fi
+  wait "$TONE_PID" 2>/dev/null
+  echo
+  echo "   speaker-test said:"
+  tail -5 "$TONE_LOG" | sed 's/^/      /'
+  rm -f "$TONE_LOG"
+  echo
+  echo "   HEARD IT?  analog path is fine; the fault is in Bluetooth."
+  echo "   SILENT?    Bluetooth is innocent. Put WIRED HEADPHONES in the case's"
+  echo "              rear jack and run this again — that is the one test that"
+  echo "              separates the Pi and its daughterboard from everything"
+  echo "              plugged into them."
 fi
 
 hr "verdict"

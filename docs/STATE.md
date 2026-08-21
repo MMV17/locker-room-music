@@ -57,6 +57,86 @@ Build order status (spec section 10):
 
 ---
 
+## The speaker side: the JBL Charge 6 has NO analog input (2026-08-21)
+
+A 3.5mm-to-USB-C cable was tried into a **JBL Charge 6** and produced nothing.
+That is not a fault to diagnose — **it cannot work, and no cable will make it
+work.**
+
+- **The Charge 6 has no 3.5mm aux input.** JBL dropped aux from the Charge line
+  at the Charge 5 and did not bring it back.
+- **Its USB-C port is USB *digital* audio**, not analog. It enumerates as a USB
+  Audio Class device on a USB *host*. A passive 3.5mm-to-USB-C adapter assumes
+  the sink implements analog Audio Adapter Accessory Mode. The Charge 6 does
+  not, so the adapter connects the Pi's output to nothing at all.
+
+**Nothing was damaged, and this is worth being explicit about because the
+instinct is to assume it was.** That adapter is a passive wire into a port that
+never asserted anything: no VBUS, no signal, an open circuit. Even in the bad
+case, VBUS does not route to the analog pins in a passive adapter, the Pi's
+headphone output is AC-coupled so series capacitors block DC anyway, and the
+output stage is short-circuit tolerant. **Two audio outputs facing each other
+across a dead adapter is the most boring possible failure.** Prove it in 30
+seconds with wired headphones in the case's rear jack and `audio-check.sh
+--tone`.
+
+### Drive it over USB instead — this is better than the jack was
+
+The Pi 4 has USB-A host ports and the Charge 6 is a USB audio *device*, so the
+right cable is **USB-A (Pi) to USB-C (speaker)**, under 1.2m. JBL's procedure:
+**hold the speaker's Play/Pause button while plugging the cable in, and wait
+for the chime.** Without the button-hold it enters charge mode and stays
+silent, which is almost certainly what a first attempt looks like.
+
+It then appears as its own ALSA card. Point the system default at it **by ID,
+never by index, and never with `-D`** — the existing DAC rule, unchanged:
+
+```
+pcm.!default { type plug; slave.pcm { type hw; card "<id>"; device 0 } }
+ctl.!default { type hw; card "<id>" }
+```
+
+Three things this wins outright:
+
+1. **It is a fully digital path.** No PWM jack, no daughterboard, no analog
+   cable. This is the "consider an I2S DAC HAT" item from the v2 hardware list,
+   obtained for the price of a USB cable and without occupying the GPIO header.
+2. **It makes the daughterboard question moot** — the case's 3.5mm extension
+   stops being in the signal path at all.
+3. **It PRESERVES the anti-bypass enforcement**, which is the part that
+   actually matters for this product. `spec.md` §2 relies on an occupied aux
+   jack disabling the speaker's own Bluetooth radio, so nobody can pair
+   straight to the speaker and skip the voting. The Charge 6 has no aux jack to
+   occupy — but **in USB audio mode it shuts its Bluetooth section off
+   entirely**, which is the same guarantee by a different mechanism, and a
+   harder one to defeat than unplugging a cable.
+
+**Verify #3 on the actual unit before trusting it.** Put the speaker in USB
+audio mode and then try to pair a phone to it directly. If the phone can still
+connect, the enforcement mechanism does not exist on this speaker and the
+product needs a different one — that is a go/no-go for the whole design, not a
+detail.
+
+### What this means for buying a speaker
+
+`spec.md` §2 says "3.5mm-to-3.5mm cable, Pi audio out → speaker aux in" and
+assumes every Bluetooth speaker has an aux jack. **That assumption expired.**
+Aux inputs are being removed across the category. When choosing a speaker for a
+box, the requirement is now:
+
+- a **3.5mm aux input** that disables its Bluetooth while occupied, **or**
+- a **USB audio input** that disables its Bluetooth while active.
+
+Either satisfies the design. A speaker with neither cannot host this product at
+all, however good it sounds, because the bypass is unclosable.
+
+### If the analog jack is wanted anyway
+
+Nothing above breaks the analog path; it is still what `provision.sh` asserts
+and still correct for a speaker that has an aux jack. The hardware ladder when
+the jack is silent, cheapest first, is in stage 9 of the runbook — and the
+first rung is wired headphones, not a screwdriver.
+
 ## A fresh provision came up silent (2026-08-21) — the ALSA default was never set
 
 **Symptom: the site works, the phone pairs, AVRCP track metadata shows up as

@@ -760,6 +760,25 @@ Then the real test, which no amount of green systemd output substitutes for:
    device, the mixer, or `dtparam=audio=on` not having survived a reboot, and
    the verdict at the bottom of the report says which. Re-running
    `provision.sh` fixes all three.
+
+   The `--tone` output also prints `/proc/asound/cardN/pcm0p/sub0/status` while
+   the tone is playing. **`state: RUNNING` there is the software/hardware
+   split**: it means the kernel is genuinely clocking samples out of the SoC,
+   so every layer this repo controls is working and a silent room is physical
+   from the SoC pin onward.
+
+   **The physical ladder, cheapest first. Do not skip to the screwdriver.**
+
+   | # | Test | If it works |
+   |---|---|---|
+   | 1 | **Wired headphones in the case's rear jack**, run `--tone` | Pi, jack and daughterboard are all fine. The fault is the cable or the speaker — stop here and go to 4. |
+   | 2 | **A monitor on the case's HDMI port** | The daughterboard is seated. It carries HDMI and the 3.5mm extension on one rigid PCB, so video out means it is mated. (A tilted board can in principle mate HDMI and not the jack — test 1 settles that directly, which is why it is first.) |
+   | 3 | **The same 3.5mm cable from a phone** into the same speaker | The cable and the speaker are fine, and the fault is back at the Pi. 3.5mm cables fail constantly; suspect the cable before anything soldered. |
+   | 4 | **Does the speaker even have an analog input?** | See "The speaker side" in `docs/STATE.md`. A JBL Charge 5 or 6 has **no aux jack at all** and no cable will change that. This is the likeliest answer if the speaker is new. |
+
+   Only if 1 and 2 both fail is it worth opening the case, and then the thing
+   to look at is the daughterboard sitting level on *both* micro-HDMI ports and
+   the 3.5mm barrel — stage 2, step 3.
 3. **Open the front door** at `https://auxgoat.mmvinton17.workers.dev` and type
    `CRUSADERS`. On campus use that hostname, not `auxgoat.com`.
 4. **Confirm the play reaches D1** — it should show as now-playing on the site
