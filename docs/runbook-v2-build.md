@@ -578,10 +578,19 @@ things at once: the pretty hostname phones see, and `speaker_name` in
 `config.toml`, which is the `heartbeats` PRIMARY KEY server-side. Re-running
 this script without the variable renames the box back.
 
-It installs bluez, bluez-alsa-utils, bluez-tools and the python venv, sets the
-Bluetooth class to `0x200414` so phones show it as a speaker, sets the pretty
-hostname to `AuxGoat`, makes journald volatile, asserts `noatime`, and writes a
-config template.
+It installs bluez, bluez-alsa-utils, bluez-tools, alsa-utils and the python
+venv, sets the Bluetooth class to `0x200414` so phones show it as a speaker,
+sets the pretty hostname to `AuxGoat`, **asserts the audio output**, makes
+journald volatile, asserts `noatime`, and writes a config template.
+
+**Watch the `== audio out ==` section.** It is new as of 2026-08-21 and it is
+the difference between a box that makes a sound and one that does not — see
+"A fresh provision came up silent" in `docs/STATE.md`. If it prints
+`added dtparam=audio=on ... NEEDS A REBOOT`, the analog jack did not exist as
+an ALSA card until now, and **there will be no audio until the box reboots**;
+the script says so again at the end. That reboot is the one stage 8 already
+asks for, so it costs nothing extra — but skipping it and then testing audio
+will send you looking for a half-seated daughterboard that is seated fine.
 
 It deliberately does **not** do wifi or `device_key`. Both need a human, and
 both are stage 8.
@@ -735,6 +744,22 @@ Then the real test, which no amount of green systemd output substitutes for:
 1. **Pair a phone.** It should appear as **AuxGoat** and show as a speaker.
 2. **Play a song.** Audio out of the 3.5mm jack on the *back of the case* —
    this is where a half-seated daughterboard shows up.
+
+   **If everything else works and this does not, do NOT start pulling the case
+   apart.** A silent jack with a paired phone, live AVRCP metadata and a green
+   `systemctl` is almost never hardware — see "A fresh provision came up
+   silent" in `docs/STATE.md`. Run the diagnostic first, and start with the
+   tone, because it splits the problem in half:
+
+   ```bash
+   sudo audio-check.sh --tone
+   ```
+
+   Tone audible → the analog path and the daughterboard are fine, and the fault
+   is in Bluetooth. Tone silent → Bluetooth is innocent; it is the ALSA default
+   device, the mixer, or `dtparam=audio=on` not having survived a reboot, and
+   the verdict at the bottom of the report says which. Re-running
+   `provision.sh` fixes all three.
 3. **Open the front door** at `https://auxgoat.mmvinton17.workers.dev` and type
    `CRUSADERS`. On campus use that hostname, not `auxgoat.com`.
 4. **Confirm the play reaches D1** — it should show as now-playing on the site

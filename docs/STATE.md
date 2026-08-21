@@ -1,6 +1,6 @@
 # Project state — resume here
 
-Last worked: **2026-08-19**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-08-21**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
@@ -56,6 +56,85 @@ Build order status (spec section 10):
 | 7 | Admin and device claiming | **Done — deployed; claiming exercised once** |
 
 ---
+
+## A fresh provision came up silent (2026-08-21) — the ALSA default was never set
+
+**Symptom: the site works, the phone pairs, AVRCP track metadata shows up as
+now-playing — and nothing comes out of the jack.** Every unit green. That
+combination is diagnostic all by itself: it means the *Bluetooth* half is
+completely healthy and the *ALSA* half is pointed somewhere that is not the
+3.5mm jack. No amount of `systemctl status` can show it, because no service is
+failing. This is the same failure shape as the soft-blocked adapter in stage 7
+and the un-`enable`d listener in stage 8, arriving by a third road.
+
+**Root cause: nothing has ever asserted the audio output.** `spec.md` §4.1 has
+said since phase 1 — "enable analog audio in `config.txt`, confirm the
+headphone jack is the default ALSA card" — and neither `provision.sh` nor
+`deploy.sh` did either half. Whether a provisioned box made a sound was
+entirely down to what the flashed image happened to default to. The first box
+got lucky. A later one did not, and *nothing changed in this repo between
+them*, which is what made it look like hardware.
+
+The mechanism, which is worth understanding rather than pattern-matching:
+
+- `bluealsa-aplay` runs with **no `-D`** (deliberately — see the DAC note
+  below), so the ALSA **`default`** device *is* the whole audio path.
+- With no `/etc/asound.conf`, `default` means **card 0**.
+- **Card 0 is whichever card the kernel enumerated first**, not the analog one.
+  With the KMS video driver loaded, the `vc4-hdmi` cards routinely come up
+  first and `bcm2835 Headphones` lands at card 1 or 2.
+- So a perfectly healthy box plays the entire set into an HDMI port with
+  nothing plugged into it.
+
+Card *numbers* are not stable across images, kernels or firmware updates, so
+this can also break a box that has been working for months with nothing on
+disk having changed. **Never pin audio by card index.**
+
+**Fixed in `provision.sh`**, which now asserts all three layers:
+
+1. `dtparam=audio=on` in `/boot/firmware/config.txt`, appended under an
+   explicit `[all]` so it cannot land inside a `[pi5]`/`[cm4]` section where it
+   would pass a grep and do nothing. **This one needs a reboot** — the firmware
+   reads that file only at boot, and until then the jack does not exist as a
+   card at all.
+2. `/etc/asound.conf` pinning `pcm.!default` and `ctl.!default` to the analog
+   card **by ID** (`card "Headphones"`), never by index. Written as the
+   *default* rather than passed as `-D`, because every failure path in `aux.py`
+   and the systemd drop-in lands on a bare `bluealsa-aplay` — only the default
+   is inherited by all of them. This is the same rule the DAC note already
+   states, now applied to the case where there is no DAC.
+3. Mixer unmuted, set to **0dB (unity, not maximum** — +4dB clips a PWM-driven
+   jack, and loudness belongs to the powered speaker's own knob), then
+   `alsactl store` so a reboot keeps it. A fresh image has no
+   `/var/lib/alsa/asound.state` and nothing restores a level at boot.
+
+An existing hand-written `/etc/asound.conf` is left alone — that is the right
+answer if a DAC was added later.
+
+`alsa-utils` was added to the package list. `bluez-alsa-utils` pulls in
+`libasound` but **not** `amixer`, `alsactl`, `speaker-test` or
+`alsa-restore.service`, so a Lite image could come up with no way to set a
+level, nothing to restore one, and no way to prove the jack independently of
+Bluetooth.
+
+### `pi/scripts/audio-check.sh` — run this when the room is silent
+
+New, read-only, changes nothing, installed to `/usr/local/bin` by both
+`provision.sh` and `deploy.sh`:
+
+```bash
+sudo audio-check.sh          # report the whole path, ending in a verdict
+sudo audio-check.sh --tone   # plus 3s of 440Hz straight at the ALSA default
+```
+
+`--tone` is the test that matters most, because it **splits the problem in
+half**: if you hear it, the analog side is fine and the fault is in Bluetooth;
+if you do not, Bluetooth is innocent and the fault is everything above it. Do
+not run `--tone` in a room with people in it.
+
+It also catches two silences that are *not* this bug and look identical from
+the doorway: an `/etc/asound.conf` naming a card that does not exist, and
+`/run/lockerroom/aux.env` filtering the speaker to a phone that has gone home.
 
 ## The v2 box is built and beaconing (2026-08-19)
 

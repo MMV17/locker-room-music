@@ -67,8 +67,8 @@ Goal for this phase: a phone can connect to a device named "AuxGoat" and hear mu
 
 Use **bluez-alsa** (`bluez-alsa-utils`), not PipeWire. Pi OS Lite is headless with no user session, and PipeWire's session management is awkward there. bluez-alsa runs cleanly as a systemd system service.
 
-- Install `bluez`, `bluez-alsa-utils`, `bluez-tools`
-- Enable analog audio in `/boot/firmware/config.txt` (`dtparam=audio=on`), confirm the headphone jack is the default ALSA card
+- Install `bluez`, `bluez-alsa-utils`, `bluez-tools`, `alsa-utils`
+- Enable analog audio in `/boot/firmware/config.txt` (`dtparam=audio=on`), and **pin the ALSA default to the headphone jack by card ID** in `/etc/asound.conf` — never by card index, which is assigned in kernel enumeration order and moves. Both are asserted by `pi/scripts/provision.sh` as of 2026-08-21; before that they were requirements nothing checked, and a fresh provision came up silent with every service green. See `docs/STATE.md`.
 - Run `bluealsa` with the A2DP sink profile enabled
 - Run `bluealsa-aplay 00:00:00:00:00:00` as a service — the all-zeros MAC means "play audio from any connected device," which is exactly what we want
 - Both as systemd units with `Restart=always`

@@ -39,6 +39,10 @@ scp -q "${REPO_ROOT}/pi/systemd/bluealsa-aplay-aux.conf" "${PI_HOST}:/tmp/blueal
 scp -q "${REPO_ROOT}/pi/systemd/bt-agent.service" "${PI_HOST}:/tmp/bt-agent.service"
 scp -q "${REPO_ROOT}/pi/systemd/keep-discoverable.service" "${PI_HOST}:/tmp/keep-discoverable.service"
 scp -q "${REPO_ROOT}/pi/scripts/keep-discoverable.sh" "${PI_HOST}:/tmp/keep-discoverable.sh"
+# The read-only audio diagnostic. Shipped on every deploy because the box it
+# is needed on is the one you cannot easily reach, and because a speaker
+# provisioned before 2026-08-21 does not have it.
+scp -q "${REPO_ROOT}/pi/scripts/audio-check.sh" "${PI_HOST}:/tmp/audio-check.sh"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -51,6 +55,7 @@ sudo mv /tmp/lockerroom-netwatch.service /etc/systemd/system/lockerroom-netwatch
 sudo mv /tmp/bt-agent.service /etc/systemd/system/bt-agent.service
 sudo mv /tmp/keep-discoverable.service /etc/systemd/system/keep-discoverable.service
 sudo install -m 755 /tmp/keep-discoverable.sh /usr/local/bin/keep-discoverable.sh
+sudo install -m 755 /tmp/audio-check.sh /usr/local/bin/audio-check.sh
 # Teaches bluealsa-aplay to play one phone instead of mixing every connected
 # one. Restarted below so a changed drop-in actually takes effect; the listener
 # re-points it within a second of the next connection either way.

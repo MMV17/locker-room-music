@@ -46,13 +46,19 @@ apt-get update
 # bluez            the stack itself
 # bluez-alsa-utils bluealsa + bluealsa-aplay, the A2DP sink and its player
 # bluez-tools      bt-agent, which auto-accepts pairing (NoInputNoOutput)
+# alsa-utils       amixer/alsactl/speaker-test, and alsa-restore.service, which
+#                  is what puts the saved volume back at boot. bluez-alsa-utils
+#                  pulls in libasound but NOT these, so on a Lite image the box
+#                  can come up with no way to set a level and nothing to restore
+#                  one — and no speaker-test to prove the jack independently of
+#                  Bluetooth, which is the first thing you want when it is dead.
 # python3-venv     the listener runs in its own venv under /opt/lockerroom
 # python3-dev, libdbus-1-dev, pkg-config, build-essential
 #                  dbus-fast ships wheels for most platforms but falls back to
 #                  building, and a failed build here is a confusing way to lose
 #                  an evening
 apt-get install -y \
-  bluez bluez-alsa-utils bluez-tools \
+  bluez bluez-alsa-utils bluez-tools alsa-utils \
   python3-venv python3-dev python3-pip \
   libdbus-1-dev pkg-config build-essential \
   git curl
@@ -105,6 +111,133 @@ for kv in "DiscoverableTimeout = 0" "PairableTimeout = 0"; do
     sed -i "/^\[General\]/a $kv" /etc/bluetooth/main.conf
   fi
 done
+
+echo "== audio out =="
+# spec.md 4.1 has required this since phase 1 and NOTHING has ever asserted it —
+# not this script, not deploy.sh. Whether a provisioned box made a sound has
+# always come down to whatever the flashed image happened to default to. On
+# 2026-08-21 a fresh provision came up silent, and that is what this section is.
+#
+# bluealsa-aplay is started with NO -D flag (pi/systemd/bluealsa-aplay-aux.conf,
+# and the DAC note in docs/STATE.md about never naming a device on the main
+# path), so the ALSA *default* device IS the entire audio path. Left untouched,
+# `default` means card 0, and card 0 is whichever card the kernel enumerated
+# first. With the KMS video driver loaded that is routinely a vc4-hdmi card —
+# so a completely healthy box plays the whole set into an HDMI port with
+# nothing plugged into it.
+#
+# That is the worst failure shape this project keeps producing, and the same
+# one as the soft-blocked adapter above: every unit green, the phone pairs,
+# AVRCP metadata reaches the site, plays land in D1, and the room is silent.
+# Nothing in `systemctl status` can ever show it. Assert it, do not assume it.
+#
+# pi/scripts/audio-check.sh reports this whole path when it is already broken.
+AUDIO_REBOOT=0
+
+# 1. The jack has to exist as a card at all. `dtparam=audio=on` is what loads
+#    snd_bcm2835, and the firmware reads config.txt only at boot.
+BOOT_CFG=""
+for c in /boot/firmware/config.txt /boot/config.txt; do
+  if [ -f "$c" ]; then BOOT_CFG="$c"; break; fi
+done
+if [ -z "$BOOT_CFG" ]; then
+  echo "   WARNING: no config.txt at either path; enable analog audio by hand"
+elif grep -qE '^[[:space:]]*dtparam=audio=on' "$BOOT_CFG"; then
+  echo "   dtparam=audio=on already set in $BOOT_CFG"
+else
+  # Appended under an explicit [all], never bare. A bare append lands in
+  # whichever conditional section the image left open at the end of the file
+  # ([pi5], [cm4], [none]...), where it passes a grep and does nothing.
+  printf '\n[all]\ndtparam=audio=on\n' >> "$BOOT_CFG"
+  echo "   added dtparam=audio=on to $BOOT_CFG — NEEDS A REBOOT"
+  AUDIO_REBOOT=1
+fi
+
+# 2. Pin the ALSA default to that card BY ID, not by index.
+ANALOG_CARD="$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*bcm2835.*/\1/p' /proc/asound/cards 2>/dev/null | head -1 | tr -d ' ' || true)"
+if [ -z "$ANALOG_CARD" ]; then
+  ANALOG_CARD="Headphones"
+  echo "   no bcm2835 card up yet — assuming the stock id '$ANALOG_CARD'"
+  echo "   (expected if dtparam was only just added; verify after the reboot)"
+  AUDIO_REBOOT=1
+else
+  echo "   analog card id: $ANALOG_CARD"
+fi
+
+ASOUND_MARK="# managed by lockerroom provision.sh"
+if [ -f /etc/asound.conf ] && ! grep -qF "$ASOUND_MARK" /etc/asound.conf; then
+  echo "   /etc/asound.conf exists and this script did not write it — left alone"
+  echo "   (correct if a DAC was added; confirm it names a card that exists)"
+else
+  cat > /etc/asound.conf <<EOF
+$ASOUND_MARK
+#
+# Naming the card by ID is the load-bearing part. Card *numbers* are handed out
+# in kernel enumeration order, so an image change, a firmware update, or a
+# kernel that probes vc4 before bcm2835 renumbers them and the speaker goes
+# silent with nothing on disk having changed. "$ANALOG_CARD" is stable.
+#
+# Set as the DEFAULT rather than passed to bluealsa-aplay with -D, deliberately.
+# Every failure path in aux.py and in the systemd drop-in lands on a plain
+# bluealsa-aplay with no device argument, so the default is the only setting
+# all of them inherit. See the DAC note in docs/STATE.md.
+#
+# type plug, not raw hw: phones send 44.1k SBC and 48k AAC, and plug resamples
+# rather than failing to open the device.
+pcm.!default {
+    type plug
+    slave.pcm {
+        type hw
+        card "$ANALOG_CARD"
+        device 0
+    }
+}
+
+ctl.!default {
+    type hw
+    card "$ANALOG_CARD"
+}
+EOF
+  echo "   wrote /etc/asound.conf — default is now card \"$ANALOG_CARD\""
+fi
+
+# 3. Unmuted, at a known level, and saved so a reboot keeps it. A fresh image
+#    has no /var/lib/alsa/asound.state, so the level is whatever the driver
+#    defaulted to and nothing puts it back at boot.
+#
+#    0dB is unity, not maximum. This output goes to +4dB, which clips a
+#    PWM-driven jack; loudness belongs to the powered speaker at the far end of
+#    the aux cable, which has its own knob.
+if amixer -c "$ANALOG_CARD" scontrols >/dev/null 2>&1; then
+  CTL="$(amixer -c "$ANALOG_CARD" scontrols 2>/dev/null | sed -n "s/^Simple mixer control '\([^']*\)'.*/\1/p" | head -1 || true)"
+  CTL="${CTL:-PCM}"
+  if amixer -c "$ANALOG_CARD" sset "$CTL" unmute >/dev/null 2>&1; then
+    echo "   $CTL unmuted"
+  else
+    echo "   $CTL has no mute switch, nothing to unmute"
+  fi
+  if amixer -c "$ANALOG_CARD" sset "$CTL" 0dB >/dev/null 2>&1; then
+    echo "   $CTL set to 0dB (unity)"
+  else
+    echo "   WARNING: could not set the $CTL level; check it with alsamixer"
+  fi
+  if alsactl store >/dev/null 2>&1; then
+    echo "   mixer state saved — survives a reboot"
+  else
+    echo "   WARNING: alsactl store failed; the level will not survive a reboot"
+  fi
+else
+  echo "   mixer not touched — the card is not up yet (reboot, then re-run)"
+fi
+
+echo "== audio-check helper =="
+# The tool you want when the room is silent and every unit is green. deploy.sh
+# installs it too, so a box that only ever gets deploys still has it.
+if install -m 755 "$(dirname "$0")/audio-check.sh" /usr/local/bin/audio-check.sh 2>/dev/null; then
+  echo "   installed /usr/local/bin/audio-check.sh"
+else
+  echo "   audio-check.sh not next to this script; deploy.sh will install it"
+fi
 
 echo "== directories =="
 install -d -m 755 /opt/lockerroom
@@ -196,3 +329,12 @@ echo "  2. put the real device_key in /etc/lockerroom/config.toml"
 echo "  3. from the laptop: pi/scripts/deploy.sh pi@<host>"
 echo "     (that installs the units, the aplay drop-in, and the code)"
 echo "  4. pair a phone and confirm audio"
+echo "     if the room is silent: sudo audio-check.sh   (--tone to prove the jack)"
+if [ "$AUDIO_REBOOT" = "1" ]; then
+  echo
+  echo "  !! REBOOT REQUIRED BEFORE THERE WILL BE ANY SOUND."
+  echo "     Analog output was only just enabled in $BOOT_CFG, and the firmware"
+  echo "     reads that file at boot. Until then the 3.5mm jack does not exist"
+  echo "     as an ALSA card, and every other check will still look green."
+  echo "     After rebooting: sudo audio-check.sh --tone"
+fi
