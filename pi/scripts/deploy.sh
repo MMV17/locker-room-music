@@ -92,6 +92,68 @@ systemctl is-active lockerroom-listener
 systemctl is-active lockerroom-netwatch
 systemctl is-active bt-agent
 systemctl is-active keep-discoverable
+
+# Audio output drift check. READ-ONLY BY DESIGN: deploy DIAGNOSES, provision.sh
+# FIXES. A deploy that silently rewrote /etc/asound.conf would also silently
+# stomp a hand-written one on a box with a DAC.
+#
+# Why this belongs in a deploy and not only in provisioning: ALSA card NUMBERS
+# are handed out in kernel enumeration order, so a kernel or firmware update can
+# renumber them and silence a box that has worked for months with nothing on
+# disk having changed. That box gets deploys, not provisions. See "CONFIRMED
+# (2026-08-22)" in docs/STATE.md.
+#
+# Never exits non-zero: the code is already deployed by this point and aborting
+# here would strand the box mid-deploy for a fault that needs a human anyway.
+echo "== audio out: verify =="
+AUDIO_OK=1
+ANALOG_CARD="$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*bcm2835.*/\1/p' /proc/asound/cards 2>/dev/null | head -1 | tr -d ' ' || true)"
+ANALOG_IDX=""
+if [ -n "$ANALOG_CARD" ]; then
+  ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$ANALOG_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1 || true)"
+fi
+if [ -z "$ANALOG_CARD" ] || [ -z "$ANALOG_IDX" ]; then
+  echo "   WARNING: no bcm2835 analog card present — cannot verify."
+  AUDIO_OK=0
+elif ! command -v aplay >/dev/null 2>&1; then
+  echo "   WARNING: aplay is not installed — cannot verify."
+  AUDIO_OK=0
+else
+  APERR="$(mktemp)"
+  APRC=0
+  # /dev/zero is silence: safe to run on a live box with people in the room.
+  aplay -D default -f S16_LE -r 48000 -c 2 -d 2 /dev/zero >/dev/null 2>"$APERR" &
+  APID=$!
+  sleep 1
+  PCM_STATE="$(sed -n 's/^state: //p' "/proc/asound/card$ANALOG_IDX/pcm0p/sub0/status" 2>/dev/null || true)"
+  wait "$APID" || APRC=$?
+  if [ "$APRC" != "0" ] && grep -qi 'busy' "$APERR" 2>/dev/null; then
+    # NOT a failure, and getting this wrong would cry wolf on every deploy done
+    # while a song is playing. Our asound.conf is plug->hw, which does not mix,
+    # so a live bluealsa-aplay legitimately holds the device. Something holding
+    # the default open is evidence the path is wired up, not that it is broken.
+    echo "   default is BUSY — bluealsa-aplay is holding it. Path is live; not a fault."
+  elif [ "$APRC" != "0" ]; then
+    echo "   ERROR: the ALSA default will not open:"
+    sed 's/^/     /' "$APERR" || true
+    echo "     -524 (ENOTSUPP) means the default is a vc4-hdmi card, not the jack."
+    AUDIO_OK=0
+  elif [ "${PCM_STATE:-}" = "RUNNING" ]; then
+    echo "   VERIFIED: the default opened card $ANALOG_IDX (\"$ANALOG_CARD\") and ran"
+  else
+    echo "   ERROR: the default opened, but card $ANALOG_IDX (\"$ANALOG_CARD\")"
+    echo "     never started — something ELSE is the ALSA default."
+    AUDIO_OK=0
+  fi
+  rm -f "$APERR" || true
+fi
+if [ "$AUDIO_OK" = "0" ]; then
+  echo
+  echo "   !! THIS BOX WILL BE SILENT. The code deployed fine; the audio path"
+  echo "      did not. Every service above can be green and the room still"
+  echo "      hears nothing — that is the whole failure mode this catches."
+  echo "      Fix with:  sudo bash provision.sh     Diagnose:  sudo audio-check.sh"
+fi
 REMOTE
 
 echo "Deployed."

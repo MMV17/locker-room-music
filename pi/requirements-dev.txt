@@ -1,0 +1,16 @@
+# Test-only dependencies. NOT installed on the Pi — provision.sh deliberately
+# installs requirements.txt and nothing else, because the box should carry the
+# code it runs and no more.
+#
+# Written 2026-08-22. pytest-asyncio is the load-bearing line here: without it
+# every async test in test_lifecycle.py and test_netwatch.py FAILS rather than
+# skipping, with the only clue a PytestUnknownMarkWarning buried in the warning
+# summary. That reads exactly like 52 broken tests. It cost a detour once; it
+# should not cost one twice.
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r pi/requirements.txt -r pi/requirements-dev.txt
+#   cd pi && ../.venv/bin/python -m pytest tests -q     # expect: 100 passed
+#
+# Last run 2026-08-22 on Python 3.14: 100 passed.
+pytest>=8
+pytest-asyncio>=0.23

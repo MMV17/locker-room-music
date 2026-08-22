@@ -163,6 +163,46 @@ fails loudly (`== audio out: verify ==`). Two details are load-bearing:
   a box with a monitor plugged in and card 0 opens perfectly cleanly — the bug
   would sail through a naive open test while the audio still went to HDMI.
 
+`deploy.sh` runs the same check, with one deliberate difference: **it never
+writes anything.** Deploy *diagnoses*, `provision.sh` *fixes*. A deploy that
+silently rewrote `/etc/asound.conf` would also silently stomp a hand-written one
+on a box with a DAC. It belongs in deploy as well as provision because card
+numbers renumber across kernel updates — that silences a box that has worked
+for months with nothing on disk having changed, and **that box gets deploys,
+not provisions.**
+
+One refinement worth keeping: our `asound.conf` is `plug` → `hw`, which does
+not mix, so a live `bluealsa-aplay` legitimately holds the device during a
+deploy done while a song is playing. The check treats a **busy** default as
+*evidence the path is wired up*, not as a fault. Without that it would cry wolf
+on every deploy performed during a practice.
+
+### Both checks verified on the box, in both states (2026-08-22)
+
+Not just written — *exercised*, over serial, against the real hardware:
+
+| | healthy box | `/etc/asound.conf` removed |
+|---|---|---|
+| `provision.sh` block | `VERIFIED: ... card 2 ("Headphones") and ran` | `ERROR ... 524`, `AUDIO_FAIL=1` |
+| `deploy.sh` block | `VERIFIED: ... card 2 ("Headphones") and ran` | `ERROR ... 524`, `AUDIO_OK=0` + `THIS BOX WILL BE SILENT` |
+
+The broken state was produced by moving the real file aside under a `trap`
+that guaranteed restore, with the backup on `/` rather than `/tmp` so a power
+cut mid-test could not lose it. Restored MD5 matched the original exactly.
+
+**A first attempt to fake the broken state with `ALSA_CONFIG_PATH` silently did
+not work** — the system `alsa.conf` includes `/etc/asound.conf` itself, so the
+real default won and the check correctly reported `VERIFIED`. That looked like
+the check failing to catch the fault when it was the *test* that was wrong. If
+you ever need to simulate this, move the file; do not override the config path.
+
+### Running the tests
+
+`pi/requirements-dev.txt` now exists, and it is worth reading before you doubt
+a test run. **Without `pytest-asyncio`, 52 tests FAIL rather than skip**, and
+the only clue is a `PytestUnknownMarkWarning` buried in the warning summary.
+With it: **100 passed** (Python 3.14, 2026-08-22).
+
 The stage 6 serial console is what made all of this possible with the box
 inaccessible. It is no longer "parked" — see the runbook note.
 
