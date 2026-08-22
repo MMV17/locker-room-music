@@ -592,6 +592,21 @@ the script says so again at the end. That reboot is the one stage 8 already
 asks for, so it costs nothing extra — but skipping it and then testing audio
 will send you looking for a half-seated daughterboard that is seated fine.
 
+**Then watch `== audio out: verify ==`, which is the one that actually
+matters.** New 2026-08-22. Everything above it writes configuration; this is
+the only line that *tests* the result. You want:
+
+```
+   VERIFIED: the default opened card 2 ("Headphones") and ran
+```
+
+It plays `/dev/zero` — silence — so it is safe to run with people in the room,
+and it checks **which** card started, not just that something opened. If it
+prints an error instead, the script says `THE AUDIO OUTPUT DID NOT VERIFY` at
+the very end and **the box will be silent no matter how green everything else
+looks**. Do not ship it. This is the check that would have saved the whole
+2026-08-21 → 22 hunt; see "CONFIRMED (2026-08-22)" in `docs/STATE.md`.
+
 It deliberately does **not** do wifi or `device_key`. Both need a human, and
 both are stage 8.
 

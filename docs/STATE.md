@@ -1,6 +1,6 @@
 # Project state — resume here
 
-Last worked: **2026-08-21**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-08-22**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
@@ -89,14 +89,82 @@ attempt and **does not explain the fault** — no audio reaches *any* speaker,
 which puts the fault upstream of every speaker: the Pi, its ALSA config, the
 case's rear jack, or the cable.
 
-That is entirely consistent with "the ALSA default was never set" below, which
-remains the leading hypothesis and is still **untested on the box** — every
-attempt so far has swapped speakers and cables rather than looking at what the
-Pi is doing. Two speakers is not two data points about the Pi; it is one.
+That was entirely consistent with "the ALSA default was never set" below, which
+was then the leading hypothesis — every attempt so far had swapped speakers and
+cables rather than looking at what the Pi was doing. Two speakers is not two
+data points about the Pi; it is one.
 
-The decisive test needs no speaker at all: **wired headphones in the case's
-rear jack, `sudo audio-check.sh --tone`.** That removes the speaker, its input
-mode and the aux cable from the question in one move.
+**CONFIRMED 2026-08-22 over the serial console, and fixed. The audio works.**
+See the section immediately below.
+
+## CONFIRMED (2026-08-22): the ALSA default was an unopenable HDMI card
+
+The hypothesis below was right, and it took no speaker, no headphones and no
+physical access to prove — the whole diagnosis ran over the stage 6 serial
+console, which is the first time that console has paid for itself.
+
+**The single decisive command, and its answer:**
+
+```
+$ speaker-test -D default
+Playback open error: -524,Unknown error 524
+```
+
+**−524 is `ENOTSUPP`, from `vc4-hdmi` refusing to open with no display
+attached.** So the ALSA default was not merely inaudible — it could not be
+opened at all. Anything that tried to play through it got an error and stopped,
+which is why swapping speakers could never have worked.
+
+The chain, every link read off the running box rather than inferred:
+
+| link | evidence |
+|---|---|
+| `bluealsa-aplay` uses the ALSA default | running process was `/usr/bin/bluealsa-aplay -S` — **no `-D`** |
+| default = card 0 | `/usr/share/alsa/alsa.conf:105-106` → `defaults.pcm.card 0` |
+| card 0 = `vc4hdmi0` | `/proc/asound/cards`; `Headphones` was card **2** |
+| nothing overrode it | no `/etc/asound.conf`, no `~/.asoundrc`, no `/root/.asoundrc`, `/etc/alsa/conf.d/` held only the bluealsa plugin |
+| card 0 unopenable | `-524` |
+| card 2 healthy | `speaker-test -D plughw:Headphones` → `state: RUNNING` |
+
+**The fix was exactly what `provision.sh` already writes** — `/etc/asound.conf`
+pinning the default to `card "Headphones"` by ID, mixer to 0dB, `alsactl
+store`. Applied by hand over serial because this branch had never been deployed
+to that box (`audio-check.sh` was not installed on it, which is how we know).
+Afterwards:
+
+```
+$ speaker-test -D default
+/proc/asound/card2/pcm0p/sub0/status:  state: RUNNING
+```
+
+Same command, same box, no reboot. **Sound confirmed at the speaker.**
+
+Two things learned that were not in the original write-up:
+
+- **The mixer was at −19.88dB**, unmuted. Not the fault, but it would have made
+  the fix sound half-broken on first listen. `provision.sh` sets 0dB for this
+  reason; it is not cosmetic.
+- **`bluealsa-aplay` opens the ALSA device lazily**, only when audio actually
+  arrives. Across a 17-minute phone connection it logged no open and no error,
+  because no A2DP stream ever reached it. So *silence in that log is not
+  evidence of health* — it can equally mean nothing was ever streamed.
+
+### The check that would have caught this in provisioning
+
+`provision.sh` wrote all three layers of config and then **trusted them**.
+Nothing asserted the result, so a wrong default stayed invisible until a room
+full of people heard nothing. It now runs `aplay -D default /dev/zero` and
+fails loudly (`== audio out: verify ==`). Two details are load-bearing:
+
+- **`/dev/zero` is silence**, so the check makes no sound and is safe to run
+  during provisioning with people around. A check that plays a tone is a check
+  that gets skipped.
+- **It asserts WHICH card ran**, not merely that the open succeeded. Provision
+  a box with a monitor plugged in and card 0 opens perfectly cleanly — the bug
+  would sail through a naive open test while the audio still went to HDMI.
+
+The stage 6 serial console is what made all of this possible with the box
+inaccessible. It is no longer "parked" — see the runbook note.
 
 ### Drive it over USB instead — this is better than the jack was
 

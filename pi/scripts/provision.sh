@@ -230,6 +230,61 @@ else
   echo "   mixer not touched — the card is not up yet (reboot, then re-run)"
 fi
 
+# 4. PROVE it. Everything above writes configuration and trusts it; this is the
+#    only step that tests the result, and it is the difference between finding
+#    this fault in provisioning and finding it in a locker room.
+#
+#    Written 2026-08-22, after the fault this whole section was written for was
+#    finally reproduced on a real box over the serial console. The config looked
+#    perfect and `speaker-test -D default` returned ENOTSUPP (-524) — vc4-hdmi
+#    refusing to open with no display attached. A misconfigured ALSA default is
+#    invisible to every log and every `systemctl status` on the system; an
+#    open() against it fails instantly and unambiguously.
+#
+#    /dev/zero is silence, so this makes NO SOUND and is safe to run in a room
+#    with people in it. That is deliberate: a check that plays a tone would not
+#    get run during provisioning, and this one has to.
+#
+#    Checking that the default merely OPENS is not enough. Provisioning with a
+#    monitor plugged in makes card 0 (vc4-hdmi) open perfectly cleanly, so the
+#    open succeeds while the audio still goes to HDMI — the exact bug, passing
+#    its own test. So assert WHICH card ran, by reading its PCM status.
+echo "== audio out: verify =="
+AUDIO_FAIL=0
+ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$ANALOG_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1)"
+if [ "$AUDIO_REBOOT" = "1" ]; then
+  echo "   skipped — the analog card does not exist until the reboot below"
+elif [ -z "$ANALOG_IDX" ]; then
+  echo "   WARNING: card \"$ANALOG_CARD\" has no index; cannot verify"
+elif ! command -v aplay >/dev/null 2>&1; then
+  echo "   WARNING: aplay is not installed; cannot verify the default opens"
+else
+  APERR="$(mktemp)"
+  aplay -D default -f S16_LE -r 48000 -c 2 -d 2 /dev/zero >/dev/null 2>"$APERR" &
+  APID=$!
+  sleep 1
+  PCM_STATE="$(sed -n 's/^state: //p' \
+    "/proc/asound/card$ANALOG_IDX/pcm0p/sub0/status" 2>/dev/null)"
+  wait "$APID" 2>/dev/null; APRC=$?
+  if [ "$APRC" != "0" ]; then
+    echo "   ERROR: the ALSA default would not open at all:"
+    sed 's/^/     /' "$APERR"
+    echo "     Nothing will ever come out of the jack until this is fixed."
+    echo "     Error -524 (ENOTSUPP) means the default is STILL a vc4-hdmi card"
+    echo "     with no display attached. Check /etc/asound.conf was written."
+    AUDIO_FAIL=1
+  elif [ "$PCM_STATE" = "RUNNING" ]; then
+    echo "   VERIFIED: the default opened card $ANALOG_IDX (\"$ANALOG_CARD\") and ran"
+  else
+    echo "   ERROR: the default opened, but card $ANALOG_IDX (\"$ANALOG_CARD\")"
+    echo "     never started. Something ELSE is the ALSA default — most likely"
+    echo "     an HDMI card that opened cleanly because a monitor is attached."
+    echo "     Audio is going somewhere that is not the jack. Run: audio-check.sh"
+    AUDIO_FAIL=1
+  fi
+  rm -f "$APERR"
+fi
+
 echo "== audio-check helper =="
 # The tool you want when the room is silent and every unit is green. deploy.sh
 # installs it too, so a box that only ever gets deploys still has it.
@@ -337,4 +392,12 @@ if [ "$AUDIO_REBOOT" = "1" ]; then
   echo "     reads that file at boot. Until then the 3.5mm jack does not exist"
   echo "     as an ALSA card, and every other check will still look green."
   echo "     After rebooting: sudo audio-check.sh --tone"
+fi
+if [ "${AUDIO_FAIL:-0}" = "1" ]; then
+  echo
+  echo "  !! THE AUDIO OUTPUT DID NOT VERIFY. THIS BOX WILL BE SILENT."
+  echo "     See the '== audio out: verify ==' section above for the reason."
+  echo "     Everything else can be green and the room will still hear nothing;"
+  echo "     that is the whole failure mode this check exists to catch."
+  echo "     Do not ship this box. Run: sudo audio-check.sh"
 fi
