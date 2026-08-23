@@ -1,6 +1,6 @@
 # Project state — resume here
 
-Last worked: **2026-08-22**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-08-23**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
@@ -95,7 +95,128 @@ cables rather than looking at what the Pi was doing. Two speakers is not two
 data points about the Pi; it is one.
 
 **CONFIRMED 2026-08-22 over the serial console, and fixed. The audio works.**
-See the section immediately below.
+See "CONFIRMED (2026-08-22): the ALSA default was an unopenable HDMI card"
+below. The relay workaround for the Charge 6's missing aux input was tested
+on 2026-08-23 and rejected — see the next section.
+
+## The Bluetooth relay to the JBL: tested 2026-08-23, NO-GO
+
+Because the Charge 6 has no analog input (above) and the USB-A-to-USB-C cable
+its wired mode needs was not on hand, the obvious idea is to make the Pi relay:
+accept the phone as an A2DP **sink**, then re-transmit to the JBL as an A2DP
+**source**, both on the one radio. **It works, and it is not usable.** Tested
+end to end over the serial console; nothing was left behind.
+
+**JBL Charge 6 MAC: `78:66:F3:1C:9D:B6`** (pairing has since been removed).
+
+Two things were easier than expected, and are worth knowing if this ever comes
+back up:
+
+- **`bluealsa` already runs `-p a2dp-source -p a2dp-sink`.** No drop-in is
+  needed and `/etc/systemd/system/bluealsa.service.d/` does not exist. Any
+  instructions telling you to add one are working from a wrong assumption.
+- **The rate mismatch resolves itself.** The phone captures SBC at 44100 and
+  the JBL advertises 48000, but bluealsa renegotiates the sink down
+  (`Changing BlueALSA PCM configuration: 2 ch, 48000 Hz -> 2 ch, 44100 Hz`), so
+  the plain `-D bluealsa:DEV=...` form works and **no `plug:` wrapper and no
+  resampling are involved.** The whole relay is one command that touches no
+  file on disk:
+
+```bash
+sudo systemctl stop bluealsa-aplay
+bluealsa-aplay -D bluealsa:DEV=78:66:F3:1C:9D:B6,PROFILE=a2dp
+```
+
+### Why it is a no-go: airtime, not tuning
+
+Audio arrived, latency was tolerable, and there was persistent stuttering with
+brief dropouts. The instinct is to tune buffers. **The evidence says do not
+bother**, because nothing on the Pi was struggling:
+
+| suspect | measurement | verdict |
+|---|---|---|
+| CPU / double SBC transcode | `top`: **97.9% idle** | not it — the transcode is free on a Pi 4 |
+| ALSA buffering | **5 underruns** in the whole run | not it — our side kept up |
+| the air | see below | **this is it** |
+
+Samples were being lost *between radios*, not inside the box. wifi was
+associated to HCGuest on **channel 11 (2462 MHz) at -64 dBm, negotiated down to
+5.5 Mbit/s** — an 802.11b rate, burning enormous airtime to move almost
+nothing, on the same antenna and the same 2.4 GHz band Bluetooth hops through.
+Add two simultaneous A2DP links to that one radio and there is no headroom
+left. A bigger buffer cannot manufacture airtime.
+
+### It wedged the controller
+
+Killing inquiry/page scan (`systemctl stop keep-discoverable` plus
+`bluetoothctl discoverable off` / `pairable off`, leaving `hciconfig hci0`
+showing bare `UP RUNNING`) did **not** help. Shortly after, the controller hard
+hung: both devices dropped in the same instant, and `dmesg` filled with
+
+```
+Bluetooth: hci0: Opcode 0x0c03 failed: -110
+```
+
+`0x0c03` is **HCI_Reset**. The controller was not answering a reset. **Be
+honest about causation: this is correlation in time.** The scan change and the
+sink+source load are equally good suspects and the test did not separate them.
+Either way, a speaker that can wedge its own radio does not belong in a locker
+room.
+
+### The recovery move — worth knowing regardless of the relay
+
+**When the controller wedges, the three obvious commands all fail:**
+`systemctl restart bluetooth`, `sudo hciconfig hci0 up` (`Can't init device
+hci0: Connection timed out (110)`), and `btmgmt power on`
+(`org.bluez.Error.Failed`). Every service still reports `active` while the
+radio is dead — the everything-green-and-silent failure class again.
+
+This box has **no `hciuart.service`**; the adapter is serdev-based, with
+`hci_uart_bcm` bound to `serial0-0`. Unbinding and rebinding re-runs the
+firmware download and brings it back:
+
+```bash
+echo serial0-0 | sudo tee /sys/bus/serial/drivers/hci_uart_bcm/unbind
+sleep 3
+echo serial0-0 | sudo tee /sys/bus/serial/drivers/hci_uart_bcm/bind
+```
+
+Six seconds, and `hciconfig hci0` goes back to `UP RUNNING PSCAN ISCAN`. That
+turned a reboot into nothing on a box whose only access is a serial cable.
+Restart `bluealsa`, `bluealsa-aplay`, `keep-discoverable`, `bt-agent` and
+`lockerroom-listener` afterwards so they re-bind to the new adapter.
+
+### The blocker no tuning fixes: the listener treats the far speaker as a DJ
+
+**This is the finding that actually kills the idea**, and it is a code problem,
+not a config one. While the JBL was connected, `lifecycle.py` saw it as just
+another connected device and gave it the aux:
+
+```
+lockerroom.bluez: device disconnected: /org/bluez/hci0/dev_78_66_F3_1C_9D_B6
+lockerroom.lifecycle: aux granted to JBL Charge 6 (78:66:F3:1C:9D:B6)
+lockerroom.lifecycle: session closed: JBL Charge 6 (78:66:F3:1C:9D:B6)
+```
+
+A relay target opens and closes **play sessions**, competes for the aux against
+a real phone, and lands in the play data. Any future attempt at this has to
+teach the lifecycle the difference between a phone that is a source and a
+speaker that is a sink. Weigh that against simply buying the USB-A-to-USB-C
+cable the Charge 6 wants.
+
+### What the test left behind
+
+Nothing. No file on the Pi was created or edited at any point — no drop-in was
+needed and **`/etc/asound.conf` was never touched** (md5 `74a8969d…`, 920
+bytes, verified identical before and after). The JBL pairing was removed, all
+seven services are `active`, the adapter is `UP RUNNING PSCAN ISCAN`, and the
+ALSA default still opens card 2 and runs.
+
+One gap in the written procedure, for whoever writes the next one:
+**`audio-check.sh` is not on this box.** It is shipped by `deploy.sh`, and this
+Pi was provisioned before that line existed, so `sudo audio-check.sh` returns
+`command not found`. The equivalent checks were run inline instead. A deploy
+would install it.
 
 ## CONFIRMED (2026-08-22): the ALSA default was an unopenable HDMI card
 
