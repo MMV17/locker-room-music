@@ -43,6 +43,12 @@ scp -q "${REPO_ROOT}/pi/scripts/keep-discoverable.sh" "${PI_HOST}:/tmp/keep-disc
 # is needed on is the one you cannot easily reach, and because a speaker
 # provisioned before 2026-08-21 does not have it.
 scp -q "${REPO_ROOT}/pi/scripts/audio-check.sh" "${PI_HOST}:/tmp/audio-check.sh"
+# Automatic output routing: USB speaker if one is plugged in, else the 3.5mm
+# jack. The udev rule is what makes plugging a cable in take effect at once;
+# the unit also runs at boot so a speaker already connected at power-on works.
+scp -q "${REPO_ROOT}/pi/scripts/audio-route.sh" "${PI_HOST}:/tmp/audio-route.sh"
+scp -q "${REPO_ROOT}/pi/systemd/lockerroom-audio-route.service" "${PI_HOST}:/tmp/lockerroom-audio-route.service"
+scp -q "${REPO_ROOT}/pi/systemd/99-lockerroom-audio.rules" "${PI_HOST}:/tmp/99-lockerroom-audio.rules"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -56,12 +62,27 @@ sudo mv /tmp/bt-agent.service /etc/systemd/system/bt-agent.service
 sudo mv /tmp/keep-discoverable.service /etc/systemd/system/keep-discoverable.service
 sudo install -m 755 /tmp/keep-discoverable.sh /usr/local/bin/keep-discoverable.sh
 sudo install -m 755 /tmp/audio-check.sh /usr/local/bin/audio-check.sh
+sudo install -m 755 /tmp/audio-route.sh /usr/local/bin/audio-route.sh
+sudo mv /tmp/lockerroom-audio-route.service /etc/systemd/system/lockerroom-audio-route.service
+sudo mv /tmp/99-lockerroom-audio.rules /etc/udev/rules.d/99-lockerroom-audio.rules
+# udev caches its rules; without this the rule sits on disk doing nothing until
+# the next reboot, and plugging a cable in appears to be silently ignored.
+sudo udevadm control --reload-rules
 # Teaches bluealsa-aplay to play one phone instead of mixing every connected
 # one. Restarted below so a changed drop-in actually takes effect; the listener
 # re-points it within a second of the next connection either way.
 sudo mkdir -p /etc/systemd/system/bluealsa-aplay.service.d
 sudo mv /tmp/bluealsa-aplay-aux.conf /etc/systemd/system/bluealsa-aplay.service.d/aux.conf
 sudo systemctl daemon-reload
+# Route the audio BEFORE restarting the player, so the restart below lands on
+# the right card either way. `enable` so a speaker plugged in before power-on
+# is picked up at boot rather than depending on coldplug uevent replay ordering
+# beating bluealsa-aplay. It exits 1 when there is no card at all (it refuses to
+# name one that does not exist), and the audio verification further down is what
+# reports that properly — so it must not abort the deploy here.
+echo "== audio out: route =="
+sudo systemctl enable lockerroom-audio-route
+sudo /usr/local/bin/audio-route.sh || true
 sudo systemctl restart bluealsa-aplay
 # `enable` the listener too. It was missing here until 2026-08-19 and had only
 # ever been enabled BY HAND on the first box — the same omission that left
@@ -93,9 +114,16 @@ systemctl is-active lockerroom-netwatch
 systemctl is-active bt-agent
 systemctl is-active keep-discoverable
 
-# Audio output drift check. READ-ONLY BY DESIGN: deploy DIAGNOSES, provision.sh
-# FIXES. A deploy that silently rewrote /etc/asound.conf would also silently
-# stomp a hand-written one on a box with a DAC.
+# Audio output drift check. This VERIFICATION is read-only; it diagnoses and
+# never fixes.
+#
+# The "deploy never writes /etc/asound.conf at all" rule was relaxed on
+# 2026-08-28, when the routing step above started calling audio-route.sh. The
+# reason for the original rule still stands and is still honoured: a deploy must
+# not stomp a hand-written config on a box with a DAC. audio-route.sh checks for
+# its own "# managed by lockerroom" marker and leaves an unmarked file strictly
+# alone, which is what makes it safe to run here. Do not replace that call with
+# anything that writes unconditionally.
 #
 # Why this belongs in a deploy and not only in provisioning: ALSA card NUMBERS
 # are handed out in kernel enumeration order, so a kernel or firmware update can
@@ -105,15 +133,29 @@ systemctl is-active keep-discoverable
 #
 # Never exits non-zero: the code is already deployed by this point and aborting
 # here would strand the box mid-deploy for a fault that needs a human anyway.
+#
+# Verified against the SELECTED card, not the analog one. Since 2026-08-28 a USB
+# speaker correctly takes the default away from the jack, and asserting on the
+# analog card would print "THIS BOX WILL BE SILENT" on a perfectly healthy box —
+# lying in the most alarming possible direction, on the one check that exists
+# because nobody can tell silence from health by looking at the units.
 echo "== audio out: verify =="
 AUDIO_OK=1
-ANALOG_CARD="$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*bcm2835.*/\1/p' /proc/asound/cards 2>/dev/null | head -1 | tr -d ' ' || true)"
-ANALOG_IDX=""
-if [ -n "$ANALOG_CARD" ]; then
-  ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$ANALOG_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1 || true)"
+# What audio-route.sh actually chose. Falls back to finding the analog card
+# directly, so a box that has not had a routing deploy yet still verifies.
+SELECTED_CARD="$(sed -n 's/^[a-z]*://p' /run/lockerroom/audio-out 2>/dev/null | head -1 || true)"
+if [ -n "$SELECTED_CARD" ]; then
+  echo "   routed to: $(cat /run/lockerroom/audio-out)"
+else
+  SELECTED_CARD="$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*bcm2835.*/\1/p' /proc/asound/cards 2>/dev/null | head -1 | tr -d ' ' || true)"
+  echo "   no /run/lockerroom/audio-out — falling back to the analog card"
 fi
-if [ -z "$ANALOG_CARD" ] || [ -z "$ANALOG_IDX" ]; then
-  echo "   WARNING: no bcm2835 analog card present — cannot verify."
+ANALOG_IDX=""
+if [ -n "$SELECTED_CARD" ]; then
+  ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$SELECTED_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1 || true)"
+fi
+if [ -z "$SELECTED_CARD" ] || [ -z "$ANALOG_IDX" ]; then
+  echo "   WARNING: no usable output card present — cannot verify."
   AUDIO_OK=0
 elif ! command -v aplay >/dev/null 2>&1; then
   echo "   WARNING: aplay is not installed — cannot verify."
@@ -139,9 +181,9 @@ else
     echo "     -524 (ENOTSUPP) means the default is a vc4-hdmi card, not the jack."
     AUDIO_OK=0
   elif [ "${PCM_STATE:-}" = "RUNNING" ]; then
-    echo "   VERIFIED: the default opened card $ANALOG_IDX (\"$ANALOG_CARD\") and ran"
+    echo "   VERIFIED: the default opened card $ANALOG_IDX (\"$SELECTED_CARD\") and ran"
   else
-    echo "   ERROR: the default opened, but card $ANALOG_IDX (\"$ANALOG_CARD\")"
+    echo "   ERROR: the default opened, but card $ANALOG_IDX (\"$SELECTED_CARD\")"
     echo "     never started — something ELSE is the ALSA default."
     AUDIO_OK=0
   fi

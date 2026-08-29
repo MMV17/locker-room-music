@@ -11,7 +11,8 @@
 # 3.5mm jack, so nothing in `systemctl status` can ever show it.
 #
 # This walks the path in the order it breaks and ends with a verdict. It only
-# reads state; it changes nothing. `provision.sh` is what fixes things.
+# reads state; it changes nothing. `audio-route.sh` fixes the output routing;
+# `provision.sh` fixes everything else.
 #
 # --tone plays three seconds of 440Hz straight at the ALSA default device,
 # which is the single test that separates "the analog side is broken" from
@@ -62,9 +63,38 @@ fi
 USB_CARDS="$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*USB.*/\1/p' /proc/asound/cards 2>/dev/null | tr -d ' ' || true)"
 if [ -n "$USB_CARDS" ]; then
   echo "USB audio card(s) present: $USB_CARDS"
-  echo "   (to use one, pin it as the ALSA default in /etc/asound.conf by ID —"
-  echo "    never pass -D to bluealsa-aplay; see the DAC note in docs/STATE.md)"
 fi
+
+hr "which output is selected right now"
+# Since 2026-08-28 audio-route.sh picks the output — USB if a USB playback card
+# is present, else the analog jack — from udev on every cable plug and at boot.
+# It records the choice here. SELECTED is what the rest of this script asserts
+# against, because with a USB speaker connected the analog card is correctly NOT
+# the default and checking the jack would report a fault on a healthy box.
+SELECTED=""
+if [ -r /run/lockerroom/audio-out ]; then
+  echo "   $(cat /run/lockerroom/audio-out)"
+  SELECTED="$(sed -n 's/^[a-z]*://p' /run/lockerroom/audio-out | head -1)"
+  if ! grep -qE "^ *[0-9]+ \[$SELECTED *\]" /proc/asound/cards 2>/dev/null; then
+    problem "The routed card \"$SELECTED\" does not exist any more. Re-run:
+     sudo audio-route.sh"
+    SELECTED=""
+  fi
+else
+  echo "   no /run/lockerroom/audio-out."
+  if [ -x /usr/local/bin/audio-route.sh ]; then
+    # /run is tmpfs; the unit writes this at every boot, so a missing file on a
+    # box that HAS the script means the unit did not run.
+    problem "audio-route.sh is installed but has not run since boot. The output
+     is whatever /etc/asound.conf last said, which may not match the cable that
+     is actually plugged in. Check: systemctl status lockerroom-audio-route"
+  else
+    echo "   (this box predates automatic output routing — deploy to add it)"
+  fi
+fi
+# Everything below falls back to the analog card, which is what a box without
+# routing has always used.
+SELECTED="${SELECTED:-$ANALOG}"
 
 hr "analog audio enabled in firmware config"
 BOOT_CFG=""
@@ -113,8 +143,8 @@ else
      ALSA default is card 0 = \"$CARD0\", but the 3.5mm jack is \"$ANALOG\".
      bluealsa-aplay is therefore playing into $CARD0 (an HDMI port with nothing
      in it) while Bluetooth, AVRCP and the website all work perfectly.
-     Fix: re-run provision.sh, which writes /etc/asound.conf pinning the
-     default to the analog card BY NAME."
+     Fix: sudo audio-route.sh, which writes /etc/asound.conf pinning the
+     default to a card that exists, BY NAME."
   fi
 fi
 [ -f /root/.asoundrc ] && { echo "NOTE: /root/.asoundrc exists and overrides the above for root:"; sed 's/^/   /' /root/.asoundrc; }
@@ -224,15 +254,21 @@ if [ "$TONE" = "1" ]; then
   speaker-test -D default -t sine -f 440 -c 2 -l 1 >"$TONE_LOG" 2>&1 &
   TONE_PID=$!
   sleep 1
+  # The SELECTED card, not the analog one. The tone plays at -D default, so it
+  # follows whatever audio-route.sh chose — which is the whole reason routing
+  # was built on the ALSA default rather than on a -D flag passed to
+  # bluealsa-aplay. Asserting on the jack here would make this diagnostic test a
+  # different output than the one carrying the music, which is worse than having
+  # no diagnostic at all.
   IDX=""
-  [ -n "$ANALOG" ] && IDX="$(card_index "$ANALOG")"
+  [ -n "$SELECTED" ] && IDX="$(card_index "$SELECTED")"
   STATUS="/proc/asound/card${IDX:-0}/pcm0p/sub0/status"
   if [ -r "$STATUS" ]; then
     echo "   $STATUS while the tone plays:"
     sed 's/^/      /' "$STATUS"
     if grep -qi 'state: RUNNING' "$STATUS"; then
       echo
-      echo "   -> The kernel IS clocking audio out of the analog card."
+      echo "   -> The kernel IS clocking audio out of card \"$SELECTED\"."
       echo "      Every software layer is working. If the room is still silent,"
       echo "      the fault is PHYSICAL and downstream of the SoC:"
       echo "        - the 3.5mm cable (test it on a phone; they fail constantly)"

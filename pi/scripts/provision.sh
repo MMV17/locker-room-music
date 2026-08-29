@@ -164,41 +164,34 @@ else
   echo "   analog card id: $ANALOG_CARD"
 fi
 
-ASOUND_MARK="# managed by lockerroom provision.sh"
-if [ -f /etc/asound.conf ] && ! grep -qF "$ASOUND_MARK" /etc/asound.conf; then
-  echo "   /etc/asound.conf exists and this script did not write it — left alone"
-  echo "   (correct if a DAC was added; confirm it names a card that exists)"
+# Delegated to audio-route.sh, which is THE ONLY WRITER of /etc/asound.conf.
+# This block used to hand-roll the same heredoc; two scripts writing one file
+# drift the moment either changes, and that file is the whole audio path.
+#
+# audio-route.sh also runs from udev on every cable plug, so it picks a USB
+# speaker over the jack when one is connected — see its header for why the rule
+# is one-sided (the Pi 4's jack has no sense pin and cannot be detected).
+#
+# --bootstrap covers this script's pre-reboot case: dtparam=audio=on was only
+# just added, no card exists yet, and it writes the stock id on faith exactly
+# as this block used to. Without the flag it REFUSES to name a card that does
+# not exist, which is the right behaviour everywhere else.
+if [ -f "$(dirname "$0")/audio-route.sh" ]; then
+  install -m 755 "$(dirname "$0")/audio-route.sh" /usr/local/bin/audio-route.sh
+  echo "   installed /usr/local/bin/audio-route.sh"
+  ROUTE_ARGS=""
+  [ "$AUDIO_REBOOT" = "1" ] && ROUTE_ARGS="--bootstrap"
+  /usr/local/bin/audio-route.sh $ROUTE_ARGS || true
+  # Re-read: on a box with a USB speaker already plugged in, the selected card
+  # is NOT the analog one, and the mixer and verification steps below have to
+  # follow the actual selection rather than assume the jack.
+  SELECTED_CARD="$(sed -n 's/^[a-z]*://p' /run/lockerroom/audio-out 2>/dev/null | head -1)"
+  SELECTED_CARD="${SELECTED_CARD:-$ANALOG_CARD}"
 else
-  cat > /etc/asound.conf <<EOF
-$ASOUND_MARK
-#
-# Naming the card by ID is the load-bearing part. Card *numbers* are handed out
-# in kernel enumeration order, so an image change, a firmware update, or a
-# kernel that probes vc4 before bcm2835 renumbers them and the speaker goes
-# silent with nothing on disk having changed. "$ANALOG_CARD" is stable.
-#
-# Set as the DEFAULT rather than passed to bluealsa-aplay with -D, deliberately.
-# Every failure path in aux.py and in the systemd drop-in lands on a plain
-# bluealsa-aplay with no device argument, so the default is the only setting
-# all of them inherit. See the DAC note in docs/STATE.md.
-#
-# type plug, not raw hw: phones send 44.1k SBC and 48k AAC, and plug resamples
-# rather than failing to open the device.
-pcm.!default {
-    type plug
-    slave.pcm {
-        type hw
-        card "$ANALOG_CARD"
-        device 0
-    }
-}
-
-ctl.!default {
-    type hw
-    card "$ANALOG_CARD"
-}
-EOF
-  echo "   wrote /etc/asound.conf — default is now card \"$ANALOG_CARD\""
+  echo "   WARNING: audio-route.sh is not next to this script."
+  echo "   /etc/asound.conf was NOT written and this box will likely be silent."
+  echo "   Run deploy.sh, which installs it, then: sudo audio-route.sh"
+  SELECTED_CARD="$ANALOG_CARD"
 fi
 
 # 3. Unmuted, at a known level, and saved so a reboot keeps it. A fresh image
@@ -249,13 +242,18 @@ fi
 #    monitor plugged in makes card 0 (vc4-hdmi) open perfectly cleanly, so the
 #    open succeeds while the audio still goes to HDMI — the exact bug, passing
 #    its own test. So assert WHICH card ran, by reading its PCM status.
+#
+#    Verified against the SELECTED card, not the analog one. With a USB speaker
+#    plugged in, the analog card is correctly not the default, and asserting on
+#    it would fail this check on a perfectly healthy box.
 echo "== audio out: verify =="
 AUDIO_FAIL=0
-ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$ANALOG_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1)"
+SELECTED_CARD="${SELECTED_CARD:-$ANALOG_CARD}"
+ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$SELECTED_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1)"
 if [ "$AUDIO_REBOOT" = "1" ]; then
   echo "   skipped — the analog card does not exist until the reboot below"
 elif [ -z "$ANALOG_IDX" ]; then
-  echo "   WARNING: card \"$ANALOG_CARD\" has no index; cannot verify"
+  echo "   WARNING: card \"$SELECTED_CARD\" has no index; cannot verify"
 elif ! command -v aplay >/dev/null 2>&1; then
   echo "   WARNING: aplay is not installed; cannot verify the default opens"
 else
@@ -274,9 +272,9 @@ else
     echo "     with no display attached. Check /etc/asound.conf was written."
     AUDIO_FAIL=1
   elif [ "$PCM_STATE" = "RUNNING" ]; then
-    echo "   VERIFIED: the default opened card $ANALOG_IDX (\"$ANALOG_CARD\") and ran"
+    echo "   VERIFIED: the default opened card $ANALOG_IDX (\"$SELECTED_CARD\") and ran"
   else
-    echo "   ERROR: the default opened, but card $ANALOG_IDX (\"$ANALOG_CARD\")"
+    echo "   ERROR: the default opened, but card $ANALOG_IDX (\"$SELECTED_CARD\")"
     echo "     never started. Something ELSE is the ALSA default — most likely"
     echo "     an HDMI card that opened cleanly because a monitor is attached."
     echo "     Audio is going somewhere that is not the jack. Run: audio-check.sh"

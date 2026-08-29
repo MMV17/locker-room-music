@@ -1,0 +1,43 @@
+# Point the ALSA default at whichever output is plugged in.
+#
+# Installs to /etc/systemd/system/lockerroom-audio-route.service
+#
+# Triggered two ways, and it needs both:
+#
+#   - by udev on any sound-card add or remove (see 99-lockerroom-audio.rules),
+#     which is what makes plugging a cable in take effect immediately
+#   - at boot, because a speaker plugged in BEFORE power-on depends on coldplug
+#     uevent replay landing before bluealsa-aplay starts, and that ordering is
+#     not something worth betting the room on
+#
+# The script is idempotent and exits without touching anything when the
+# selection has not changed, so running it twice costs nothing.
+[Unit]
+Description=Route lockerroom audio to USB if present, else the analog jack
+# The analog card must exist before there is anything to choose between.
+After=sound.target
+Wants=sound.target
+# Not Requires= on bluealsa-aplay: the script restarts that unit itself, and a
+# dependency here would make the two fight over start order on every plug.
+#
+# Plugging one speaker in fires several sound uevents. systemd coalesces start
+# requests for a running oneshot into exactly one more run, and the script
+# no-ops when the selection is unchanged, so no debounce timer is needed. This
+# only stops a rapid plug/unplug from tripping the default start rate limit.
+#
+# In [Unit], not [Service]: these keys moved in systemd v230 and are silently
+# ignored under [Service], which is a fine way to think you have a rate limit
+# exemption and not have one.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/audio-route.sh
+# A run that finds no card at all exits 1 deliberately (it refuses to write a
+# config naming a card that does not exist). That is worth seeing in the
+# journal, but it must not leave the unit in a failed state that blocks the
+# next plug event from starting it.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

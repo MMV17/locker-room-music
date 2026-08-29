@@ -1,0 +1,21 @@
+# Re-route the audio output whenever a sound card appears or disappears.
+#
+# Installs to /etc/udev/rules.d/99-lockerroom-audio.rules
+#
+# A USB speaker enumerates as its own ALSA card, so plugging the USB-C cable in
+# is a `sound` `card*` add and pulling it is a remove. That is the entire
+# detection: reliable, kernel-sourced, and nothing like the 3.5mm jack, which
+# has no sense pin on a Pi 4 and cannot be detected at all. See the header of
+# audio-route.sh.
+#
+# RUN+= with `systemctl --no-block start`, NOT ENV{SYSTEMD_WANTS}:
+#
+#   - SYSTEMD_WANTS is unreliable on `remove`, because the device it would hang
+#     the job off is already going away — and remove is half of what we care
+#     about, since unplugging USB has to fall back to the jack
+#   - --no-block returns immediately, so this does not violate udev's rule
+#     against long-running RUN programs, which would otherwise stall the event
+#     queue for every device on the box
+#
+# 99- so this runs after the sound rules that create the device nodes.
+ACTION=="add|remove", SUBSYSTEM=="sound", KERNEL=="card*", RUN+="/usr/bin/systemctl --no-block start lockerroom-audio-route.service"
