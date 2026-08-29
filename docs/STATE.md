@@ -57,6 +57,64 @@ Build order status (spec section 10):
 
 ---
 
+## The box now follows the cable (2026-08-28) — USB if present, else the jack
+
+**Written, tested, committed on branch `audio-output-routing`. NOT YET DEPLOYED
+to hardware.** Design doc:
+`docs/superpowers/specs/2026-08-28-audio-output-routing-design.md`.
+
+The two sections below leave the speaker problem in an awkward place: some
+speakers take only a 3.5mm aux jack, the Charge 6 takes only USB-C digital
+audio, and choosing between them meant hand-editing `/etc/asound.conf` on a box
+campus makes hard to reach. `audio-route.sh` now does it automatically, from
+udev on every cable plug and at boot.
+
+**The rule is one-sided, and that is not a design choice.** The Pi 4's 3.5mm
+jack has **no jack-detect pin** and exposes no jack kcontrol, so nothing on this
+box can tell whether a cable is in it. Do not go looking for a way; there isn't
+one. USB is completely detectable — the speaker enumerates as its own ALSA card
+and udev fires on plug and unplug. So:
+
+> **USB playback card present → use it. Otherwise → the analog jack.**
+
+The jack is a *fallback*, not a detection, which is also the safe direction.
+
+**Three things here contradict what is written further down this file, and the
+code is what is now true:**
+
+| Older note | Now |
+|---|---|
+| "`provision.sh` writes `/etc/asound.conf`" | **`audio-route.sh` is the ONLY writer.** `provision.sh` calls it; the duplicate heredoc is gone so the two cannot drift. |
+| "deploy is READ-ONLY, it never writes `asound.conf`" | Deploy now runs `audio-route.sh`. The *reason* for the old rule still holds and is still honoured: an unmarked, hand-written config is left strictly alone. |
+| "never pass `-D` to `bluealsa-aplay`" | **Still true, and now load-bearing for a second reason.** Routing rides the ALSA *default*, so `audio-check.sh --tone` follows it automatically. Under `-D` the tone would test the jack while real audio went to USB — blinding the one diagnostic this project has. |
+
+**Two ideas that look right and are not:**
+
+- **Send audio to both outputs at once.** ALSA's `multi` opens *all* of its
+  slaves or none, so an unplugged USB cable takes the working jack down with
+  it — silence on every output with all units green, this project's signature
+  failure. Two free-running card clocks also drift into xruns. And it saves
+  nothing: building the config needs the same USB detection anyway.
+- **A pure `asound.conf` that falls back on its own.** There is no such thing.
+  ALSA config has no runtime conditional and cannot test whether a card exists.
+
+**What to check when the room is silent:** `cat /run/lockerroom/audio-out` says
+which output was chosen (`usb:Charge` or `jack:Headphones`). `/run` is tmpfs, so
+that file missing on a box that has the script means the unit did not run —
+`systemctl status lockerroom-audio-route`. `audio-check.sh` reports all of this
+and now asserts against the **selected** card rather than the analog one.
+
+**`deploy.sh`'s audio verification had to change and it was not optional.** It
+hard-checked the *analog* card's PCM status, so a correctly-selected USB speaker
+would have made every deploy print **"THIS BOX WILL BE SILENT"** on a healthy
+box — lying in the most alarming direction, on the one check that exists because
+nobody can tell silence from health by looking at the units.
+
+**Deliberately deferred:** reporting the selected output in the heartbeat, so
+the admin screen shows it. The failure this feature introduces is "it picked the
+wrong output," which is invisible from the room. `/run/lockerroom/audio-out`
+exists as the hook for that work.
+
 ## The speaker side: the JBL Charge 6 has NO analog input (2026-08-21)
 
 A 3.5mm-to-USB-C cable was tried into a **JBL Charge 6** and produced nothing.
