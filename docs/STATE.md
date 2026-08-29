@@ -57,6 +57,73 @@ Build order status (spec section 10):
 
 ---
 
+## The Charge 6 OVER-CURRENTS the Pi's USB ports (2026-08-28) — needs a powered hub
+
+**The routing works. The speaker is the problem, and it is electrical.** Tested
+on the box tonight over the USB-C ethernet link.
+
+The Charge 6 in USB audio mode enumerates correctly, is picked up correctly,
+and is then **cut off by the Pi's over-current protection about four seconds
+later, every time:**
+
+```
+21:50:38  usb 1-1.3: New USB device found, idVendor=0057, idProduct=2107
+21:50:38  Product: JBL Charge 6 / Manufacturer: Harman
+21:50:38  SerialNumber: 7866F31C9DB6      <- same unit as MAC 78:66:F3:1C:9D:B6
+21:50:41  usb usb2-port1: over-current change #13
+21:50:42  usb 1-1.3: USB disconnect, device number 20
+```
+
+**The control rules out everything else, and it is worth keeping because the
+instinct is to blame the Pi's power supply or the case:**
+
+| Measurement | Result |
+|---|---|
+| uptime when tested | 5 days |
+| over-current events in those 5 days before tonight | **0** |
+| first event | 20:56 tonight, when USB attempts began |
+| total events tonight | 120 |
+| events in 8s with nothing plugged in | **0** |
+| `vcgencmd get_throttled` | **`0x0`** — never under-volted, never throttled |
+
+So the Pi's own 5.1V/3A supply is healthy and the Argon case is not implicated.
+The Charge 6 simply pulls more than the Pi 4's ~1.2A total port budget while
+charging its battery, and the hub's protection cuts the port.
+
+**The fix is a POWERED USB hub** — self-powered, its own wall adapter — between
+the Pi and the speaker, so charge current comes from the hub rather than the
+Pi. No configuration change on the Pi; `audio-route.sh` already does the right
+thing the moment the card stays up.
+
+A data-only/VBUS-cut cable does NOT work here: a USB device needs VBUS to
+detect the host and will not enumerate without it.
+
+### Two things NOT established, so do not write them down as facts
+
+- **Whether the speaker's Bluetooth shuts off in USB audio mode.** The
+  anti-bypass go/no-go from `spec.md` §2 is STILL UNANSWERED — USB mode never
+  stayed up long enough to test it. Test it once the hub arrives.
+- **A wrong turn worth recording:** the first drop coincided with a phone
+  auto-reconnecting to the speaker, and that looked like a clean explanation —
+  Bluetooth beating USB. It was wrong. Forgetting the speaker on the phone
+  changed nothing, and the drop was over-current all along. The 4-second
+  interval was the tell: a race with a phone would not be that repeatable.
+
+### What WAS proven tonight
+
+The routing feature works end to end on hardware, in both directions:
+
+```
+21:48:57  selected: usb (J6)
+21:48:57  wrote /etc/asound.conf: default is now card "J6" (was "Headphones")
+21:48:57  restarted the player onto the new output
+21:49:01  selected: jack (Headphones)      <- speaker dropped; fell back on its own
+```
+
+`udevadm test` confirms the rule matches the card device on this kernel, and
+the unit runs and no-ops correctly when the selection is unchanged. The USB
+speaker enumerates as card id **`J6`**.
+
 ## The box now follows the cable (2026-08-28) — USB if present, else the jack
 
 **Written, tested, committed on branch `audio-output-routing`. NOT YET DEPLOYED
