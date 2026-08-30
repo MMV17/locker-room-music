@@ -57,72 +57,75 @@ Build order status (spec section 10):
 
 ---
 
-## The Charge 6 OVER-CURRENTS the Pi's USB ports (2026-08-28) — needs a powered hub
+## IT WAS THE CABLE (2026-08-30) — a miswired USB-A-to-C plug, not the Pi
 
-**The routing works. The speaker is the problem, and it is electrical.** Tested
-on the box tonight over the USB-C ethernet link.
+**RESOLVED. The Charge 6 works over USB, with no hub, no adapter, and no
+change to the Pi.** Swapping to a different USB-A-to-USB-C cable fixed it
+outright. Two runs of the same harness, same port (`1-1.1`), same speaker,
+same charge state, only the cable different:
 
-The Charge 6 in USB audio mode enumerates correctly, is picked up correctly,
-and is then **cut off by the Pi's over-current protection about four seconds
-later, every time:**
+| | cable A | cable B |
+|---|---|---|
+| survived after enumerating | **5.42 s** | **indefinitely** |
+| over-current events | **8** | **0** |
+| audio card `J6` appeared | +0.03 s | +0.04 s |
+| ALSA default opens on `J6` | never got the chance | **yes** |
 
-```
-21:50:38  usb 1-1.3: New USB device found, idVendor=0057, idProduct=2107
-21:50:38  Product: JBL Charge 6 / Manufacturer: Harman
-21:50:38  SerialNumber: 7866F31C9DB6      <- same unit as MAC 78:66:F3:1C:9D:B6
-21:50:41  usb usb2-port1: over-current change #13
-21:50:42  usb 1-1.3: USB disconnect, device number 20
-```
+Zero over-current on cable B. Not fewer — none.
 
-**The control rules out everything else, and it is worth keeping because the
-instinct is to blame the Pi's power supply or the case:**
+**The mechanism, because "bad cable" is too vague to act on.** A USB-A-to-C
+cable carries a resistor on the CC pin that tells the device how much current
+it may draw. The compliant value for a USB-A host is **56kΩ = 500mA**. Cheap
+cables very often ship with **10kΩ (3A)** or **22kΩ (1.5A)**. The Charge 6
+believes the cable, its charger takes what it was offered, and the Pi 4 — which
+shares ~1.2A across all four ports — trips instantly.
 
-| Measurement | Result |
-|---|---|
-| uptime when tested | 5 days |
-| over-current events in those 5 days before tonight | **0** |
-| first event | 20:56 tonight, when USB attempts began |
-| total events tonight | 120 |
-| events in 8s with nothing plugged in | **0** |
-| `vcgencmd get_throttled` | **`0x0`** — never under-volted, never throttled |
+**The tell that this is the cable and not the device: `bMaxPower` is 100mA.**
+Captured live from the descriptor before the port was cut. The USB *audio
+function* asks for almost nothing. The battery charger is a separate circuit
+governed by the cable's CC resistor, not by the USB descriptor, which is why
+the declared value and the actual draw can differ by more than an amp.
 
-So the Pi's own 5.1V/3A supply is healthy and the Argon case is not implicated.
-The Charge 6 simply pulls more than the Pi 4's ~1.2A total port budget while
-charging its battery, and the hub's protection cuts the port.
+**A USB-A host cannot read the CC resistor** — the port has only VBUS, D+, D-
+and GND. So this is not diagnosable in software, only by swapping cables or by
+putting a meter on the plug. The harness that made the comparison rigorous
+(enumeration instant, card appearance, survival time, over-current count) was
+`/tmp/cable-test.sh`; `/tmp` is cleared on reboot, so rewrite it from this
+section if it is ever needed again.
 
-**The fix is a POWERED USB hub** — self-powered, its own wall adapter — between
-the Pi and the speaker, so charge current comes from the hub rather than the
-Pi. No configuration change on the Pi; `audio-route.sh` already does the right
-thing the moment the card stays up.
+### What this corrects
 
-A data-only/VBUS-cut cable does NOT work here: a USB device needs VBUS to
-detect the host and will not enumerate without it.
+An earlier version of this section concluded **"needs a powered USB hub."**
+That was wrong and no hub is needed. The reasoning that led there was sound as
+far as it went — 5 days of uptime with zero over-current events, 120 of them
+the moment USB attempts began, `get_throttled=0x0` proving the Pi's own supply
+was healthy, and identical behaviour on every port. All of that correctly ruled
+out the Pi, the Argon case and the PSU. **It just never questioned the cable,
+because the cable had already worked well enough to enumerate the device** —
+and a cable that carries data perfectly while lying about current is not an
+obvious suspect.
 
-### Two things NOT established, so do not write them down as facts
+**The order to try things in, next time a USB device browns out a port:**
+swap the cable FIRST. It is free, it takes a minute, and on this project it was
+the answer.
 
-- **Whether the speaker's Bluetooth shuts off in USB audio mode.** The
-  anti-bypass go/no-go from `spec.md` §2 is STILL UNANSWERED — USB mode never
-  stayed up long enough to test it. Test it once the hub arrives.
-- **A wrong turn worth recording:** the first drop coincided with a phone
-  auto-reconnecting to the speaker, and that looked like a clean explanation —
-  Bluetooth beating USB. It was wrong. Forgetting the speaker on the phone
-  changed nothing, and the drop was over-current all along. The 4-second
-  interval was the tell: a race with a phone would not be that repeatable.
+Two other things that were tried and did not matter, so nobody repeats them:
+moving to a different USB port (all four share one budget behind the VL805 hub,
+which is why over-current is reported on all of them at once), and charging the
+speaker further.
 
-### What WAS proven tonight
+### Verified working end to end (2026-08-30)
 
-The routing feature works end to end on hardware, in both directions:
+Phone paired to `AuxGoat`, audio out of the Charge 6 over USB, and
+`hc.auxgoat.com` showing the play. AVRCP metadata took a moment to appear —
+"press play to start the music" showed first — then filled in.
 
-```
-21:48:57  selected: usb (J6)
-21:48:57  wrote /etc/asound.conf: default is now card "J6" (was "Headphones")
-21:48:57  restarted the player onto the new output
-21:49:01  selected: jack (Headphones)      <- speaker dropped; fell back on its own
-```
-
-`udevadm test` confirms the rule matches the card device on this kernel, and
-the unit runs and no-ops correctly when the selection is unchanged. The USB
-speaker enumerates as card id **`J6`**.
+**STILL NOT TESTED: the anti-bypass guarantee.** `spec.md` §2 needs the
+speaker's own Bluetooth to be unavailable while it is fed a wired input.
+Nothing has confirmed the Charge 6 does that in USB mode. Try to pair a phone
+directly to the speaker while it is playing over USB. If it connects, the
+enforcement mechanism does not exist on this unit, and that is a go/no-go for
+the product design rather than a detail.
 
 ## The box now follows the cable (2026-08-28) — USB if present, else the jack
 
