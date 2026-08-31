@@ -1557,45 +1557,50 @@ scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 
 ## Pick up here
 
-**THE SPEAKER IS BEING REBUILT — everything else is deployed and working.**
-Both Workers, D1 and the whole voting site are healthy and untouched, but
-nothing can be exercised end to end until the replacement box is in the room.
+**THE SPEAKER IS BUILT, DEPLOYED AND PLAYING MUSIC.** Everything in the chain
+works: box, Workers, D1, voting site. As of 2026-08-31 it also routes its own
+audio output automatically and can relay to a Bluetooth speaker.
 
-**BUILD IN PROGRESS as of 2026-08-19.** Stages 1-5 of
-`docs/runbook-v2-build.md` are **done and verified on hardware**: the box boots,
-the Argon script ran clean on Trixie, it **survives a power cut and reboots
-itself**, and the case costs **no measurable Bluetooth or wifi range**. Stage 6
-(serial console) is **parked unfinished** — see the runbook, and do not ship to
-campus without it. **Resume at stage 7, `provision.sh`.**
+The v2 build is **finished** — all stages of `docs/runbook-v2-build.md`,
+including stage 6 (serial console), which that document still describes as
+"parked unfinished". It is not: `console=serial0,115200` and `enable_uart=1`
+are both set on the box. Ignore any instruction below or in the runbook to
+"resume at stage 7"; there is nothing left to build.
 
-Box as built: hostname `auxgoat`, `192.168.1.178` on the home LAN, reachable as
-`pi@auxgoat`. **`auxgoat.local` does not resolve** — use the bare name or the IP.
+Box as built: hostname `auxgoat`, pretty name `AuxGoat 0001`. Two ways in:
 
-**First job: build the v2 box.** The full bench procedure is
-`docs/runbook-v2-build.md` — follow that, not this paragraph. The short form,
-and the order is not arbitrary:
+| path | address | when |
+|---|---|---|
+| home wifi | `pi@auxgoat` | at home, 5GHz `HCGuest` |
+| USB-C ethernet | `pi@192.168.2.3` | anywhere, incl. campus, needs macOS Internet Sharing |
 
-```
-flash Trixie -> boot BARE and baseline the radio -> assemble the Argon case
-   -> argon1.sh -> Mode 2 + jumper + PROVE it survives a power cut
-   -> range-test cased vs uncased -> provision.sh -> join wifi
-   -> device_key into /etc/lockerroom/config.toml -> deploy.sh from the laptop
-```
+**`auxgoat.local` does not resolve** — use the bare name or the IP. **`iw` is
+not installed**; use `nmcli` and `ip route` or you will misdiagnose healthy
+wifi as dead.
+
+**Wifi is pinned to 5GHz on purpose** (`802-11-wireless.band a`). That is
+load-bearing, not tidiness: it clears 2.4GHz for Bluetooth and is the single
+change that made the relay work. Do not "fix" it back to automatic.
+
+Audio output picks itself, arbitrated by `pi/scripts/audio-route.sh`:
+**USB audio if a USB card is present, else the Bluetooth relay if a speaker is
+configured and connected, else the 3.5mm jack.** The Pi 4's jack has no detect
+pin, so the jack is the fallback by construction and cannot be sensed.
 
 Leave `api_base_url` at `lockerroom.finestkindfarms.com` — it has survived both
 campus filter episodes untouched.
 
-**Flash Raspberry Pi OS Trixie (Debian 13) 64-bit, not Bookworm.** Trixie is
-both the newer release *and* the proven one here: the dead Pi ran Trixie with
-Python 3.13, and **every one of the eight AVRCP quirks documented below was
-found and fixed against that stack.** Bookworm ships **BlueZ 5.66 against
-Trixie's 5.82** — dropping back sixteen versions under code tuned on 5.82
-reintroduces the exact variable that cost the most to eliminate. The only thing
-Bookworm buys is a better-tested Argon fan script, and a fan script is a
-ten-line fallback; the AVRCP behaviour is not.
+**If another box is ever built, flash Raspberry Pi OS Trixie (Debian 13)
+64-bit, not Bookworm.** Trixie is both newer *and* the proven one here: **every
+one of the eight AVRCP quirks documented below was found and fixed against that
+stack.** Bookworm ships **BlueZ 5.66 against Trixie's 5.82** — dropping back
+sixteen versions under code tuned on 5.82 reintroduces the exact variable that
+cost the most to eliminate. The only thing Bookworm buys is a better-tested
+Argon fan script, and a fan script is a ten-line fallback; the AVRCP behaviour
+is not.
 
-The rest was true as of 2026-08-10 and still is server-side: one phone on the
-aux enforced and verified on two real iPhones, the site says whose turn it is,
+Server-side, true since 2026-08-10 and still true: one phone on the aux
+enforced and verified on two real iPhones, the site says whose turn it is,
 admin can delete players and phones and clear history. All 75 test plays are
 voided, so the first real session starts from zero.
 

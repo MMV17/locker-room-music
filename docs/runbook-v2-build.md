@@ -740,9 +740,11 @@ every future box rather than trusting `systemctl is-enabled`.
 
 **Also worth knowing:** `journald` is `Storage=volatile` as of stage 7, so when
 the box rebooted mid-deploy **the previous boot's log was gone** and the cause
-had to be inferred. The runbook says that cost is "covered by the serial
-console" — it is not, because stage 6 is parked. That is the second time the
-parked console has had a real cost.
+had to be inferred. That cost is what the serial console is for, and it was
+paid twice while stage 6 was still parked. **Stage 6 is finished now** —
+`enable_uart=1` and `console=serial0,115200` are both set on the box and the
+console was verified on the air 2026-08-19 — so the next time this happens,
+watch it on the wire instead of inferring it.
 
 ---
 
