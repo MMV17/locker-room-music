@@ -41,6 +41,13 @@ ASOUND_ROOT="${ASOUND_ROOT:-/proc/asound}"
 ASOUND_CONF="${ASOUND_CONF:-/etc/asound.conf}"
 STATE_FILE="${STATE_FILE:-/run/lockerroom/audio-out}"
 RESTART_CMD="${RESTART_CMD:-systemctl restart bluealsa-aplay}"
+# The Bluetooth relay. relay.py writes RELAY_TARGET_FILE (a bare MAC) when it
+# has the speaker connected and REMOVES it when the speaker goes away; its
+# presence is the whole signal. OUTPUT_ENV_FILE is ours: an EnvironmentFile the
+# player reads, holding a -D that points at the speaker.
+RELAY_TARGET_FILE="${RELAY_TARGET_FILE:-/run/lockerroom/relay-target}"
+OUTPUT_ENV_FILE="${OUTPUT_ENV_FILE:-/run/lockerroom/output.env}"
+MAC_RE='^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'
 
 # Substring, not the whole line. Boxes provisioned before today carry
 # "# managed by lockerroom provision.sh", which contains this and is therefore
@@ -160,6 +167,29 @@ EOF
   return 0
 }
 
+# The relay target, but only if it is a well-formed MAC.
+#
+# Rejected rather than sanitised, and validated HERE rather than trusted from
+# whoever wrote the file: this value becomes an argv element for the audio
+# player, so a corrupted /run file must never be able to append arguments to
+# it. Same rule as macaddr.py on the Python side, deliberately duplicated
+# across the language boundary rather than assumed.
+relay_target() {
+  [ -r "$RELAY_TARGET_FILE" ] || return 1
+  local m
+  m="$(head -1 "$RELAY_TARGET_FILE" 2>/dev/null | tr -d " \t\r\n")"
+  [ -n "$m" ] || return 1
+  if ! printf '%s' "$m" | grep -qE "$MAC_RE"; then
+    # >&2 is load-bearing: this function returns the MAC on STDOUT, so a
+    # warning printed there becomes the value the caller uses. Caught by
+    # test_relay_target_with_garbage_is_refused, which is exactly the input
+    # that must never reach the player's argv.
+    printf '   WARNING: %s is not a MAC address — ignoring it\n' "$RELAY_TARGET_FILE" >&2
+    return 1
+  fi
+  printf '%s\n' "$m"
+}
+
 # ---------------------------------------------------------------- main
 
 TARGET="$(select_target)"
@@ -182,8 +212,55 @@ if [ -z "$TARGET" ]; then
   fi
 fi
 
-KIND="${TARGET%% *}"
-CARD="${TARGET#* }"
+# The WIRED selection. This is settled first and always, even when the relay
+# ends up winning below, because the ALSA default is the fallback that every
+# relay failure path lands on — a missing output.env, a dead relay manager, an
+# uninstalled listener. It must always name a card that exists.
+WIRED_KIND="${TARGET%% *}"
+WIRED_CARD="${TARGET#* }"
+say "wired output: $WIRED_KIND ($WIRED_CARD)"
+
+CONF_CHANGED=0
+if [ -f "$ASOUND_CONF" ] && ! grep -qF "$MARK" "$ASOUND_CONF" 2>/dev/null; then
+  # Correct behaviour for a box with a real DAC someone configured by hand.
+  # Note this no longer exits: the relay does not use asound.conf at all, so a
+  # hand-written wired config must not disable relay routing.
+  say "$ASOUND_CONF is hand-written — left alone"
+  say "(confirm it names a card that exists, or the wired fallback is silent)"
+else
+  CURRENT="$(configured_card)"
+  if [ "$CURRENT" != "$WIRED_CARD" ]; then
+    write_conf "$WIRED_CARD" || die "could not write $ASOUND_CONF"
+    say "wrote $ASOUND_CONF: default is now card \"$WIRED_CARD\"${CURRENT:+ (was \"$CURRENT\")}"
+    CONF_CHANGED=1
+  fi
+fi
+
+# Three-way arbitration. USB first, because plugging a cable in is an explicit
+# act. Then the relay, the standing default once a speaker is configured. Then
+# the jack, which cannot be detected and is the safe fallback.
+OUTPUT_CHANGED=0
+KIND="$WIRED_KIND"
+CARD="$WIRED_CARD"
+RELAY="$(relay_target)"
+if [ "$WIRED_KIND" != "usb" ] && [ -n "$RELAY" ]; then
+  NEWDEV="AUX_DEV=-D bluealsa:DEV=$RELAY,PROFILE=a2dp"
+  if [ "$(cat "$OUTPUT_ENV_FILE" 2>/dev/null)" != "$NEWDEV" ]; then
+    mkdir -p "$(dirname "$OUTPUT_ENV_FILE")" 2>/dev/null
+    printf '%s\n' "$NEWDEV" > "$OUTPUT_ENV_FILE" || say "WARNING: could not write $OUTPUT_ENV_FILE"
+    OUTPUT_CHANGED=1
+  fi
+  KIND="relay"
+  CARD="$RELAY"
+else
+  # Removing the file is what makes the player run bare on the ALSA default.
+  # This is the path a dropped speaker takes, so it must restart the player -
+  # otherwise it keeps playing into a link that is gone.
+  if [ -e "$OUTPUT_ENV_FILE" ]; then
+    rm -f "$OUTPUT_ENV_FILE"
+    OUTPUT_CHANGED=1
+  fi
+fi
 say "selected: $KIND ($CARD)"
 
 # Always refresh, even on the unchanged path. /run is tmpfs and is cleared at
@@ -193,21 +270,10 @@ mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null
 printf '%s:%s\n' "$KIND" "$CARD" > "$STATE_FILE" 2>/dev/null \
   || say "WARNING: could not write $STATE_FILE"
 
-if [ -f "$ASOUND_CONF" ] && ! grep -qF "$MARK" "$ASOUND_CONF" 2>/dev/null; then
-  # Correct behaviour for a box with a real DAC someone configured by hand.
-  say "$ASOUND_CONF is hand-written — left alone, routing not changed."
-  say "(confirm it names a card that exists, or this box is silent)"
-  exit 0
-fi
-
-CURRENT="$(configured_card)"
-if [ "$CURRENT" = "$CARD" ]; then
+if [ "$CONF_CHANGED" = "0" ] && [ "$OUTPUT_CHANGED" = "0" ]; then
   say "already routed to \"$CARD\" — nothing to do"
   exit 0
 fi
-
-write_conf "$CARD" || die "could not write $ASOUND_CONF"
-say "wrote $ASOUND_CONF: default is now card \"$CARD\"${CURRENT:+ (was \"$CURRENT\")}"
 
 # Only bluealsa-aplay restarts. The A2DP link is held by `bluealsa`, which is
 # not touched, so a phone streaming right now keeps its connection and hears a

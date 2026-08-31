@@ -61,6 +61,10 @@ def run(tmp_path: Path, *args: str, conf_text: str | None = None) -> dict:
             "ASOUND_ROOT": str(root),
             "ASOUND_CONF": str(conf),
             "STATE_FILE": str(state),
+            # Point these at tmp too, so no test can read or write the real
+            # /run/lockerroom on the machine running the suite.
+            "RELAY_TARGET_FILE": str(tmp_path / "relay-target"),
+            "OUTPUT_ENV_FILE": str(tmp_path / "output.env"),
             # Unquoted $RESTART_CMD in the script, so this word-splits into a
             # real command and the flag file proves whether it ran.
             "RESTART_CMD": f"touch {flag}",
@@ -72,6 +76,7 @@ def run(tmp_path: Path, *args: str, conf_text: str | None = None) -> dict:
         "conf": conf.read_text() if conf.exists() else None,
         "state": state.read_text().strip() if state.exists() else None,
         "restarted": flag.exists(),
+        "output_env": (tmp_path / "output.env").read_text() if (tmp_path / "output.env").exists() else None,
         "conf_path": conf,
         "root": root,
         "tmp": tmp_path,
@@ -210,3 +215,77 @@ def test_written_config_names_the_card_by_id_not_index(tmp_path):
     assert "card 1" not in r["conf"]
     assert "type plug" in r["conf"], "plug, so 44.1k phones and 48k-only USB both open"
     assert MARK in r["conf"], "must be adoptable by the next run"
+
+
+# ---------------------------------------------------------------------------
+# Three-way arbitration: USB, then the Bluetooth relay, then the jack.
+#
+# The relay is selected by handing the player a -D, not by the ALSA default,
+# so these tests care about TWO outputs: the relay device in output.env, and
+# the wired card still named in asound.conf underneath it. The second one is
+# not incidental — it is the fallback every relay failure path lands on.
+
+RELAY_MAC = "78:66:F3:1C:9D:B6"
+RELAY_DEV = f"AUX_DEV=-D bluealsa:DEV={RELAY_MAC},PROFILE=a2dp"
+
+
+def run_relay(tmp_path, cards, relay, conf_text=None):
+    if relay is not None:
+        (tmp_path / "relay-target").write_text(relay + "\n")
+    make_cards(tmp_path / "asound", cards)
+    return run(tmp_path, conf_text=conf_text)
+
+
+def test_relay_used_when_no_usb(tmp_path):
+    r = run_relay(tmp_path, [HDMI, ANALOG], RELAY_MAC)
+    assert r["state"] == f"relay:{RELAY_MAC}"
+    assert r["output_env"].strip() == RELAY_DEV
+    assert r["restarted"]
+
+
+def test_usb_beats_the_relay(tmp_path):
+    """Plugging a cable in is an explicit act and wins."""
+    r = run_relay(tmp_path, [HDMI, USB_SPEAKER, ANALOG], RELAY_MAC)
+    assert r["state"] == "usb:Charge"
+    assert r["output_env"] is None, "output.env must be REMOVED so the player runs bare"
+
+
+def test_no_relay_target_falls_back_to_the_jack(tmp_path):
+    r = run_relay(tmp_path, [HDMI, ANALOG], None)
+    assert r["state"] == "jack:Headphones"
+    assert r["output_env"] is None
+
+
+def test_relay_target_with_garbage_is_refused(tmp_path):
+    """A corrupted /run file must never add arguments to the player's argv."""
+    r = run_relay(tmp_path, [HDMI, ANALOG], "not-a-mac; rm -rf /")
+    assert r["state"] == "jack:Headphones"
+    assert r["output_env"] is None
+
+
+def test_relay_still_pins_a_real_card_as_the_fallback(tmp_path):
+    """Every relay failure path lands on a bare player using the ALSA default,
+    so the default must still name a card that exists."""
+    r = run_relay(tmp_path, [HDMI, ANALOG], RELAY_MAC)
+    assert 'card "Headphones"' in r["conf"]
+
+
+def test_unchanged_relay_selection_does_not_restart(tmp_path):
+    """udev and the relay manager both trigger this; a needless restart cuts
+    the music."""
+    (tmp_path / "output.env").write_text(RELAY_DEV + "\n")
+    same = f'{MARK}\npcm.!default {{ type hw card "Headphones" }}\n'
+    r = run_relay(tmp_path, [HDMI, ANALOG], RELAY_MAC, conf_text=same)
+    assert r["state"] == f"relay:{RELAY_MAC}"
+    assert not r["restarted"]
+
+
+def test_dropping_the_relay_restarts_back_onto_the_jack(tmp_path):
+    """The speaker went away: output.env must go, and the player must restart
+    or it keeps playing into a dead link."""
+    (tmp_path / "output.env").write_text(RELAY_DEV + "\n")
+    same = f'{MARK}\npcm.!default {{ type hw card "Headphones" }}\n'
+    r = run_relay(tmp_path, [HDMI, ANALOG], None, conf_text=same)
+    assert r["state"] == "jack:Headphones"
+    assert r["output_env"] is None
+    assert r["restarted"]
