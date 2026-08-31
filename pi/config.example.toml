@@ -28,3 +28,24 @@ log_path = "/var/log/lockerroom/listener.log"
 # restart_nm_after = 10        # ~10 min dead -> restart NetworkManager
 # reboot_after = 15            # ~15 min dead -> reboot
 # min_reboot_interval_s = 21600  # 6h, so a still-broken box cannot loop
+
+# Bluetooth relay output. OPTIONAL — omit the whole table and the speaker
+# behaves exactly as it always has, using USB or the 3.5mm jack. That is the
+# safety property this feature rests on: unconfigured means unchanged.
+#
+# When set, the Pi connects OUTWARD to this speaker as an A2DP source and plays
+# through it, so no cable is needed at all — no aux jack, no USB-C, and none of
+# the charging-current trouble documented in docs/STATE.md. Pair it once by
+# hand first:
+#
+#   bluetoothctl pair <MAC> && bluetoothctl trust <MAC>
+#
+# This MAC is excluded from aux arbitration BY IDENTITY in lifecycle.py.
+# Without that exclusion the listener treats the far speaker as a DJ, grants it
+# the aux and writes it into the play data — which is what made the first relay
+# attempt unusable on 2026-08-23.
+#
+# A malformed value here stops the listener with a clear error rather than
+# silently disabling the relay.
+# [relay]
+# speaker_mac = "AA:BB:CC:DD:EE:FF"

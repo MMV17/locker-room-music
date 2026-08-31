@@ -22,6 +22,18 @@
 
 ### Task 1: Config gains the relay speaker
 
+> **CORRECTION (applied during execution).** The plan originally put `MAC_RE`
+> in `config.py` and tested it there. That does not work: `config.py` imports
+> `tomllib` (3.11+) and the laptop's test venv is **Python 3.9**, so the module
+> is unimportable by the test suite — the same constraint `control.py` already
+> documents. It also duplicated the regex in `config.py` and `relay.py`.
+>
+> Validation now lives in a new dependency-free `pi/lockerroom/macaddr.py`,
+> imported by both. It is testable on every interpreter
+> (`pi/tests/test_macaddr.py`, 12 cases), and `pi/tests/test_config_relay.py`
+> uses `pytest.importorskip("tomllib")` so it skips on 3.9 and runs on the Pi.
+
+
 **Files:**
 - Modify: `pi/lockerroom/config.py`
 - Modify: `pi/config.example.toml`
