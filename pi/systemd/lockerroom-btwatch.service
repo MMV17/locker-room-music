@@ -1,0 +1,21 @@
+# Recover a wedged Bluetooth controller without a reboot.
+#
+# Installs to /etc/systemd/system/lockerroom-btwatch.service
+#
+# See btwatch.sh for why the three obvious recovery commands cannot do this,
+# and why a wedged controller is invisible to `systemctl status` — every unit
+# stays active while the radio answers nothing.
+[Unit]
+Description=Locker Room Music Bluetooth controller watchdog
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/btwatch.sh
+# The script loops itself; Restart is for the case where it dies outright.
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
