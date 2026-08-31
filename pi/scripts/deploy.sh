@@ -49,6 +49,12 @@ scp -q "${REPO_ROOT}/pi/scripts/audio-check.sh" "${PI_HOST}:/tmp/audio-check.sh"
 scp -q "${REPO_ROOT}/pi/scripts/audio-route.sh" "${PI_HOST}:/tmp/audio-route.sh"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-audio-route.service" "${PI_HOST}:/tmp/lockerroom-audio-route.service"
 scp -q "${REPO_ROOT}/pi/systemd/99-lockerroom-audio.rules" "${PI_HOST}:/tmp/99-lockerroom-audio.rules"
+# The Bluetooth controller watchdog. A wedged controller is a dead speaker with
+# every unit green, and the three obvious recovery commands all fail — see
+# btwatch.sh. Shipped on every deploy because the box that needs it is the one
+# you cannot reach.
+scp -q "${REPO_ROOT}/pi/scripts/btwatch.sh" "${PI_HOST}:/tmp/btwatch.sh"
+scp -q "${REPO_ROOT}/pi/systemd/lockerroom-btwatch.service" "${PI_HOST}:/tmp/lockerroom-btwatch.service"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -63,6 +69,8 @@ sudo mv /tmp/keep-discoverable.service /etc/systemd/system/keep-discoverable.ser
 sudo install -m 755 /tmp/keep-discoverable.sh /usr/local/bin/keep-discoverable.sh
 sudo install -m 755 /tmp/audio-check.sh /usr/local/bin/audio-check.sh
 sudo install -m 755 /tmp/audio-route.sh /usr/local/bin/audio-route.sh
+sudo install -m 755 /tmp/btwatch.sh /usr/local/bin/btwatch.sh
+sudo mv /tmp/lockerroom-btwatch.service /etc/systemd/system/lockerroom-btwatch.service
 sudo mv /tmp/lockerroom-audio-route.service /etc/systemd/system/lockerroom-audio-route.service
 sudo mv /tmp/99-lockerroom-audio.rules /etc/udev/rules.d/99-lockerroom-audio.rules
 # udev caches its rules; without this the rule sits on disk doing nothing until
@@ -108,11 +116,16 @@ sudo systemctl restart lockerroom-netwatch
 # same trap that made every netwatch deploy a no-op until 2026-08-09.
 sudo systemctl enable bt-agent keep-discoverable
 sudo systemctl restart bt-agent keep-discoverable
+# The controller watchdog. enable + restart separately, same reason as above:
+# --now only starts a stopped unit and would silently skip a changed one.
+sudo systemctl enable lockerroom-btwatch
+sudo systemctl restart lockerroom-btwatch
 sleep 3
 systemctl is-active lockerroom-listener
 systemctl is-active lockerroom-netwatch
 systemctl is-active bt-agent
 systemctl is-active keep-discoverable
+systemctl is-active lockerroom-btwatch
 
 # Audio output drift check. This VERIFICATION is read-only; it diagnoses and
 # never fixes.

@@ -75,7 +75,28 @@ SELECTED=""
 if [ -r /run/lockerroom/audio-out ]; then
   echo "   $(cat /run/lockerroom/audio-out)"
   SELECTED="$(sed -n 's/^[a-z]*://p' /run/lockerroom/audio-out | head -1)"
-  if ! grep -qE "^ *[0-9]+ \[$SELECTED *\]" /proc/asound/cards 2>/dev/null; then
+  SELECTED_KIND="$(cut -d: -f1 /run/lockerroom/audio-out 2>/dev/null)"
+  if [ "$SELECTED_KIND" = "relay" ]; then
+    # The relay is selected with -D on the player, so the ALSA default is NOT
+    # the audio path. Saying so loudly is the whole point: a diagnostic that
+    # silently tests a different output than the one carrying the music is
+    # worse than no diagnostic, and this project has lost hours to exactly
+    # that shape of mistake.
+    echo
+    echo "   !! RELAY MODE — the audio is going out over BLUETOOTH."
+    echo "      --tone below tests the ANALOG DEFAULT, which is NOT the live"
+    echo "      path right now. A silent tone here does not mean the room is"
+    echo "      silent, and a working tone does not mean it is not."
+    echo "      To check the relay itself:"
+    echo "        bluetoothctl devices Connected"
+    echo "        cat /run/lockerroom/relay-target"
+    echo "        systemctl show -p ExecStart --value bluealsa-aplay"
+    echo "        journalctl -u lockerroom-listener -n 30 | grep relay"
+    # Skip the card-existence check below: the relay target is a MAC, not a
+    # card, and warning that it "does not exist" would be a false alarm.
+    SELECTED=""
+  fi
+  if [ -n "$SELECTED" ] && ! grep -qE "^ *[0-9]+ \[$SELECTED *\]" /proc/asound/cards 2>/dev/null; then
     problem "The routed card \"$SELECTED\" does not exist any more. Re-run:
      sudo audio-route.sh"
     SELECTED=""
