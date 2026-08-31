@@ -44,7 +44,9 @@ async def async_main() -> None:
     # one gets routed. This is the ONLY place the real router is constructed;
     # everywhere else defaults to NullAux, so nothing restarts a system service
     # as a side effect of building a SessionManager.
-    session_manager = SessionManager(store, aux=AuxRouter())
+    session_manager = SessionManager(
+        store, aux=AuxRouter(), relay_speaker_mac=cfg.relay_speaker_mac
+    )
     watcher = BluezWatcher(session_manager)
     # And a phone that is connected but not routed gets paused, so it does not
     # run through a playlist into nothing. Wired after construction because the

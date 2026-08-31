@@ -47,7 +47,18 @@ TRANSPORT_IDLE_GRACE = timedelta(seconds=5)
 # after the previous one is genuinely done, and a phone left connected in
 # somebody's pocket must not hold the room hostage - past this, whoever
 # presses play next gets it.
-AUX_GRACE = timedelta(seconds=45)
+#
+# Cut from 45s to 20s on 2026-08-23. 45 was picked before anybody had stood in
+# a room waiting it out. Track-to-track transitions are unaffected at any
+# value - the old play closes and the new one opens inside one locked handler,
+# so no gap is ever observed. What this shortens is the DJ who STOPS, scrolls
+# for something good, and takes longer than 20s to find it: they lose the aux
+# mid-scroll. That is the accepted trade, and it is the rule the room already
+# runs on. Retune after a real session; it is one constant.
+#
+# The site now shows this as a live countdown, so the number is user-visible
+# rather than folklore. See aux_state() and _free_in_ms().
+AUX_GRACE = timedelta(seconds=20)
 # A hung D-Bus call must not hold the session lock, and therefore every
 # lifecycle event, indefinitely.
 PAUSE_COMMAND_TIMEOUT_S = 5.0
@@ -182,9 +193,34 @@ class NullAux:
 
 
 class SessionManager:
-    def __init__(self, store: Store, aux: Any | None = None):
+    def __init__(
+        self,
+        store: Store,
+        aux: Any | None = None,
+        relay_speaker_mac: str | None = None,
+    ):
         self._store = store
         self._aux = aux if aux is not None else NullAux()
+        # The far speaker we play THROUGH, not a phone we play FOR.
+        #
+        # Excluded by identity before any other logic, because on 2026-08-23
+        # the relay target was granted the aux and opened play sessions - it
+        # competed with real phones and landed in the play data. docs/STATE.md
+        # calls that "the blocker no tuning fixes", and this is the fix.
+        #
+        # None means the relay is not configured and NOTHING here changes
+        # behaviour, which is the safety property the whole feature rests on.
+        self._relay_mac = relay_speaker_mac.upper() if relay_speaker_mac else None
+        # on_device_disconnected only ever sees a path, never a MAC, so the
+        # exclusion needs the BlueZ spelling too: 78:66:F3:1C:9D:B6 arrives as
+        # .../dev_78_66_F3_1C_9D_B6.
+        self._relay_path_suffix = (
+            "dev_" + self._relay_mac.replace(":", "_") if self._relay_mac else None
+        )
+        # Set by main.py to a RelayManager. Injected for the same reason as
+        # _pause: it keeps every test in this directory free of D-Bus and of
+        # bluetoothctl.
+        self._relay: Any | None = None
         self._sessions: dict[str, Session] = {}
         # device_path of the phone the speaker is routed to. Whoever this is
         # gets audio, and is the only session whose songs become plays.
@@ -208,6 +244,15 @@ class SessionManager:
         # Set by main.py to BluezWatcher.pause. Optional so the whole lifecycle
         # stays testable without a D-Bus bus; see _pause_politely.
         self._pause: Callable[[str], Awaitable[None]] | None = None
+
+    def set_relay(self, relay: Any) -> None:
+        """Give the manager a way to tell the relay its speaker went away.
+
+        Wired after construction rather than in the constructor because the
+        RelayManager is only built when a speaker is configured, and because
+        it keeps this class testable with a two-line fake.
+        """
+        self._relay = relay
 
     def set_pause(self, pause: Callable[[str], Awaitable[None]]) -> None:
         """Give the manager a way to pause a phone that is not on the aux.
@@ -260,7 +305,13 @@ class SessionManager:
         """
         holder = self._sessions.get(self._aux_path or "")
         return {
-            "holder": {"mac": holder.mac, "alias": holder.alias} if holder else None,
+            "holder": {
+                "mac": holder.mac,
+                "alias": holder.alias,
+                "free_in_ms": self._free_in_ms(holder, now()),
+            }
+            if holder
+            else None,
             # Oldest first, so "you are next" means something. Dict order would
             # follow whatever BlueZ happened to announce, which is not the
             # queue anyone in the room experienced.
@@ -274,6 +325,11 @@ class SessionManager:
     # -- BluezWatcher.LifecycleSink protocol --------------------------------
 
     async def on_device_connected(self, device_path: str, mac: str, alias: str) -> None:
+        # Before the lock and before anything else: this is where the music
+        # comes OUT, not someone asking to play. relay.py owns it.
+        if self._relay_mac and mac.upper() == self._relay_mac:
+            log.info("relay speaker connected: %s (%s) - not a session", alias, mac)
+            return
         async with self._lock:
             if device_path in self._sessions:
                 # BlueZ re-announces devices on a listener restart, and iOS
@@ -320,6 +376,33 @@ class SessionManager:
         if at - session.last_active_at < AUX_GRACE:
             return session
         return None
+
+    def _free_in_ms(self, session: Session, at: datetime) -> int | None:
+        """How long until anybody may take the aux from `session`.
+
+        The same question _holder() answers, as a number the site can count
+        down. Three states, and the difference between them is the whole point:
+
+          None  a play is open. Music is on, AUX_GRACE has not started, and
+                there is no honest deadline to report. The site must show no
+                number here - AUX_GRACE restarts on every scrub, skip and
+                play, so any number would rewind on screen the moment the
+                holder touched their phone.
+          > 0   the song is over and the grace is running out. The only window
+                where a countdown is both true and useful.
+          0     the grace has lapsed and the holder is still connected. The
+                speaker is STILL filtered to their phone - _aux_path does not
+                move until somebody else plays - but nobody is entitled to it
+                any more. Before this field the site could not tell this state
+                apart from "they are playing", and so told a waiting player
+                that Mack had the aux when they could have taken it by
+                pressing play. That is the state this whole field exists for.
+        """
+        play = session.current_play
+        if play is not None and not play.closed:
+            return None
+        left = AUX_GRACE - (at - session.last_active_at)
+        return max(0, int(left.total_seconds() * 1000))
 
     async def _grant(self, session: Session) -> None:
         """Point the speaker at one phone."""
@@ -464,6 +547,15 @@ class SessionManager:
             log.warning("could not pause %s", session.alias, exc_info=True)
 
     async def on_device_disconnected(self, device_path: str) -> None:
+        # The far speaker never became a session, so there is nothing to close
+        # - but the relay does need to know, so it can drop the routing and let
+        # audio fall back to a wired output rather than playing into a dead
+        # link. Outside the lock: this path touches no session state, and
+        # on_disconnected() runs a subprocess.
+        if self._relay_path_suffix and device_path.endswith(self._relay_path_suffix):
+            if self._relay is not None:
+                await self._relay.on_disconnected()
+            return
         async with self._lock:
             session = self._sessions.pop(device_path, None)
             if session is None:
