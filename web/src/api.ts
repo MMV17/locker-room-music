@@ -115,6 +115,21 @@ export interface AuxState {
     /** Bluetooth name, which is all an unclaimed phone has. */
     alias: string | null;
     is_you: boolean;
+    /**
+     * Milliseconds until anybody may take the aux. Three states, and they are
+     * not interchangeable:
+     *
+     *   null  a song is open. No deadline exists — the grace has not started,
+     *         and it restarts on every skip, so any number shown here would
+     *         rewind on screen. Show no countdown.
+     *   > 0   the song is over and the grace is running out.
+     *   0     the grace lapsed. The speaker is still filtered to this phone,
+     *         but the aux is free and whoever presses play takes it.
+     *
+     * Already corrected for beacon age by the Worker. Also null from a Pi
+     * running code from before this existed.
+     */
+    free_in_ms: number | null;
   } | null;
   waiting: number;
   /** Your own phone is connected but not audible. The reason nothing happened. */

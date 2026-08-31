@@ -891,7 +891,10 @@ async def test_aux_state_names_the_holder_and_who_is_waiting():
 
     state = mgr.aux_state()
 
-    assert state["holder"] == {"mac": MAC, "alias": "Mack's iPhone"}
+    # Identity only. The countdown rides along in holder too; it has its own
+    # tests below and pinning it here would break them on every retune.
+    assert state["holder"]["mac"] == MAC
+    assert state["holder"]["alias"] == "Mack's iPhone"
     assert state["waiting"] == [{"mac": OTHER_MAC, "alias": "Ty's Pixel"}]
 
 
@@ -948,3 +951,66 @@ async def test_aux_state_follows_a_handover():
     state = mgr.aux_state()
     assert state["holder"]["alias"] == "Ty's Pixel"
     assert [w["alias"] for w in state["waiting"]] == ["Mack's iPhone"]
+
+
+# -- the countdown a waiting player sees -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_countdown_is_none_while_a_song_is_open():
+    """There is no honest deadline while music is playing: the holder keeps
+    the aux for as long as the song runs, and AUX_GRACE has not started. A
+    number here would have to rewind on screen, which is the one thing the
+    banner must never do."""
+    mgr = manager(FakeStore())
+    await connect(mgr)
+    await connect_other(mgr)
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+
+    assert mgr.aux_state()["holder"]["free_in_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_countdown_runs_down_once_the_song_is_over():
+    """The gap after a song ends is the only window with a real deadline, and
+    it opens at the full AUX_GRACE."""
+    mgr = manager(FakeStore())
+    await connect(mgr)
+    await connect_other(mgr)
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore"), 0)
+    await settle()
+    await mgr.on_status_changed(DEV, "stopped")
+
+    free_in = mgr.aux_state()["holder"]["free_in_ms"]
+
+    # 20 seconds, less however long the handlers above actually took.
+    assert 19_000 < free_in <= 20_000
+
+
+@pytest.mark.asyncio
+async def test_the_countdown_reads_zero_once_the_grace_lapses():
+    """The aux is FREE while the speaker is still filtered to the old holder,
+    and those two facts are what aux_state() has to tell apart. This is the
+    window where the site used to say "Mack has the aux" to somebody who could
+    have taken it by pressing play."""
+    from datetime import timedelta
+    mgr = manager(FakeStore())
+    await connect(mgr)
+    await connect_other(mgr)
+    mgr._sessions[DEV].last_active_at = now_() - timedelta(minutes=5)
+
+    state = mgr.aux_state()
+
+    assert state["holder"]["mac"] == MAC        # still routed there
+    assert state["holder"]["free_in_ms"] == 0   # but anyone can take it
+
+
+@pytest.mark.asyncio
+async def test_a_lone_phone_still_reports_a_countdown():
+    """Nobody is waiting to read it, but the field must exist rather than be
+    absent - the site reads one shape whatever is connected."""
+    mgr = manager(FakeStore())
+    await connect(mgr)
+
+    assert mgr.aux_state()["holder"]["free_in_ms"] is not None

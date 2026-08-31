@@ -14,6 +14,7 @@ import { trackKey, normalize } from "./trackKey";
 import { isVoteWindowOpen, voteWindowClosesAt, presentablePlay } from "./voteWindow";
 import { trackScore } from "./scoring";
 import { lookupArtwork } from "./artwork";
+import { freshCountdown } from "./auxCountdown";
 import { boards } from "./leaderboards";
 import { devices } from "./devices";
 import { admin } from "./admin";
@@ -222,7 +223,7 @@ const touchHeartbeat = (env: Env, speakerName: string) =>
 
 /** What the Pi reports about the aux. Raw MACs in, hashes only ever stored. */
 interface AuxReport {
-  holder?: { mac?: string; alias?: string } | null;
+  holder?: { mac?: string; alias?: string; free_in_ms?: number | null } | null;
   waiting?: { mac?: string; alias?: string }[];
 }
 
@@ -247,12 +248,22 @@ async function recordAux(env: Env, speakerName: string, aux: AuxReport | undefin
     if (!w?.mac) continue;
     waiting.push({ hash: await hashMac(w.mac, env.MAC_SALT), alias: w.alias ?? null });
   }
+  // `?? null` rather than `|| null`: 0 is the meaningful "the aux is free
+  // right now" reading, and `||` would turn it back into "no countdown".
+  const freeInMs = aux.holder?.free_in_ms ?? null;
   await env.DB.prepare(
     `UPDATE heartbeats
-        SET aux_holder_hash = ?, aux_holder_alias = ?, aux_waiting = ?
+        SET aux_holder_hash = ?, aux_holder_alias = ?, aux_waiting = ?,
+            aux_free_in_ms = ?
       WHERE speaker_name = ?`,
   )
-    .bind(holderHash, aux.holder?.alias ?? null, JSON.stringify(waiting), speakerName)
+    .bind(
+      holderHash,
+      aux.holder?.alias ?? null,
+      JSON.stringify(waiting),
+      freeInMs,
+      speakerName,
+    )
     .run();
 }
 
@@ -510,9 +521,11 @@ app.get("/api/roster", requireSession, async (c) => {
 async function auxState(
   env: Env,
   hb: {
+    last_seen_at: string;
     aux_holder_hash: string | null;
     aux_holder_alias: string | null;
     aux_waiting: string | null;
+    aux_free_in_ms: number | null;
   },
   userId: string,
 ) {
@@ -539,6 +552,8 @@ async function auxState(
 
   const holderOwner = await ownerOf(hb.aux_holder_hash);
 
+  const freeInMs = freshCountdown(hb.aux_free_in_ms, hb.last_seen_at);
+
   let youAreWaiting = false;
   for (const w of waiting) {
     const owner = await ownerOf(w.hash);
@@ -555,6 +570,7 @@ async function auxState(
           name: holderOwner?.name ?? null,
           alias: hb.aux_holder_alias,
           is_you: holderOwner?.id === userId,
+          free_in_ms: freeInMs,
         }
       : null,
     waiting: waiting.length,
@@ -575,13 +591,15 @@ app.get("/api/now", requireSession, async (c) => {
   const play = presentablePlay(latest);
 
   const hb = await c.env.DB.prepare(
-    `SELECT last_seen_at, aux_holder_hash, aux_holder_alias, aux_waiting
+    `SELECT last_seen_at, aux_holder_hash, aux_holder_alias, aux_waiting,
+            aux_free_in_ms
        FROM heartbeats ORDER BY last_seen_at DESC LIMIT 1`,
   ).first<{
     last_seen_at: string;
     aux_holder_hash: string | null;
     aux_holder_alias: string | null;
     aux_waiting: string | null;
+    aux_free_in_ms: number | null;
   }>();
   const speakerOnline = hb
     ? Date.now() - Date.parse(hb.last_seen_at) < 3 * 60_000

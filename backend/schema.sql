@@ -95,7 +95,13 @@ CREATE TABLE IF NOT EXISTS heartbeats (
   -- so it joins straight to a claimed device and therefore to a person.
   aux_holder_hash   TEXT,
   aux_holder_alias  TEXT,   -- Bluetooth name, for a phone nobody has claimed
-  aux_waiting       TEXT    -- JSON [{hash, alias}], oldest first
+  aux_waiting       TEXT,   -- JSON [{hash, alias}], oldest first
+  -- Milliseconds until anybody may take the aux, measured on the Pi at its
+  -- last beacon. NULL = a song is open, so no deadline exists and the site
+  -- shows no countdown; > 0 = the grace is running out; 0 = it has lapsed and
+  -- whoever presses play next gets the speaker. The Worker subtracts beacon
+  -- age before serving it (src/auxCountdown.ts).
+  aux_free_in_ms    INTEGER
 );
 
 -- Remote control for the Pi (see POST /api/pi/beacon).

@@ -233,6 +233,13 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
 
   const holder = aux?.holder;
   if (holder && !holder.is_you) {
+    // Anyone connected and waiting already has all of this from WaitingBanner,
+    // countdown included, a few pixels further up. Repeating it here would put
+    // two different sentences about one fact on the same screen — and the
+    // "you can connect too" half is actively wrong for someone who already is.
+    if (aux?.you_are_waiting) {
+      return <Empty title="Nothing playing">Nobody has pressed play yet.</Empty>;
+    }
     // Roster name when the phone is claimed, Bluetooth name when it is not —
     // an unclaimed phone has nothing else, and naming it still beats silence.
     const who = holder.name ?? holder.alias ?? "Someone else";
@@ -256,18 +263,83 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
 }
 
 /**
+ * The countdown to the aux coming free, ticking locally between polls.
+ *
+ * Polls are 7.5s apart and the grace is 20s, so a number that only moved on a
+ * poll would spend most of its life frozen and then jump. Same shape as
+ * useElapsed: anchor on the server's reading, tick from there, and re-anchor
+ * on every poll rather than trusting the browser's clock for the whole window.
+ *
+ * Returns null whenever there is no honest number — which is most of the time,
+ * because a holder who is actually playing music has no deadline at all.
+ */
+function useAuxCountdown(freeInMs: number | null): number | null {
+  const [left, setLeft] = useState(freeInMs);
+
+  useEffect(() => {
+    setLeft(freeInMs);
+    // Nothing to count: either a song is open (null) or it already hit zero.
+    if (freeInMs == null || freeInMs <= 0) return;
+    const startedTicking = Date.now();
+    const id = window.setInterval(
+      () => setLeft(Math.max(0, freeInMs - (Date.now() - startedTicking))),
+      1000,
+    );
+    return () => window.clearInterval(id);
+    // freeInMs changes on every poll, so this re-anchors to the Pi's reading
+    // each time instead of drifting.
+  }, [freeInMs]);
+
+  return left;
+}
+
+/**
  * The only thing that tells a specific person the silence is about them.
  *
  * Shown while a song IS playing, because that is exactly when someone is
  * waiting — and it reuses the banner slot under the header rather than adding
  * a permanent line naming the holder, which would just repeat the DJ chip.
+ *
+ * Three states, driven by holder.free_in_ms. The one rule they exist to obey:
+ * the number NEVER rewinds on screen. The grace restarts on every skip, scrub
+ * and play, so when the holder starts another song the Pi sends null and the
+ * countdown DISAPPEARS rather than snapping back to 20s. Same rule
+ * voteRemainingMs follows above, for the same reason.
  */
 function WaitingBanner({ aux }: { aux: AuxState | null }) {
+  // Hooks run before the early return: React requires an unconditional call,
+  // and this one is cheap and idle when there is nothing to count.
+  const left = useAuxCountdown(aux?.holder?.free_in_ms ?? null);
   if (!aux?.you_are_waiting) return null;
+
+  const who = aux.holder?.name ?? aux.holder?.alias ?? "someone else";
+
+  // The grace has lapsed and nobody is entitled to the speaker any more. The
+  // Pi hands it to whoever presses play next, so say that rather than keep
+  // naming a holder who no longer holds anything — which is what this screen
+  // did for the whole length of the grace before free_in_ms existed.
+  if (left === 0) {
+    return (
+      <div className="banner is-info">
+        The aux is free — press play and it&rsquo;s yours.
+      </div>
+    );
+  }
+
+  // Their song is over and the clock is running.
+  if (left != null) {
+    return (
+      <div className="banner is-info">
+        {who} has the aux — yours in {Math.ceil(left / 1000)}s.
+      </div>
+    );
+  }
+
+  // A song is open. No deadline exists, so promise nothing but the rule.
   return (
     <div className="banner is-info">
-      You&rsquo;re connected, but {aux.holder?.name ?? aux.holder?.alias ?? "someone else"} has
-      the aux. Press play once they&rsquo;re done and it&rsquo;s yours.
+      You&rsquo;re connected, but {who} has the aux. Press play once
+      they&rsquo;re done and it&rsquo;s yours.
     </div>
   );
 }

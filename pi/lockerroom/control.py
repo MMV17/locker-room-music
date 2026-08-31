@@ -110,8 +110,15 @@ def play_signature(sessions) -> tuple | None:
         aux_part = (
             holder.get("mac") if holder else None,
             tuple(w.get("mac") for w in aux.get("waiting", [])),
+            # Whether a deadline EXISTS, never the milliseconds left. The raw
+            # number changes every second and would beacon at 1Hz, which is
+            # the opposite of what this loop is for. The site does not need
+            # the ticking pushed to it - it counts down locally from the one
+            # beacon that the song ending already fires, because closing a
+            # play changes play_part.
+            holder.get("free_in_ms") is not None if holder else False,
         )
-        if aux_part == (None, ()):
+        if aux_part == (None, (), False):
             aux_part = None
 
     if play_part is None and aux_part is None:

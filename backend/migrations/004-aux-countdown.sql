@@ -1,0 +1,34 @@
+-- 004 - how long until the aux is free.
+--
+-- 003 gave the site who holds the aux and who is waiting. It could not say
+-- WHEN, so the waiting banner had nothing to offer but "press play once
+-- they're done" and the player had to guess how long that was.
+--
+-- Worse, 003's holder is the ROUTED phone (the Pi's _aux_path), which does not
+-- move when the grace lapses. So for the whole window after AUX_GRACE expired
+-- the site kept saying "Mack has the aux" to somebody who could have taken it
+-- by pressing play. This column is what tells those two states apart.
+--
+-- Lives on `heartbeats` alongside the other three, for the reasons 003 gives:
+-- volatile state, single writer, same beacon, same request, no join.
+--
+-- Additive and nullable. Existing rows get NULL, which /api/now reads exactly
+-- as it reads a Pi running code from before this field existed - no countdown
+-- shown, banner falls back to its old wording.
+
+-- Milliseconds until anybody may take the aux, as measured on the Pi at its
+-- last beacon. Three states, and they are not interchangeable:
+--
+--   NULL  a song is open. No deadline exists - AUX_GRACE has not started, and
+--         it restarts on every skip and scrub, so any number here would rewind
+--         on screen. The site shows no countdown.
+--   > 0   the song is over and the grace is running out.
+--   0     the grace has lapsed. The speaker is still filtered to the holder's
+--         phone, but the aux is free and whoever presses play takes it.
+--
+-- The Worker subtracts beacon age before serving it; see auxState().
+ALTER TABLE heartbeats ADD COLUMN aux_free_in_ms INTEGER;
+
+-- Verify (run after the Pi has beaconed once):
+--   SELECT speaker_name, aux_holder_alias, aux_free_in_ms FROM heartbeats
+--    ORDER BY last_seen_at DESC LIMIT 1;
