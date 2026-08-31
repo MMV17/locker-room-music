@@ -8,6 +8,7 @@ from . import config as config_mod
 from .aux import AuxRouter
 from .bluez_watcher import BluezWatcher
 from .lifecycle import SessionManager
+from .relay import RelayManager
 from .storage import Store
 from .control import beacon_loop
 from .sync import drain_loop
@@ -54,14 +55,29 @@ async def async_main() -> None:
     # constructor would be a cycle.
     session_manager.set_pause(watcher.pause)
 
+    # The outbound speaker link, when one is configured. Constructed ONLY then,
+    # so an unconfigured box cannot reach this code at all - the same rule that
+    # keeps AuxRouter out of every SessionManager built in a test.
+    relay = None
+    if cfg.relay_speaker_mac:
+        relay = RelayManager(cfg.relay_speaker_mac)
+        session_manager.set_relay(relay)
+        log.info("bluetooth relay output configured: %s", cfg.relay_speaker_mac)
+
     await watcher.start()
 
-    await asyncio.gather(
+    loops = [
         drain_loop(cfg, store),
         # Liveness + remote control. Deliberately not routed through the
         # outbox: see the module docstring in control.py.
         beacon_loop(cfg, session_manager),
-    )
+    ]
+    if relay is not None:
+        # Reconnects a speaker that was switched off and back on, without
+        # anyone having to visit the locker room.
+        loops.append(relay.run())
+
+    await asyncio.gather(*loops)
 
 
 def main() -> None:
