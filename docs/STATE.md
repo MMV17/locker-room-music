@@ -57,75 +57,100 @@ Build order status (spec section 10):
 
 ---
 
-## IT WAS THE CABLE (2026-08-30) — a miswired USB-A-to-C plug, not the Pi
+## USB to the Charge 6 works, CONDITIONALLY (2026-08-31) — cable AND charge
 
-**RESOLVED. The Charge 6 works over USB, with no hub, no adapter, and no
-change to the Pi.** Swapping to a different USB-A-to-USB-C cable fixed it
-outright. Two runs of the same harness, same port (`1-1.1`), same speaker,
-same charge state, only the cable different:
+**Two variables, both real, and they stack. Charge is the dominant one.**
+An earlier version of this section said "IT WAS THE CABLE — RESOLVED." That was
+half the answer and is corrected here.
 
-| | cable A | cable B |
-|---|---|---|
-| survived after enumerating | **5.42 s** | **indefinitely** |
-| over-current events | **8** | **0** |
-| audio card `J6` appeared | +0.03 s | +0.04 s |
-| ALSA default opens on `J6` | never got the chance | **yes** |
+| cable | charge | port | result |
+|---|---|---|---|
+| A | same as B's run, 13 min apart | `1-1.3` and `1-1.1` | dies ~5s, 8 over-current events |
+| B | same as A's run | `1-1.1` | **ran indefinitely** |
+| B | ~90% | `1-1.1` (blue) | dies ~4s, 24 events |
+| B | full | `1-1.3` (black) | stable |
+| B | full | `1-1.1` (blue) | **stable, music playing, 0 events** |
 
-Zero over-current on cable B. Not fewer — none.
+**The working combination is cable B plus a topped-up speaker.**
 
-**The mechanism, because "bad cable" is too vague to act on.** A USB-A-to-C
-cable carries a resistor on the CC pin that tells the device how much current
-it may draw. The compliant value for a USB-A host is **56kΩ = 500mA**. Cheap
-cables very often ship with **10kΩ (3A)** or **22kΩ (1.5A)**. The Charge 6
-believes the cable, its charger takes what it was offered, and the Pi 4 — which
-shares ~1.2A across all four ports — trips instantly.
+### The port is NOT a variable — tested, ruled out
 
-**The tell that this is the cable and not the device: `bMaxPower` is 100mA.**
-Captured live from the descriptor before the port was cut. The USB *audio
-function* asks for almost nothing. The battery charger is a separate circuit
-governed by the cable's CC resistor, not by the USB descriptor, which is why
-the declared value and the actual draw can differ by more than an amp.
+The speaker was moved to a black USB2 port and came up; the obvious reading was
+that the port fixed it. It did not. Moved back to the **same blue port that had
+killed it at 90%**, at full charge, it plays fine with zero over-current. All
+four ports share one budget behind the VL805 hub, which is why over-current is
+reported on all of them in the same instant. Do not chase the port again.
 
-**A USB-A host cannot read the CC resistor** — the port has only VBUS, D+, D-
-and GND. So this is not diagnosable in software, only by swapping cables or by
-putting a meter on the plug. The harness that made the comparison rigorous
-(enumeration instant, card appearance, survival time, over-current count) was
-`/tmp/cable-test.sh`; `/tmp` is cleared on reboot, so rewrite it from this
-section if it is ever needed again.
+### Why charge is a cliff and not a slope
 
-### What this corrects
+Li-ion charging runs at full constant current until the cell is nearly full,
+then tapers hard to almost nothing. So there is no gradual middle:
 
-An earlier version of this section concluded **"needs a powered USB hub."**
-That was wrong and no hub is needed. The reasoning that led there was sound as
-far as it went — 5 days of uptime with zero over-current events, 120 of them
-the moment USB attempts began, `get_throttled=0x0` proving the Pi's own supply
-was healthy, and identical behaviour on every port. All of that correctly ruled
-out the Pi, the Argon case and the PSU. **It just never questioned the cable,
-because the cable had already worked well enough to enumerate the device** —
-and a cable that carries data perfectly while lying about current is not an
-obvious suspect.
+- **full** — charger tapered to ~0, only the harmless 100mA USB load remains
+- **90%** — charger back at full constant current, hub trips in ~4 seconds
 
-**The order to try things in, next time a USB device browns out a port:**
-swap the cable FIRST. It is free, it takes a minute, and on this project it was
-the answer.
+Ten percent is enough to cross it. This is why the same cable in the same port
+can look perfect one hour and hopeless the next.
 
-Two other things that were tried and did not matter, so nobody repeats them:
-moving to a different USB port (all four share one budget behind the VL805 hub,
-which is why over-current is reported on all of them at once), and charging the
-speaker further.
+### The draw is INVISIBLE to USB — this is why nothing in software saw it
 
-### Verified working end to end (2026-08-30)
+There are two separate power stories in one cable, and only one of them is USB:
 
-Phone paired to `AuxGoat`, audio out of the Charge 6 over USB, and
-`hc.auxgoat.com` showing the play. AVRCP metadata took a moment to appear —
-"press play to start the music" showed first — then filled in.
+- **The USB one.** `bMaxPower` reads **100mA**, captured live from the
+  descriptor. Granted, honoured, never a problem. Linux logs `rejecting
+  insufficient power` when a device declares more than a port can give, and
+  **that message has never appeared on this box, for any device.** The speaker
+  never asked for more.
+- **The charging one.** The battery charger, governed by the **CC resistor in
+  the USB-C cable**, entirely outside the USB protocol. Nothing enumerates it,
+  nothing declares it, and the kernel cannot see it coming.
 
-**STILL NOT TESTED: the anti-bypass guarantee.** `spec.md` §2 needs the
-speaker's own Bluetooth to be unavailable while it is fed a wired input.
-Nothing has confirmed the Charge 6 does that in USB mode. Try to pair a phone
-directly to the speaker while it is playing over USB. If it connects, the
-enforcement mechanism does not exist on this unit, and that is a go/no-go for
-the product design rather than a detail.
+The compliant CC value for a USB-A host is **56kΩ = 500mA**; cheap cables often
+ship **10kΩ (3A)** or **22kΩ (1.5A)**. A USB-A host has no CC pin, so **this is
+not diagnosable in software** — only by swapping cables or metering the plug.
+
+Corollary: `bMaxPower` is useless as a diagnostic here. It describes the audio
+function, not the charger.
+
+### Audio load is NOT a factor
+
+Ruled out cleanly. Every early failure happened with the PCM state `closed` —
+the amp never drew a watt. And at full charge the PCM ran for minutes:
+
+```
+  0s  yes  yes  closed    OC 0   usb:J6
+ 28s  yes  yes  RUNNING   OC 0   usb:J6   <- music started
+260s  yes  yes  RUNNING   OC 0   usb:J6   <- still clean, on the blue port
+```
+
+### Practical rule for a session
+
+**Use the known-good cable and charge the speaker beforehand.** If it drops a
+few seconds after plugging in, that is not a fault — it is telling you the
+battery is low.
+
+One unproven observation worth knowing: after failing, the speaker was left
+plugged in and came back on its own about two minutes later, apparently having
+trickled up through the hub's retry cycle. **Confounded** — the port was moved
+at the same moment — so treat it as a lead, not a fact. If it holds, "leave it
+plugged in for two minutes" is a free workaround.
+
+### The harness
+
+`/tmp/usbmon.sh` logged one line per second (device present, card present, PCM
+state, over-current delta, routing) and is what made all of the above
+separable; `/tmp/cable-test.sh` did the single-shot A/B. **`/tmp` is cleared on
+reboot** — rewrite them from this section if needed. Run them with
+`systemd-run --unit=... --collect`, not `nohup ... &` over ssh, which does not
+survive the session closing.
+
+### What this means for the product
+
+USB to this speaker is **conditional, not dependable**. It needs one specific
+cable and a battery that will be draining during exactly the use it is needed
+for. That is the reason the Bluetooth relay is worth speccing after all — see
+the relay design doc — because it removes the cable, the CC resistor and the
+charging current from the problem entirely.
 
 ## The box now follows the cable (2026-08-28) — USB if present, else the jack
 
