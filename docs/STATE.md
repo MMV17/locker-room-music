@@ -57,6 +57,90 @@ Build order status (spec section 10):
 
 ---
 
+## The ethernet cable POISONS DNS and makes wifi look dead (2026-08-31)
+
+**The USB-C ethernet cable does not just hijack the default route — it breaks
+name resolution for the whole box, and the result looks exactly like dead
+wifi.** This nearly caused a spurious reboot tonight and probably caused a real
+one earlier in the evening.
+
+`deploy.sh`'s header already warns that the cable creates a
+`default via ... dev eth0 metric 100` route that beats wlan0. **This is the
+second, worse half of that trap, and it was not written down.**
+
+With the cable in, `/etc/resolv.conf` becomes:
+
+```
+nameserver 192.168.2.1              <- the Mac. Dead. FIRST.
+nameserver fe80::...%eth0           <- the Mac again. Dead.
+nameserver 10.104.116.10            <- campus. WORKS. Third.
+nameserver 1.1.1.2                  <- past the limit
+# NOTE: the libc resolver may not support more than 3 nameservers.
+```
+
+**The Mac answers DNS queries and fails them.** glibc takes that as an
+authoritative answer and never falls through to the campus resolver, so every
+lookup dies in ~7ms. Not a timeout — an instant bad answer, which is why it
+does not look like a network problem.
+
+### What it looks like, and why that is dangerous
+
+Every symptom points at the wifi:
+
+- `curl https://lockerroom.finestkindfarms.com` -> `000 in 0.007s`
+- the netwatch probe fails, logging `offline — no egress on wlan0`
+- **netwatch then escalates: bounce at 5 min, restart NetworkManager at 10,
+  REBOOT at 15** — for a fault that is entirely caused by the cable
+- pinging the wifi gateway also fails, which seems to confirm it (campus simply
+  blocks ICMP to the gateway; this is normal and not a fault)
+
+### The proof that wifi was fine all along
+
+Bypass DNS and the link is healthy:
+
+```
+curl --interface wlan0 https://1.1.1.1/      -> 301 in 0.090s
+DoH resolve -> 172.67.176.87
+curl --interface wlan0 --resolve ...         -> 200 in 0.068s
+```
+
+**67 milliseconds to production, on the wifi that every other check called
+dead.**
+
+### How to apply
+
+- **Unplug the ethernet cable when finished.** This is not housekeeping; leaving
+  it in gives a box with no DNS and a watchdog counting toward a reboot.
+- **Never diagnose wifi with the cable plugged in.** The diagnostic tool
+  manufactures the symptom.
+- Test egress with `--interface wlan0` **and** an IP address, never a hostname,
+  or you are testing the Mac's DNS.
+- `iw` is NOT installed on this box. `iw dev wlan0 link` returns
+  `command not found`, and a naive `|| echo "not associated"` fallback then
+  reports the wifi as down when it is up. Use `nmcli` and `ip route`.
+
+## Wifi is now locked to 5GHz (2026-08-31)
+
+```bash
+nmcli connection modify HCGuest 802-11-wireless.band a
+```
+
+**HCGuest on channel 52 (5260 MHz), signal 43, negotiated at 270 Mbit/s.**
+Compare the 2026-08-23 relay test, which ran on **channel 11 (2462 MHz) at 5.5
+Mbit/s** — an 802.11b rate burning enormous airtime in the same band, on the
+same chip and antenna, that Bluetooth hops through.
+
+That is roughly a **50x better link on a band Bluetooth does not use**, and it
+frees 2.4 GHz entirely. **This answers the go/no-go in the Bluetooth relay
+spec**: the airtime problem that killed the relay has a free fix and it works.
+The relay still needs its stuttering re-tested on hardware, but the premise
+holds.
+
+Signal is weaker than 2.4 GHz was, which is the correct trade here: the audio
+path does not use wifi at all, and the outbox is store-and-forward, so a weaker
+link means plays sync late rather than music stopping. Watch that netwatch does
+not start bouncing a merely-weak link.
+
 ## USB to the Charge 6 works, CONDITIONALLY (2026-08-31) — cable AND charge
 
 **Two variables, both real, and they stack. Charge is the dominant one.**
