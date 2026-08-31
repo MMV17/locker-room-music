@@ -511,11 +511,22 @@ Three things this wins outright:
    entirely**, which is the same guarantee by a different mechanism, and a
    harder one to defeat than unplugging a cable.
 
-**Verify #3 on the actual unit before trusting it.** Put the speaker in USB
-audio mode and then try to pair a phone to it directly. If the phone can still
-connect, the enforcement mechanism does not exist on this speaker and the
-product needs a different one — that is a go/no-go for the whole design, not a
-detail.
+**VERIFIED ON THE UNIT, 2026-08-31: #3 HOLDS.** With the Charge 6 playing in
+USB audio mode, a phone **cannot connect to it over Bluetooth.** The speaker's
+Bluetooth section really is unavailable while USB audio is active, exactly as
+predicted above.
+
+This was the go/no-go for the whole design and it passed. `spec.md` §2's
+enforcement premise — nobody can pair straight to the speaker and skip the
+voting — is intact on the USB path, by a different mechanism than the aux jack
+but the same guarantee. It is also **harder to defeat than the jack version**:
+an aux cable can be pulled out in a second, whereas defeating this requires
+taking the speaker out of USB audio mode, which needs the Play/Pause hold and a
+replug.
+
+**This is a per-speaker property, not a general one.** It was verified on the
+Charge 6 and says nothing about any other speaker. Re-test it on any unit
+before relying on it.
 
 ### What this means for buying a speaker
 
