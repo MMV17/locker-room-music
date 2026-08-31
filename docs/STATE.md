@@ -336,7 +336,65 @@ See "CONFIRMED (2026-08-22): the ALSA default was an unopenable HDMI card"
 below. The relay workaround for the Charge 6's missing aux input was tested
 on 2026-08-23 and rejected — see the next section.
 
-## The Bluetooth relay to the JBL: tested 2026-08-23, NO-GO
+## THE RELAY WORKS (2026-08-31) — the 08-23 NO-GO is overturned
+
+**Tested on hardware, on 5GHz, and it is clean.** The section below this one
+concluded NO-GO on 2026-08-23. That conclusion was wrong, and the reason is
+worth understanding: it was never a Bluetooth problem. It was **wifi crawling
+at an 802.11b rate inside Bluetooth's own band.**
+
+Same one command as before — nothing built, nothing on disk:
+
+```bash
+sudo systemctl stop bluealsa-aplay
+bluealsa-aplay -D bluealsa:DEV=78:66:F3:1C:9D:B6,PROFILE=a2dp
+```
+
+| Measure | 2026-08-23 (2.4GHz) | 2026-08-31 (5GHz) |
+|---|---|---|
+| Stuttering | persistent, with dropouts | **none, audibly clean** |
+| ALSA underruns | 5 | **0** |
+| Controller | **WEDGED**, `HCI_Reset` -110 | `UP RUNNING`, **0 failures** |
+| wifi link | ch 11, **5.5 Mbit/s** | ch 161, **270 Mbit/s** |
+
+Both links ran simultaneously on the one radio — `JBL Charge 6` and the phone —
+and the rate mismatch resolved itself exactly as documented before:
+`48000 Hz -> 44100 Hz`, no resampling, no `plug:` wrapper.
+
+**The single change that did it was `nmcli connection modify HCGuest
+802-11-wireless.band a`.** Nothing else. See the 5GHz section above.
+
+### Anti-bypass: VERIFIED on the relay path too
+
+**While the Pi holds the JBL over Bluetooth, nothing else can connect to it.**
+Tested directly. The speaker accepts one A2DP connection and the Pi owns it, so
+`spec.md` §2's enforcement premise holds on this path as well.
+
+This is the **strongest** of the three enforcement mechanisms:
+
+- **aux jack** — defeated by pulling a cable
+- **USB audio mode** — defeated by a Play/Pause hold and a replug
+- **relay** — the Pi holds the slot, and can *actively reconnect* if displaced.
+  There is no physical action that frees the speaker while the Pi is running.
+
+### What this means
+
+The relay is now the best output path, not the fallback: it needs no cable, no
+CC resistor, no charging current, and no per-speaker input type — and it works
+with any Bluetooth speaker, which is nearly all of them.
+
+The design is specced at
+`docs/superpowers/specs/2026-08-31-bluetooth-relay-output-design.md`. Its
+go/no-go (step 2 of the hardware test plan) is the test recorded here, and it
+passed. **The remaining work is software only**: teaching `lifecycle.py` that
+the far speaker is a sink and not a DJ, the output-mode plumbing, reconnect
+logic, and a Bluetooth watchdog.
+
+**Longevity is not yet proven.** This was a run of minutes, and the 08-23 wedge
+happened "shortly after" rather than immediately. Run a full session before
+trusting it unattended.
+
+## The Bluetooth relay to the JBL: tested 2026-08-23, NO-GO — SUPERSEDED, see above
 
 Because the Charge 6 has no analog input (above) and the USB-A-to-USB-C cable
 its wired mode needs was not on hand, the obvious idea is to make the Pi relay:
