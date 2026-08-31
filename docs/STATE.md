@@ -364,6 +364,99 @@ See "CONFIRMED (2026-08-22): the ALSA default was an unopenable HDMI card"
 below. The relay workaround for the Charge 6's missing aux input was tested
 on 2026-08-23 and rejected — see the next section.
 
+## THE RELAY IS BUILT AND RUNNING (2026-08-31)
+
+**Plan 1 is done, deployed, and verified on hardware.** The Pi now plays
+through a Bluetooth speaker it connects to itself. No cable, no CC resistor, no
+charging current, no per-speaker input type.
+
+Plan: `docs/superpowers/plans/2026-08-31-bluetooth-relay-pi-side.md`.
+Design: `docs/superpowers/specs/2026-08-31-bluetooth-relay-output-design.md`.
+
+### The log line that matters
+
+The 08-23 blocker was the listener granting the far speaker the aux. Fixed:
+
+```
+19:25:42  lifecycle: relay speaker connected: JBL Charge 6  - not a session
+19:26:03  relay:     relay speaker connected: 78:66:F3:1C:9D:B6
+19:26:53  lifecycle: session open: Mack's iPhone
+19:26:53  lifecycle: aux granted to Mack's iPhone
+19:26:59  play opened: Treaty Oak Revival - One Time Thing
+```
+
+The speaker is excluded by identity; the phone is a DJ and gets the aux.
+Measured under playback: **0 underruns, 0 relay disconnects, controller
+`UP RUNNING`, plays recorded and synced.**
+
+### How output is chosen now
+
+```
+USB audio card present?       -> USB speaker   (ALSA default)
+else relay speaker connected? -> BT relay      (-D on the player)
+else                          -> 3.5mm jack    (ALSA default)
+```
+
+`audio-route.sh` is still the only arbiter. The wired paths are unchanged.
+
+### The one rule that had to bend, and how it was made safe
+
+The wired outputs are chosen by the ALSA default and `bluealsa-aplay` gets no
+`-D`. **The relay cannot work that way** — its output is a bluealsa PCM. So the
+drop-in gained `$AUX_DEV` from a second `EnvironmentFile`, using the same
+unbracketed-variable trick as `$AUX_MAC`: unset, systemd drops the argument
+entirely and the player runs bare on the wired default.
+
+**Verified on the box with the speaker switched off:**
+
+```
+audio-out:      jack:Headphones
+relay-target:   (absent)
+output.env:     (absent - player runs bare)
+ALSA default:   opens OK
+```
+
+A configured relay whose speaker is missing degrades to a working wired
+speaker, never to silence.
+
+**THE COST, and it is real:** while relaying, `audio-check.sh --tone` tests the
+ANALOG DEFAULT, which is *not* the live path. The script now says so loudly and
+points at the relay checks instead. Do not trust a tone in relay mode.
+
+### Configuration
+
+Off by default. With no `[relay]` table every path behaves exactly as before,
+and there is a test asserting that specifically.
+
+```toml
+[relay]
+speaker_mac = "78:66:F3:1C:9D:B6"
+```
+
+Pair once by hand first (`bluetoothctl pair` + `trust`). A malformed MAC stops
+the listener with a clear message rather than silently disabling the relay.
+
+### Known: one idle disconnect
+
+The speaker dropped once ~30s after power-on, before any music, and the
+reconnect loop recovered it unattended. Zero drops once playback started.
+Leading theory: `bluealsa-aplay` opens the output PCM lazily, so with no phone
+streaming the A2DP transport has no user and idles out. Not chased further
+because the reconnect loop makes it invisible — but if it ever becomes a
+symptom, that is the first place to look.
+
+### New pieces
+
+| File | Role |
+|---|---|
+| `pi/lockerroom/macaddr.py` | The one place that decides what a MAC is. Dependency-free **on purpose**: `config.py` imports `tomllib` (3.11+) and is unimportable in the laptop's 3.9 venv, so validation living there would be testable nowhere. |
+| `pi/lockerroom/relay.py` | Owns the outbound link and nothing else. |
+| `pi/scripts/btwatch.sh` | Recovers a wedged controller without a reboot. Worth having even without the relay. |
+
+**Still to do — Plan 2:** the admin UI to scan for speakers and pick one, over
+the existing `pi_commands` channel. Until then the speaker is set by the config
+key above.
+
 ## THE RELAY WORKS (2026-08-31) — the 08-23 NO-GO is overturned
 
 **Tested on hardware, on 5GHz, and it is clean.** The section below this one
