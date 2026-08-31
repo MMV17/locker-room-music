@@ -107,6 +107,34 @@ curl --interface wlan0 --resolve ...         -> 200 in 0.068s
 **67 milliseconds to production, on the wifi that every other check called
 dead.**
 
+### FIXED PERMANENTLY (2026-08-31)
+
+The cable no longer does either harmful thing. On the Pi:
+
+```bash
+sudo nmcli connection modify "Wired connection 1" ipv4.ignore-auto-dns yes
+sudo nmcli connection modify "Wired connection 1" ipv6.ignore-auto-dns yes
+sudo nmcli connection modify "Wired connection 1" ipv4.never-default yes
+sudo nmcli connection up "Wired connection 1"
+```
+
+Result, verified:
+
+```
+resolv.conf:    nameserver 10.104.116.10    <- campus only, the Mac is gone
+default route:  via 10.104.224.1 dev wlan0  <- the cable no longer wins
+production:     200                          <- was 000
+ssh over cable: still 192.168.2.3            <- access retained
+```
+
+**This kills the documented route-hijack trap in `deploy.sh`'s header as well as
+the DNS one.** The cable is now purely an access path: it carries ssh and
+nothing else, and cannot make a healthy box look broken. Settings persist, so
+this holds across reboots and future sessions.
+
+The warnings below are kept because they describe what the symptom looks like
+if this ever regresses, or on a box that has not had these settings applied.
+
 ### How to apply
 
 - **Unplug the ethernet cable when finished.** This is not housekeeping; leaving
