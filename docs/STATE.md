@@ -1646,17 +1646,42 @@ screen that cannot show the current selection is half a feature — and what was
 
 **Migration 005** adds `bt_devices` and those four heartbeat columns.
 
-**STATUS: not yet run on hardware.** Everything below is unproven on the box:
+**DEPLOYED AND VERIFIED ON HARDWARE 2026-08-31.** Migration 005 applied to prod
+D1, Worker deployed, Pi deployed.
 
-1. Scan from the Admin screen with a speaker in pairing mode; it appears.
-2. Select it; the box pairs, connects, audio moves to it.
-3. A phone plays a song through it end to end.
-4. "Use wired output"; audio returns to the jack.
-5. Power-cut the box; it reconnects to the same speaker unattended.
+| step | result |
+|---|---|
+| scan over the real command channel | **PASS** — dispatched in 2s, 18s to run, 28 devices stored |
+| the JBL sorts to the top | **PASS** — the only device reporting Audio/Video class, above the phone, iPad and MacBook |
+| "Use wired output" at runtime | **PASS** — disconnected, `output.env` removed, box on the jack, `""` cached |
+| selecting a speaker at runtime | **PASS** — pair/trust/connect, `output.env` correct, MAC cached |
+| the aux exclusion holds | **PASS** — `relay speaker connected: JBL Charge 6 — not a session` |
+| a phone plays a song through it | **NOT YET RUN** |
+| reboot reconnects unattended | **NOT YET RUN** |
 
-`bt-scan.sh` has never run on the Pi, so its ~15s discovery plus per-device
-`bluetoothctl info` calls is an estimate. If it overruns, the 45s per-command
-timeout catches it and the result says so.
+Scan timing measured: **17.5s** against a 45s timeout, comfortable.
+
+**Two faults found on the box that no test caught**, both worth knowing because
+both would have shipped looking fine:
+
+- **`bluetoothctl` prints Class as `0x00240414 (2360340)`** — hex AND decimal on
+  one line. Reading the whole field returned `None` for every device, so nothing
+  sorted as audio and the picker's only ordering was silently dead. The list
+  still rendered; it was just wrong, with no error anywhere. Fixed in the script
+  (first token) and the parser, and the round-trip fixture now uses the real
+  format.
+- **`deploy.sh` called a healthy relaying box silent.** The verifier strips the
+  kind off `audio-out` and looks for an ALSA card; when relaying, what is left is
+  a MAC, nothing matches, and it printed **"THIS BOX WILL BE SILENT"** at a box
+  that was connected and correctly routed. That is exactly the lie the comment
+  three lines above it warns about, on the one check that exists because nobody
+  can tell silence from health by looking. Relay mode now verifies the four
+  things that can be verified and says plainly that no tone was played.
+
+**A trap for whoever debugs this next:** `/var/lib/lockerroom/relay-target-mac`
+is mode 600 root. Reading it as `pi` with `2>/dev/null` prints nothing and looks
+exactly like an empty file — which is itself a meaningful state here ("wired
+output, deliberately"). Use `sudo cat`, or you will misread the cache.
 
 Spec: `docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md`.
 Plan: `docs/superpowers/plans/2026-08-31-speaker-selection-ui.md`.
