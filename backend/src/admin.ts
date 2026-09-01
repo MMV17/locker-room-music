@@ -1,7 +1,13 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
 import { normalize } from "./trackKey";
-import { PI_COMMANDS, isPiCommand } from "./piControl";
+import { PI_COMMANDS, isPiCommand, normaliseMac, OFFLINE_AFTER_MS } from "./piControl";
+import {
+  listDevices,
+  getSelection,
+  getSelectionName,
+  setSelection,
+} from "./speakers";
 import { runBackup, listBackups } from "./backup";
 import { lookupArtwork } from "./artwork";
 import { isVoteWindowOpen } from "./voteWindow";
@@ -386,6 +392,82 @@ admin.post("/api/admin/pi/commands", async (c) => {
     .bind(id, b.command, nowIso())
     .run();
   return c.json({ ok: true, id, command: b.command });
+});
+
+/* The relay speaker: what the box plays OUT through.
+
+   Read the design before changing the shape of this: choosing a speaker is
+   deliberately NOT a parameterised command. `pi_commands` maps a fixed name to
+   a fixed argv on both ends, and an argument column is the first crack in the
+   property its schema comment is protecting. Scanning is an action that takes
+   no parameters, so it is just another allowlisted name; the chosen MAC is
+   state and rides the beacon response instead.
+
+   docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md */
+
+admin.get("/api/admin/pi/speakers", async (c) => {
+  const [devices, selected, selectedName, hb] = await Promise.all([
+    listDevices(c.env),
+    getSelection(c.env),
+    getSelectionName(c.env),
+    c.env.DB.prepare(
+      `SELECT output_kind, output_card, relay_connected, relay_error, last_seen_at
+         FROM heartbeats ORDER BY last_seen_at DESC LIMIT 1`,
+    ).first<{
+      output_kind: string | null;
+      output_card: string | null;
+      relay_connected: number | null;
+      relay_error: string | null;
+      last_seen_at: string;
+    }>(),
+  ]);
+
+  return c.json({
+    devices,
+    // "" is a real answer meaning "wired output, deliberately". The UI has to
+    // be able to tell it from "never chosen", which is null.
+    selected,
+    selected_name: selectedName || null,
+    output: hb?.output_kind
+      ? { kind: hb.output_kind, card: hb.output_card }
+      : null,
+    relay_connected: hb?.relay_connected === null ? null : hb?.relay_connected === 1,
+    relay_error: hb?.relay_error ?? null,
+    speaker_online: hb ? Date.now() - Date.parse(hb.last_seen_at) < OFFLINE_AFTER_MS : false,
+  });
+});
+
+admin.put("/api/admin/pi/speakers", async (c) => {
+  type Body = { mac?: string | null; name?: string | null };
+  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+
+  // null clears the selection: wired output. Stored as "" rather than by
+  // deleting the row, because a deleted row means "never configured" and the
+  // Pi would fall back to config.toml and turn the speaker straight back on.
+  if (b.mac === null || b.mac === undefined) {
+    await setSelection(c.env, null, null);
+    return c.json({ ok: true, selected: "", selected_name: null });
+  }
+
+  const mac = normaliseMac(b.mac);
+  if (!mac) {
+    // Validated here AND again on the Pi. This value becomes an argv element
+    // for bluetoothctl, and neither gate is redundant: this one keeps junk out
+    // of the database, the Pi's keeps a compromised server from being the only
+    // thing between a locker room speaker and a subprocess.
+    return c.json({ error: "That is not a MAC address" }, 400);
+  }
+
+  const name =
+    typeof b.name === "string" && b.name.trim() !== ""
+      ? b.name.trim().slice(0, 64)
+      : null;
+  await setSelection(c.env, mac, name);
+
+  // Deliberately no command is queued. The Pi reconciles against this on its
+  // next beacon - which is seconds away, because picking a speaker means a
+  // scan was just run and the box is in attentive mode.
+  return c.json({ ok: true, selected: mac, selected_name: name });
 });
 
 /* Backups. The cron runs daily; these exist so a backup can be taken before

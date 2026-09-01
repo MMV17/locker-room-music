@@ -17,7 +17,16 @@
  * command would turn a locker room speaker into remote code execution, so it
  * does not exist — and the Pi re-checks this list rather than trusting us.
  */
-export const PI_COMMANDS = ["restart-listener", "reboot", "report-status"] as const;
+export const PI_COMMANDS = [
+  "restart-listener",
+  "reboot",
+  "report-status",
+  // Discovers nearby Bluetooth devices for the speaker picker. It takes NO
+  // parameters, which is the only reason it can be a command at all: choosing
+  // a speaker is state, and travels as a `settings` row on the beacon response
+  // instead. See docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md.
+  "scan-speakers",
+] as const;
 export type PiCommand = (typeof PI_COMMANDS)[number];
 
 export function isPiCommand(value: unknown): value is PiCommand {
@@ -26,3 +35,31 @@ export function isPiCommand(value: unknown): value is PiCommand {
 
 /** How stale a beacon may be before the site calls the speaker offline. */
 export const OFFLINE_AFTER_MS = 3 * 60_000;
+
+/**
+ * The same regex the Pi uses in `lockerroom/macaddr.py`, deliberately.
+ *
+ * A MAC accepted here is stored, handed to the Pi on its next beacon, and
+ * passed to bluetoothctl as an argv element. Both ends validate it: this one so
+ * junk never enters the database, and the Pi's so a compromised or misdeployed
+ * server cannot be the only thing standing between a locker room speaker and a
+ * subprocess. Neither is redundant.
+ *
+ * Whitespace is NOT trimmed. An untrimmed value stored here would be refused by
+ * the Pi's validator, producing a selection that silently never applies - so
+ * padding is rejected loudly at the point of entry instead.
+ */
+const MAC = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
+
+export function isMacAddress(value: unknown): value is string {
+  return typeof value === "string" && MAC.test(value);
+}
+
+/** Upper-cased, so one speaker is one row rather than one per browser. */
+export function normaliseMac(value: unknown): string | null {
+  return isMacAddress(value) ? value.toUpperCase() : null;
+}
+
+/** The settings keys the speaker picker owns. */
+export const RELAY_SPEAKER_MAC_KEY = "relay_speaker_mac";
+export const RELAY_SPEAKER_NAME_KEY = "relay_speaker_name";

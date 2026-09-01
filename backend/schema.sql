@@ -101,7 +101,16 @@ CREATE TABLE IF NOT EXISTS heartbeats (
   -- shows no countdown; > 0 = the grace is running out; 0 = it has lapsed and
   -- whoever presses play next gets the speaker. The Worker subtracts beacon
   -- age before serving it (src/auxCountdown.ts).
-  aux_free_in_ms    INTEGER
+  aux_free_in_ms    INTEGER,
+  -- What the box is actually PLAYING THROUGH, as chosen by audio-route.sh.
+  -- Reported rather than inferred from the selection, because the two disagree
+  -- exactly when something is wrong - which is when the admin screen matters.
+  -- All nullable: a Pi on older code reports none of it and the screen says
+  -- unknown rather than a confident wrong answer.
+  output_kind       TEXT,     -- usb | jack | relay
+  output_card       TEXT,     -- the ALSA card, or the speaker MAC when relaying
+  relay_connected   INTEGER,  -- 1/0, NULL when the Pi did not say
+  relay_error       TEXT      -- why the chosen speaker is not playing, in words
 );
 
 -- Remote control for the Pi (see POST /api/pi/beacon).
@@ -126,6 +135,28 @@ CREATE TABLE IF NOT EXISTS pi_commands (
 
 CREATE INDEX IF NOT EXISTS idx_pi_commands_pending
   ON pi_commands (created_at) WHERE dispatched_at IS NULL;
+
+-- The most recent Bluetooth scan, and only that one. Replaced wholesale every
+-- scan: a device list is a snapshot, not a log, and a speaker that has left the
+-- building must stop being offered.
+--
+-- This is how the speaker picker avoids putting an argument on pi_commands.
+-- Scanning is an action that takes no parameters, so it is just another
+-- allowlisted name; the chosen MAC travels back down as a `settings` row on the
+-- beacon response and is validated again on the Pi. See
+-- docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md.
+CREATE TABLE IF NOT EXISTS bt_devices (
+  mac        TEXT PRIMARY KEY,
+  -- NULL means the device advertises no name; the UI shows the MAC. Kept NULL
+  -- rather than defaulted so "nameless" stays distinguishable from a real name.
+  name       TEXT,
+  -- Class of Device. Its major class says whether this is audio gear, which
+  -- SORTS speakers to the top - never filters, because the field is
+  -- self-reported and a filter can hide the speaker in somebody's hand.
+  cod        INTEGER,
+  rssi       INTEGER,   -- NULL is normal: only populated for a recent sighting
+  scanned_at TEXT NOT NULL
+);
 
 -- Operator-set values that must outlive a deploy. Currently the team colour
 -- and team name (spec 9.2: "one configurable team-color token that the

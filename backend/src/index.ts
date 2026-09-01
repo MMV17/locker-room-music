@@ -20,6 +20,7 @@ import { devices } from "./devices";
 import { admin } from "./admin";
 import { theme } from "./theme";
 import { runBackup } from "./backup";
+import { parseScan, replaceDevices, getSelection } from "./speakers";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -268,6 +269,37 @@ async function recordAux(env: Env, speakerName: string, aux: AuxReport | undefin
 }
 
 /**
+ * What the box is actually playing through, and whether the chosen speaker is
+ * connected.
+ *
+ * Stored on `heartbeats` for the same reasons the aux state is: volatile,
+ * single writer, same beacon, same request, no join. Everything is nullable, so
+ * a Pi running older code simply reports nothing and the screen says unknown
+ * rather than showing a confident wrong answer.
+ */
+async function recordOutput(
+  env: Env,
+  speakerName: string,
+  output: { kind?: string; card?: string } | undefined,
+  relay: { mac?: string | null; connected?: boolean; last_error?: string | null } | undefined,
+): Promise<void> {
+  if (!output && !relay) return;
+  await env.DB.prepare(
+    `UPDATE heartbeats
+        SET output_kind = ?, output_card = ?, relay_connected = ?, relay_error = ?
+      WHERE speaker_name = ?`,
+  )
+    .bind(
+      output?.kind ?? null,
+      output?.card ?? null,
+      relay ? (relay.connected ? 1 : 0) : null,
+      relay?.last_error ?? null,
+      speakerName,
+    )
+    .run();
+}
+
+/**
  * Superseded by /api/pi/beacon, kept because the Pi's outbox may still hold
  * unsent rows addressed here. Removing it would strand them: the drain treats
  * a 404 as non-retryable, backs off hard, and keeps the row forever.
@@ -292,6 +324,16 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       result?: { id: string; ok: boolean; output?: string };
       current_play?: { id: string; status?: string; played_ms?: number };
       aux?: AuxReport;
+      // What a scan found. Its own payload rather than the command result,
+      // which is truncated to 2000 characters below - a room with thirty
+      // phones overflows that, and a truncated device list is worse than none.
+      scan?: { at?: string; devices?: unknown };
+      // Whether the chosen speaker is actually playing, and why not when it is
+      // not. A selection that stores fine and then fails to connect is the
+      // likeliest thing to happen in a locker room.
+      relay?: { mac?: string | null; connected?: boolean; last_error?: string | null };
+      // What audio-route.sh actually selected: usb, jack or relay.
+      output?: { kind?: string; card?: string };
     }>()
     .catch(() => ({}) as any);
 
@@ -319,6 +361,22 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       .run();
   }
 
+  // A scan replaces the device list wholesale. An empty result still clears
+  // it: "I looked and found nothing" is a real answer, and leaving last week's
+  // devices on screen would misrepresent it.
+  if (body.scan) {
+    await replaceDevices(
+      c.env,
+      parseScan(body.scan.devices),
+      typeof body.scan.at === "string" ? body.scan.at : nowIso(),
+    );
+  }
+
+  // What the box is actually playing through, so the admin screen can say so
+  // rather than inferring it from what was selected - the two disagree exactly
+  // when something is wrong, which is when it matters.
+  await recordOutput(c.env, speakerName, body.output, body.relay);
+
   // Report on whatever we handed out last time, before taking anything new.
   if (body.result?.id) {
     await c.env.DB.prepare(
@@ -342,7 +400,14 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
      WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 1`,
   ).first<{ id: string; command: string }>();
 
-  if (!pending) return c.json({ ok: true, command: null });
+  // The chosen speaker rides every response, pending command or not. It is
+  // STATE, not a command: the Pi reconciles what it is connected to against
+  // this on each beacon, so a missed response costs one interval rather than
+  // stranding a selection forever. Three values, all meaningful - see
+  // speakers.ts getSelection().
+  const relaySpeaker = await getSelection(c.env);
+
+  if (!pending) return c.json({ ok: true, command: null, relay_speaker: relaySpeaker });
 
   // reboot is fire-and-forget: the Pi is killed before it can report, so
   // record the outcome now rather than leaving a row that never completes.
@@ -357,7 +422,11 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
     .bind(...(isReboot ? [nowIso(), nowIso(), pending.id] : [nowIso(), pending.id]))
     .run();
 
-  return c.json({ ok: true, command: { id: pending.id, name: pending.command } });
+  return c.json({
+    ok: true,
+    command: { id: pending.id, name: pending.command },
+    relay_speaker: relaySpeaker,
+  });
 });
 
 /* ------------------------------------------------------------------ *
