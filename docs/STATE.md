@@ -1555,6 +1555,112 @@ The 30-second skip rule (spec §5.2) is enforced correctly on real data — 27.8
 scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 `mac_hint=B2:61`, `hashlen=64`, raw MAC absent.
 
+## Choosing the speaker from the Admin screen (2026-08-31) — BUILT, NOT YET ON HARDWARE
+
+The relay works; choosing what it relays to needed SSH, and on campus there is
+no SSH. This is the fix: scan from the Admin screen, pick a speaker, done.
+
+**The one design decision worth defending.** The obvious shape is a
+`set-relay-speaker <MAC>` command — and it would be **the first parameterised
+command** in a channel deliberately built without any. `pi_commands` maps a
+fixed name to a fixed argv on both ends, and its schema comment says why: *"that
+would be remote code execution on a device sitting in a locker room."* An
+argument column is the first crack in that, and it does not close again.
+
+It is also unnecessary, because the two halves are different kinds of thing:
+
+| half | kind | how it travels |
+|---|---|---|
+| **scan** | an action, no parameters | a fourth allowlisted name — no schema change at all |
+| **select** | a fact about the box | a `settings` row, carried on the beacon response |
+
+`pi_commands` is unchanged. A MAC does still reach the Pi, but as **data on the
+beacon response**, validated on arrival by `macaddr.normalise` — exactly how
+`config.toml` values are already handled. New capability: none.
+
+**Three states, and collapsing any two breaks something real.**
+
+| `settings.relay_speaker_mac` | meaning |
+|---|---|
+| **row absent** | never chosen — the Pi falls back to `config.toml`, behaving exactly as before |
+| **a MAC** | relay to this speaker |
+| **`""`** | explicitly cleared — the "Use wired output" button |
+
+Absent vs empty is not pedantry. Empty has to **override** `config.toml`, or
+that button silently does nothing on a box with a speaker in its file. Clearing
+therefore stores `""` rather than deleting the row.
+
+**Precedence on the Pi:** server → local cache → `config.toml`. The cache is
+`/var/lib/lockerroom/relay-target-mac`, and it is on `/var/lib` rather than
+`/run` on purpose: it must survive a power cut, unlike
+`/run/lockerroom/relay-target`, whose entire meaning is "a relay is live right
+now" and which must not.
+
+**Timing, stated honestly.** The beacon idles at 60s, so unchanged this would be
+~60s to pick the command up, ~20s to scan, ~60s to report — about two and a half
+minutes, against a pairing window that times out in two. Two changes:
+
+- **A pending result now beacons at once** instead of sleeping a full cycle
+  first. That was half the round trip and should always have been there.
+- **Attentive mode:** 5s polling for 3 minutes after any command.
+
+**The first press still waits up to 60s and nothing can fix that** — no message
+reaches the Pi until it checks in. The UI solves it by ordering the
+instructions: *press Scan, wait for it to say scanning, THEN put the speaker in
+pairing mode.* The wait moves in front of the pairing window instead of eating
+it. A wording fix for a timing problem, chosen over a code fix that costs more
+and buys less.
+
+**Devices are sorted, never filtered.** Class of Device is self-reported and
+some speakers report it wrongly or not at all, so a filter can hide the exact
+speaker somebody is holding — the one failure that would make the screen
+untrustworthy. Audio class sorts first, then strongest signal. Nameless devices
+show their MAC rather than a blank row.
+
+**Scan results ride the beacon, not `pi_commands.result`,** which is truncated
+to 2000 chars — a room with thirty phones overflows it, and a truncated list is
+worse than none because the speaker you want goes missing for no visible reason.
+They replace `bt_devices` wholesale: a device list is a snapshot, not a log, and
+an empty scan still clears it because "I looked and found nothing" is a real
+answer.
+
+**Scanning is refused while a song is playing.** Discovery shares one antenna
+with the phone's A2DP sink and the outbound relay. Refused on the Pi, where the
+play state lives, and it **fails open** — a stutter costs less than a feature
+that never works.
+
+**The guard that matters most.** `SessionManager` excludes the relay MAC from
+aux arbitration by identity. That MAC used to be fixed at construction, so
+nothing had to keep it current. A speaker chosen at runtime that did **not**
+update the guard would be granted the aux and written into the play data —
+**the exact 2026-08-23 failure, reintroduced by the feature built to make the
+relay usable.** `RelayManager` therefore announces every target change from
+inside `set_target`, and `main.py` wires that to `set_relay_mac`. Both derived
+forms move together: the MAC guards connect, the BlueZ path spelling guards
+disconnect.
+
+**Also folded in:** the long-deferred heartbeat output report
+(`output_kind`, `output_card`, `relay_connected`, `relay_error`). A selection
+screen that cannot show the current selection is half a feature — and what was
+*chosen* and what is *playing* disagree exactly when something is wrong.
+
+**Migration 005** adds `bt_devices` and those four heartbeat columns.
+
+**STATUS: not yet run on hardware.** Everything below is unproven on the box:
+
+1. Scan from the Admin screen with a speaker in pairing mode; it appears.
+2. Select it; the box pairs, connects, audio moves to it.
+3. A phone plays a song through it end to end.
+4. "Use wired output"; audio returns to the jack.
+5. Power-cut the box; it reconnects to the same speaker unattended.
+
+`bt-scan.sh` has never run on the Pi, so its ~15s discovery plus per-device
+`bluetoothctl info` calls is an estimate. If it overruns, the 45s per-command
+timeout catches it and the result says so.
+
+Spec: `docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md`.
+Plan: `docs/superpowers/plans/2026-08-31-speaker-selection-ui.md`.
+
 ## Pick up here
 
 **THE SPEAKER IS BUILT, DEPLOYED AND PLAYING MUSIC.** Everything in the chain

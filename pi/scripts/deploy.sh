@@ -54,6 +54,10 @@ scp -q "${REPO_ROOT}/pi/systemd/99-lockerroom-audio.rules" "${PI_HOST}:/tmp/99-l
 # btwatch.sh. Shipped on every deploy because the box that needs it is the one
 # you cannot reach.
 scp -q "${REPO_ROOT}/pi/scripts/btwatch.sh" "${PI_HOST}:/tmp/btwatch.sh"
+# bt-scan.sh backs the Admin screen's speaker picker. It is invoked by the
+# listener as a FIXED argv on the command allowlist, which is why the scanning
+# logic lives in a script rather than as a command string.
+scp -q "${REPO_ROOT}/pi/scripts/bt-scan.sh" "${PI_HOST}:/tmp/bt-scan.sh"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-btwatch.service" "${PI_HOST}:/tmp/lockerroom-btwatch.service"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
@@ -70,6 +74,7 @@ sudo install -m 755 /tmp/keep-discoverable.sh /usr/local/bin/keep-discoverable.s
 sudo install -m 755 /tmp/audio-check.sh /usr/local/bin/audio-check.sh
 sudo install -m 755 /tmp/audio-route.sh /usr/local/bin/audio-route.sh
 sudo install -m 755 /tmp/btwatch.sh /usr/local/bin/btwatch.sh
+sudo install -m 755 /tmp/bt-scan.sh /usr/local/bin/bt-scan.sh
 sudo mv /tmp/lockerroom-btwatch.service /etc/systemd/system/lockerroom-btwatch.service
 sudo mv /tmp/lockerroom-audio-route.service /etc/systemd/system/lockerroom-audio-route.service
 sudo mv /tmp/99-lockerroom-audio.rules /etc/udev/rules.d/99-lockerroom-audio.rules
