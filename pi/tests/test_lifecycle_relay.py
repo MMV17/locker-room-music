@@ -124,3 +124,65 @@ async def test_phone_disconnect_does_not_notify_the_relay():
     await mgr.on_device_connected(PHONE_PATH, PHONE, "Mack's iPhone")
     await mgr.on_device_disconnected(PHONE_PATH)
     assert relay.disconnects == 0
+
+
+# --------------------------------------------------------------------------- #
+# The exclusion has to follow a speaker chosen at runtime.
+#
+# Before the Admin screen, the relay MAC was fixed at construction from
+# config.toml. Now it can change mid-run, and if the guard does not move with
+# it, the newly chosen speaker is granted the aux and written into the play
+# data - which is exactly the 08-23 failure above, reintroduced by the feature
+# that was supposed to make the relay usable.
+# --------------------------------------------------------------------------- #
+
+SPEAKER2 = "AA:BB:CC:DD:EE:FF"
+SPEAKER2_PATH = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+
+
+@pytest.mark.asyncio
+async def test_a_speaker_chosen_at_runtime_is_excluded():
+    mgr = SessionManager(FakeStore())
+    mgr.set_relay_mac(SPEAKER2)
+    await mgr.on_device_connected(SPEAKER2_PATH, SPEAKER2, "JBL Charge 6")
+    assert mgr._sessions == {}
+    assert mgr._aux_path is None
+
+
+@pytest.mark.asyncio
+async def test_the_previous_speaker_stops_being_excluded():
+    """Otherwise the exclusion list only ever grows, and a speaker you stopped
+    relaying to could never be somebody's phone."""
+    mgr = SessionManager(FakeStore(), relay_speaker_mac=SPEAKER)
+    mgr.set_relay_mac(SPEAKER2)
+    await mgr.on_device_connected(SPEAKER_PATH, SPEAKER, "A Phone")
+    assert mgr._sessions != {}
+
+
+@pytest.mark.asyncio
+async def test_clearing_the_speaker_excludes_nobody():
+    mgr = SessionManager(FakeStore(), relay_speaker_mac=SPEAKER)
+    mgr.set_relay_mac(None)
+    await mgr.on_device_connected(SPEAKER_PATH, SPEAKER, "A Phone")
+    assert mgr._sessions != {}
+
+
+@pytest.mark.asyncio
+async def test_the_disconnect_path_follows_the_new_speaker_too():
+    """on_device_disconnected matches on the BlueZ path spelling, which is a
+    SECOND derived value. Updating one and not the other would leave the relay
+    never told its speaker went away - silence with every unit green."""
+    relay = FakeRelay()
+    mgr = SessionManager(FakeStore(), relay_speaker_mac=SPEAKER)
+    mgr.set_relay(relay)
+    mgr.set_relay_mac(SPEAKER2)
+    await mgr.on_device_disconnected(SPEAKER2_PATH)
+    assert relay.disconnects == 1
+
+
+def test_a_lowercase_mac_chosen_at_runtime_still_excludes():
+    """It arrives from BlueZ upper-cased and from the server however the
+    operator's browser sent it."""
+    mgr = SessionManager(FakeStore())
+    mgr.set_relay_mac(SPEAKER2.lower())
+    assert mgr.relay_mac == SPEAKER2

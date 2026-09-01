@@ -210,13 +210,12 @@ class SessionManager:
         #
         # None means the relay is not configured and NOTHING here changes
         # behaviour, which is the safety property the whole feature rests on.
-        self._relay_mac = relay_speaker_mac.upper() if relay_speaker_mac else None
+        self._relay_mac: str | None = None
         # on_device_disconnected only ever sees a path, never a MAC, so the
         # exclusion needs the BlueZ spelling too: 78:66:F3:1C:9D:B6 arrives as
         # .../dev_78_66_F3_1C_9D_B6.
-        self._relay_path_suffix = (
-            "dev_" + self._relay_mac.replace(":", "_") if self._relay_mac else None
-        )
+        self._relay_path_suffix: str | None = None
+        self.set_relay_mac(relay_speaker_mac)
         # Set by main.py to a RelayManager. Injected for the same reason as
         # _pause: it keeps every test in this directory free of D-Bus and of
         # bluetoothctl.
@@ -244,6 +243,25 @@ class SessionManager:
         # Set by main.py to BluezWatcher.pause. Optional so the whole lifecycle
         # stays testable without a D-Bus bus; see _pause_politely.
         self._pause: Callable[[str], Awaitable[None]] | None = None
+
+    @property
+    def relay_mac(self) -> str | None:
+        return self._relay_mac
+
+    def set_relay_mac(self, mac: str | None) -> None:
+        """Change which device is excluded from aux arbitration.
+
+        Called at construction and again whenever the speaker is chosen from
+        the Admin screen. BOTH derived forms are updated together on purpose:
+        the MAC guards on_device_connected and the path suffix guards
+        on_device_disconnected, and updating one without the other would leave
+        the relay never told its speaker went away — silence with every unit
+        green, which is this project's most expensive failure shape.
+        """
+        self._relay_mac = mac.upper() if mac else None
+        self._relay_path_suffix = (
+            "dev_" + self._relay_mac.replace(":", "_") if self._relay_mac else None
+        )
 
     def set_relay(self, relay: Any) -> None:
         """Give the manager a way to tell the relay its speaker went away.

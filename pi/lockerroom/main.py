@@ -9,6 +9,7 @@ from .aux import AuxRouter
 from .bluez_watcher import BluezWatcher
 from .lifecycle import SessionManager
 from .relay import RelayManager
+from . import relaytarget
 from .storage import Store
 from .control import beacon_loop
 from .sync import drain_loop
@@ -55,14 +56,32 @@ async def async_main() -> None:
     # constructor would be a cycle.
     session_manager.set_pause(watcher.pause)
 
-    # The outbound speaker link, when one is configured. Constructed ONLY then,
-    # so an unconfigured box cannot reach this code at all - the same rule that
-    # keeps AuxRouter out of every SessionManager built in a test.
-    relay = None
-    if cfg.relay_speaker_mac:
-        relay = RelayManager(cfg.relay_speaker_mac)
-        session_manager.set_relay(relay)
-        log.info("bluetooth relay output configured: %s", cfg.relay_speaker_mac)
+    # The outbound speaker link. Always constructed now, because the speaker can
+    # be chosen from the Admin screen at runtime and there is no SSH into the
+    # box on campus - so "no speaker yet" has to be a resting state rather than
+    # a reason the object does not exist.
+    #
+    # An unconfigured box still reaches no Bluetooth code: with no target,
+    # RelayManager.run() does nothing but sleep.
+    #
+    # Precedence: whatever the server last said, else the local cache of that,
+    # else config.toml. The cache is what makes the box come back up on the
+    # right speaker after a power cut in a room where nobody is present and the
+    # network may not return first.
+    cached = relaytarget.read_cache()
+    initial = relaytarget.resolve(None, cached, cfg.relay_speaker_mac)
+    relay = RelayManager(initial)
+    session_manager.set_relay(relay)
+    session_manager.set_relay_mac(initial)
+    # And keep them in step when the speaker is changed from the Admin screen.
+    # Without this the new speaker would be treated as a DJ's phone: granted
+    # the aux, written into the play data. See test_lifecycle_relay.py.
+    relay.on_target_changed(session_manager.set_relay_mac)
+    if initial:
+        source = "cache" if cached else "config.toml"
+        log.info("bluetooth relay output: %s (from %s)", initial, source)
+    else:
+        log.info("no bluetooth relay speaker selected — wired output")
 
     await watcher.start()
 
@@ -70,12 +89,13 @@ async def async_main() -> None:
         drain_loop(cfg, store),
         # Liveness + remote control. Deliberately not routed through the
         # outbox: see the module docstring in control.py.
-        beacon_loop(cfg, session_manager),
-    ]
-    if relay is not None:
+        # It also carries the chosen speaker back down: selection is state on
+        # the beacon response, not a parameterised command. See control.py.
+        beacon_loop(cfg, session_manager, relay=relay),
         # Reconnects a speaker that was switched off and back on, without
-        # anyone having to visit the locker room.
-        loops.append(relay.run())
+        # anyone having to visit the locker room. A no-op until one is chosen.
+        relay.run(),
+    ]
 
     await asyncio.gather(*loops)
 

@@ -333,3 +333,32 @@ async def test_state_survives_a_disconnect_so_the_screen_can_explain_it(tmp_path
     await m.on_disconnected()
     assert m.target == MAC
     assert m.connected is False
+
+
+@pytest.mark.asyncio
+async def test_a_target_change_notifies_whoever_needs_to_know(tmp_path):
+    """The lifecycle exclusion is keyed on the relay MAC. If it does not move
+    when the target moves, the newly chosen speaker is granted the aux and
+    written into the play data — the exact 2026-08-23 failure, reintroduced by
+    the feature meant to make the relay usable. Notifying from HERE, the one
+    place the target changes, is what keeps them from drifting apart."""
+    seen: list = []
+    m = mk2(tmp_path)
+    m.on_target_changed(seen.append)
+
+    await m.set_target(MAC)
+    await m.set_target(MAC2)
+    await m.set_target(None)
+
+    assert seen == [MAC, MAC2, None]
+
+
+@pytest.mark.asyncio
+async def test_a_listener_that_raises_does_not_break_the_switch(tmp_path):
+    def boom(mac):
+        raise RuntimeError("nope")
+
+    m = mk2(tmp_path)
+    m.on_target_changed(boom)
+    assert await m.set_target(MAC) is True
+    assert m.target == MAC

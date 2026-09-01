@@ -133,6 +133,25 @@ class RelayManager:
         self._live = False
         self._paired: set[str] = set()
         self._last_error: str | None = None
+        self._target_listeners: list[Callable[[str | None], None]] = []
+
+    def on_target_changed(self, listener: Callable[[str | None], None]) -> None:
+        """Be told when the speaker changes.
+
+        main.py wires this to SessionManager.set_relay_mac. The notification
+        happens HERE, at the one place the target actually changes, rather than
+        at each caller — because a caller that forgets leaves the far speaker
+        competing with phones for the aux, which is silent, plausible and was
+        expensive to find the first time.
+        """
+        self._target_listeners.append(listener)
+
+    def _announce_target(self) -> None:
+        for listener in self._target_listeners:
+            try:
+                listener(self._mac)
+            except Exception:
+                log.exception("a relay target listener failed")
 
     @property
     def mac(self) -> str | None:
@@ -178,6 +197,7 @@ class RelayManager:
 
         self._mac = wanted
         self._last_error = None
+        self._announce_target()
         if wanted is None:
             log.info("relay target cleared — wired output")
             return True
