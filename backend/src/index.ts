@@ -21,6 +21,7 @@ import { admin } from "./admin";
 import { theme } from "./theme";
 import { runBackup } from "./backup";
 import { parseScan, replaceDevices, getSelection } from "./speakers";
+import { speakerRoutes } from "./speakerRoutes";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -870,6 +871,12 @@ app.use("/api/me/*", requireSession);
 app.route("/", boards);
 
 app.use("/api/devices/*", requireSession);
+// Speaker selection for the team. Gated by presence rather than by the admin
+// password: choosing the output speaker is a DJ's job, and handing every DJ the
+// coach's password to do it is not a plan. See speakerAccess.ts.
+app.use("/api/speakers", requireSession);
+app.use("/api/speakers/*", requireSession);
+app.route("/", speakerRoutes);
 app.route("/", devices);
 
 app.use("/api/admin/*", requireAdmin);

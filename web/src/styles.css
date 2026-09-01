@@ -435,6 +435,9 @@ input {
 /* Matches the jersey's footprint exactly so the row reads as balanced, but
    stays flat — no fill, no badge. Two solid squares in the corners would
    compete, and only one of them is a control. */
+/* A button since 2026-09-01: tapping it opens the speaker picker. The reset is
+   because it used to be a span, and a bare <button> would otherwise arrive with
+   a border, a background and the browser's font. */
 .np-speaker {
   width: 30px;
   height: 30px;
@@ -442,6 +445,20 @@ input {
   place-items: center;
   justify-self: start;
   color: var(--muted);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The speaker picker is a list inside a dialog, so it needs a scroll bound of
+   its own — a locker room can turn up thirty devices and the sheet must not
+   grow past the phone. */
+.sp-modal {
+  max-height: 84vh;
+  overflow-y: auto;
 }
 
 .np-speaker svg {

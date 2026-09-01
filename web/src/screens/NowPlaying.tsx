@@ -5,6 +5,7 @@ import { Artwork, Empty, Spinner, formatClock } from "./../components";
 import { IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
+import { SpeakerPicker } from "./SpeakerPicker";
 
 /**
  * Spec 8. Polling is still the only thing that could blow the request budget,
@@ -30,6 +31,7 @@ import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 const POLL_MS = 7_500;
 
 export function NowPlaying({ teamName }: { teamName: string }) {
+  const [pickingSpeaker, setPickingSpeaker] = useState(false);
   const navigate = useNavigate();
   const [now, setNow] = useState<NowResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,6 +129,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   return (
     <>
       {revealFor && <Reveal play={revealFor} onClose={() => setRevealFor(null)} />}
+      {pickingSpeaker && <SpeakerPicker onClose={() => setPickingSpeaker(false)} />}
 
       <main className="screen np">
         <header className="np-head">
@@ -141,14 +144,20 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               to the least important thing on the screen. The full sentence
               survives in the label, which is what a screen reader announces
               and what a long-press shows. */}
-          <span
+          {/* Also the way in to choosing which speaker the box plays through.
+              It is the only thing on this screen that is already about the
+              speaker, so it is where a DJ looks — and it keeps a control most
+              people never touch out of the main flow without hiding it in a
+              menu nobody opens. The permission is enforced server-side; this
+              opens for everyone and explains itself inside. */}
+          <button
             className={"np-speaker" + (now?.speaker_online ? " is-live" : "")}
-            role="img"
-            aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}`}
-            title={`Speaker ${now?.speaker_online ? "online" : "offline"}`}
+            onClick={() => setPickingSpeaker(true)}
+            aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}. Choose a speaker.`}
+            title="Choose a speaker"
           >
             <IconSpeaker muted={!now?.speaker_online} />
-          </span>
+          </button>
           <span className="t-label np-head-team">{teamName}</span>
           <button
             className="jersey is-sm"

@@ -1555,6 +1555,57 @@ The 30-second skip rule (spec §5.2) is enforced correctly on real data — 27.8
 scored `counted=0`, 37.4s scored `counted=1`. Device privacy holds too:
 `mac_hint=B2:61`, `hashlen=64`, raw MAC absent.
 
+## Speaker selection is a DJ control, not a coach one (2026-09-01)
+
+Built it in the Admin screen first, and that was a design error caught
+immediately: *"are you suggesting I give every DJ the admin code?"* Every DJ
+needs to pick a speaker — they walk into a room with whatever is there — so
+gating it behind the coach password means either handing out the admin code or
+making every DJ find the coach. Neither is the product.
+
+**The permission already existed in the data.** A phone connected to the
+AuxGoat over Bluetooth is standing within about ten metres of it. That is a
+proof of presence nobody can fake from home, it needs no new code to hand out,
+and the beacon already reports the whole connected set (the aux holder plus
+everyone waiting). Phones are already tied to players by the Claim screen.
+
+**The rule, in `backend/src/speakerAccess.ts`:**
+
+- You may change the speaker if **one of your claimed phones is currently
+  connected to the box**. Unclaimed phones grant nobody anything.
+- **Not while somebody else's song is playing.** Moving the output mid-song is
+  taking the speaker away from whoever is DJing — the same courtesy the aux rule
+  already encodes. Your own song is fine.
+- The speaker must be **in the last scan**. Not an injection concern (the MAC is
+  validated and passed as an argv element either way) but a usability one: a
+  selection nobody scanned can never connect and cannot be explained.
+- **Every refusal returns a reason that says what to DO.** The likeliest failure
+  here is a DJ tapping a speaker and nothing happening; "connect your phone
+  first" is the whole fix, and a dead button is a bug report.
+
+**The Admin endpoints stay ungated** — a coach can always take the speaker back,
+including when nobody is connected at all, which is the one state the presence
+rule cannot help with.
+
+**Two deliberate differences from the Admin screen:**
+
+- **The team list leads with audio-class devices and hides the rest behind a
+  toggle.** In Admin nothing is filtered, because hiding a speaker is the worse
+  failure there. Here the tradeoff flips: that list is every nearby device NAME,
+  and left visible to all 75 players it becomes a record of who was in the room.
+- **A scan is only shown for ten minutes** (`SCAN_VISIBLE_MS`). Long enough to
+  pick a speaker, short enough not to be a roster.
+
+Who last changed it is recorded in `settings.relay_speaker_set_by`. Not
+enforcement — anyone connected may do this by design — but so that "the music
+went to the wrong speaker" has an answer other than a shrug in a room where 75
+people can all reach the control.
+
+**The way in is the speaker icon in the Now Playing header.** It was already the
+only thing on that screen about the speaker, so it is where a DJ looks, and it
+keeps a control most people never touch out of the main flow without burying it
+in a menu nobody opens.
+
 ## Choosing the speaker from the Admin screen (2026-08-31) — BUILT, NOT YET ON HARDWARE
 
 The relay works; choosing what it relays to needed SSH, and on campus there is
