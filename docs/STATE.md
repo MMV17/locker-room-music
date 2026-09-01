@@ -1601,10 +1601,15 @@ enforcement — anyone connected may do this by design — but so that "the musi
 went to the wrong speaker" has an answer other than a shrug in a room where 75
 people can all reach the control.
 
-**The way in is the speaker icon in the Now Playing header.** It was already the
-only thing on that screen about the speaker, so it is where a DJ looks, and it
-keeps a control most people never touch out of the main flow without burying it
-in a menu nobody opens.
+**It lives on a Settings screen** (`/settings`), reached from the jersey button
+in the Now Playing header — already the "you" control. It was briefly on the
+speaker icon in that same header, which was discoverable but wrong: Now Playing
+is the screen you look at while music is on, and a control touched once a season
+does not belong in it. A settings page is also where somebody goes LOOKING for
+this, which a status icon that turns out to be a button is not.
+
+Settings also carries the two account actions that already existed as routes but
+had no home — claim your phone, and sign in as someone else.
 
 ## Choosing the speaker from the Admin screen (2026-08-31) — BUILT, NOT YET ON HARDWARE
 

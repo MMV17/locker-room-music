@@ -57,7 +57,7 @@ function outputLabel(s: SpeakerState): string {
   return s.output.kind;
 }
 
-export function SpeakerPicker({ onClose }: { onClose: () => void }) {
+export function SpeakerSection() {
   const [state, setState] = useState<SpeakerState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -148,21 +148,14 @@ export function SpeakerPicker({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Choose a speaker"
-    >
-      <div className="modal sp-modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="t-section" style={{ marginBottom: 4 }}>
-          Speaker
-        </h2>
-        <p className="t-sub" style={{ marginBottom: 14 }}>
-          Playing through: <strong>{state ? outputLabel(state) : "…"}</strong>
-          {state?.relay_error ? ` — ${state.relay_error}` : ""}
-        </p>
+    <section className="set-section">
+      <h2 className="t-section" style={{ marginBottom: 4 }}>
+        Speaker
+      </h2>
+      <p className="t-sub" style={{ marginBottom: 14 }}>
+        Playing through: <strong>{state ? outputLabel(state) : "…"}</strong>
+        {state?.relay_error ? ` — ${state.relay_error}` : ""}
+      </p>
 
         {error && <div className="banner is-bad">{error}</div>}
 
@@ -246,12 +239,6 @@ export function SpeakerPicker({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        <div className="modal-actions" style={{ marginTop: 16 }}>
-          <button className="btn" onClick={onClose}>
-            Done
-          </button>
-        </div>
-      </div>
-    </div>
+    </section>
   );
 }

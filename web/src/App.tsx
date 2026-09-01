@@ -11,6 +11,7 @@ import { DjBoard } from "./screens/DjBoard";
 import { History } from "./screens/History";
 import { Join } from "./screens/Join";
 import { NowPlaying } from "./screens/NowPlaying";
+import { Settings } from "./screens/Settings";
 import { SongBoard } from "./screens/SongBoard";
 
 export function App() {
@@ -56,6 +57,8 @@ export function App() {
         <History />
       ) : route === "/claim" ? (
         <Claim />
+      ) : route === "/settings" ? (
+        <Settings />
       ) : (
         <NowPlaying teamName={theme.team_name} />
       )}
