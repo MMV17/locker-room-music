@@ -134,14 +134,14 @@ if [ "$1" = "info" ]; then
     78:66:F3:1C:9D:B6)
       echo "Device 78:66:F3:1C:9D:B6 (public)"
       echo "	Name: JBL Charge 6"
-      echo "	Class: 0x00240414"
+      echo "	Class: 0x00240414 (2360340)"
       echo "	RSSI: -54"
       ;;
     AA:BB:CC:DD:EE:FF)
       echo "	Name: Someone's iPhone"
-      echo "	Class: 0x005a020c"
+      echo "	Class: 0x005a020c (5906956)"
       ;;
-    *) echo "	Class: 0x00000000" ;;
+    *) echo "	Class: 0x00000000 (0)" ;;
   esac
   exit 0
 fi
@@ -193,3 +193,28 @@ def test_a_device_that_advertises_no_name_parses_as_nameless(tmp_path):
     for these anyway. What matters is that the device is not dropped."""
     d = {x["mac"]: x for x in btscan.parse(run_script(tmp_path))}["11:22:33:44:55:66"]
     assert d["cod"] == 0
+
+
+def test_the_class_format_bluetoothctl_actually_prints():
+    """Measured on the box 2026-08-31, and NOT what this parser first assumed:
+
+        Class: 0x00240414 (2360340)
+
+    bluetoothctl prints hex AND decimal on one line. Reading the whole string
+    as a number fails, so every device came back with cod=None and nothing
+    sorted as audio — the picker still worked, but its one piece of ordering
+    was silently dead. Take the first token.
+    """
+    [d] = btscan.parse(f"{MAC}\t0x00240414 (2360340)\t-54\tJBL Charge 6")
+    assert d["cod"] == 0x240414
+    assert btscan.is_audio(d["cod"]) is True
+
+
+def test_a_parenthesised_decimal_alone_also_parses():
+    [d] = btscan.parse(f"{MAC}\t2360340 (0x240414)\t-40\tSpeaker")
+    assert d["cod"] == 2360340
+
+
+def test_an_rssi_with_a_trailing_unit_still_parses():
+    [d] = btscan.parse(f"{MAC}\t0\t-54 dBm\tSpeaker")
+    assert d["rssi"] == -54

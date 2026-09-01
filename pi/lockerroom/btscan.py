@@ -41,12 +41,20 @@ def is_audio(cod: int | None) -> bool:
 
 
 def _int_or_none(text: str) -> int | None:
-    """Accepts decimal and the 0x form bluetoothctl prints for Class."""
-    text = text.strip()
-    if not text:
+    """Accepts decimal and the 0x form, and ignores anything after the number.
+
+    Measured on the box 2026-08-31: bluetoothctl prints BOTH forms on one line,
+
+        Class: 0x00240414 (2360340)
+
+    so reading the whole field as a number returned None for every device and
+    quietly killed the audio-first sort. Take the first token and stop.
+    """
+    token = text.strip().split()[0] if text.strip() else ""
+    if not token:
         return None
     try:
-        return int(text, 16) if text.lower().startswith("0x") else int(text, 10)
+        return int(token, 16) if token.lower().startswith("0x") else int(token, 10)
     except ValueError:
         return None
 

@@ -51,8 +51,12 @@ while IFS= read -r mac; do
   # is still a device, and dropping it would hide the exact speaker somebody is
   # holding in front of the box.
   name="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*Name:[[:space:]]*//p' | head -1)"
-  class="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*Class:[[:space:]]*//p' | head -1)"
-  rssi="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*RSSI:[[:space:]]*//p' | head -1)"
+  # bluetoothctl prints "Class: 0x00240414 (2360340)" - hex AND decimal on one
+  # line. Measured on the box 2026-08-31; taking the whole field made every
+  # device unparseable and silently killed the audio-first sort. First token
+  # only. The parser defends against this too, because both is cheap.
+  class="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*Class:[[:space:]]*//p' | head -1 | awk '{print $1}')"
+  rssi="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*RSSI:[[:space:]]*//p' | head -1 | awk '{print $1}')"
 
   # Strip tabs so the field separator stays the field separator. The parser
   # also defends against this; both, because this is the cheap half.
