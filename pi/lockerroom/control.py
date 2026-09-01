@@ -26,10 +26,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
+
+from . import btscan, relaytarget
 
 if TYPE_CHECKING:  # pragma: no cover
     # Import for typing only. config.py needs tomllib (3.11+), and importing
@@ -42,30 +46,184 @@ log = logging.getLogger("lockerroom.control")
 
 # Fixed allowlist. Adding "run arbitrary command" here would turn a locker room
 # speaker into remote code execution - do not.
-ALLOWED: dict[str, list[str]] = {
-    "restart-listener": ["sudo", "systemctl", "restart", "lockerroom-listener"],
-    "reboot": ["sudo", "systemctl", "reboot"],
-    "report-status": ["/bin/sh", "-c", "uptime; systemctl is-active lockerroom-listener bluetooth bluealsa"],
+#
+# Each entry is (argv, timeout_seconds). The timeout is per command because a
+# Bluetooth sweep plus a per-device info call does not fit in the 25 seconds
+# that was plenty for `uptime`, and raising the limit for everything would mean
+# a hung restart tying up the channel for a minute.
+#
+# NOTHING HERE TAKES A PARAMETER, and that is the property to preserve. If a
+# feature seems to need one, it is state rather than an action: send it on the
+# beacon response and validate it on arrival, the way the relay speaker does.
+# See docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md.
+ALLOWED: dict[str, tuple[list[str], float]] = {
+    "restart-listener": (["sudo", "systemctl", "restart", "lockerroom-listener"], 25),
+    "reboot": (["sudo", "systemctl", "reboot"], 25),
+    "report-status": (
+        ["/bin/sh", "-c", "uptime; systemctl is-active lockerroom-listener bluetooth bluealsa"],
+        25,
+    ),
+    # 15s of discovery, then one `bluetoothctl info` per device found.
+    "scan-speakers": (["sudo", "/usr/local/bin/bt-scan.sh"], 45),
 }
 
-COMMAND_TIMEOUT_S = 25
+SCAN_COMMAND = "scan-speakers"
+
+# Where audio-route.sh records what it selected: "<kind>:<card>".
+OUTPUT_STATE_PATH = Path("/run/lockerroom/audio-out")
+
+# Beacon cadence. Idle is the resting rate; active is while a song is playing;
+# attentive is for the few minutes after a command, when somebody is standing
+# at the admin screen waiting for something to happen.
+IDLE_INTERVAL_S = 60.0
+ACTIVE_INTERVAL_S = 10.0
+ATTENTIVE_INTERVAL_S = 5.0
+ATTENTIVE_WINDOW_S = 180.0
 
 
 def _run(name: str) -> tuple[bool, str]:
-    argv = ALLOWED.get(name)
-    if argv is None:
+    entry = ALLOWED.get(name)
+    if entry is None:
         # Reached only if the server sent something not on this list.
         return False, f"refused: {name!r} is not an allowed command"
+    argv, timeout = entry
     try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S
-        )
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         output = (proc.stdout + proc.stderr).strip()
         return proc.returncode == 0, output or f"exit {proc.returncode}"
     except subprocess.TimeoutExpired:
-        return False, f"timed out after {COMMAND_TIMEOUT_S}s"
+        return False, f"timed out after {timeout}s"
     except Exception as exc:  # never let a command kill the beacon loop
         return False, f"{type(exc).__name__}: {exc}"
+
+
+def run_command(name: str) -> tuple[bool, str, list[dict] | None]:
+    """Run a command and, for a scan, turn its output into structured devices.
+
+    A scan's device list does NOT travel in the command result: that field is
+    truncated to 2000 characters server-side, and a locker room with thirty
+    phones in it overflows that. A truncated list is worse than none, because
+    the speaker you want goes missing for no visible reason. So the list goes
+    up as its own beacon payload, and the result keeps a one-line summary that
+    reads sensibly in the command history.
+    """
+    ok, output = _run(name)
+    if name != SCAN_COMMAND or not ok:
+        return ok, output, None
+
+    devices = btscan.parse(output)
+    n = len(devices)
+    return True, f"found {n} device{'' if n == 1 else 's'}", devices
+
+
+def may_scan(sessions) -> tuple[bool, str]:
+    """Whether now is a reasonable moment to occupy the radio.
+
+    Discovery shares the one antenna with both the phone's A2DP sink and the
+    outbound relay, so scanning mid-song stutters the room. Refused HERE rather
+    than on the server, because the play state lives here.
+
+    Fails OPEN when the state cannot be read: the cost of scanning during a
+    song is a stutter, and the cost of never scanning is a feature that does
+    not work. A broken read should not be the thing that decides.
+    """
+    if sessions is None:
+        return True, ""
+    try:
+        state = sessions.open_play_state()
+    except Exception:
+        log.exception("could not read play state before scanning; allowing the scan")
+        return True, ""
+    if state:
+        return False, "refused: a song is playing — scanning would stutter it"
+    return True, ""
+
+
+def read_output(path: Path = OUTPUT_STATE_PATH) -> dict | None:
+    """What audio-route.sh last selected, for the admin screen.
+
+    None means unknown, which is normal: the listener can beacon before the
+    arbiter has ever run. A relay card is a MAC and therefore full of colons,
+    so the split is on the FIRST one only.
+    """
+    try:
+        text = Path(path).read_text().strip()
+    except OSError:
+        return None
+    kind, sep, card = text.partition(":")
+    if not sep or not kind:
+        return None
+    return {"kind": kind, "card": card}
+
+
+def attentive_until(now: float | None = None) -> float:
+    """Open the attentive window. Called when a command is picked up."""
+    return (time.monotonic() if now is None else now) + ATTENTIVE_WINDOW_S
+
+
+def next_interval(
+    attentive_deadline: float | None, playing: bool, now: float | None = None
+) -> float:
+    """How long to wait before the next beacon.
+
+    Attentive outranks active: somebody standing at the admin screen holding a
+    speaker in pairing mode is waiting on a round trip, and a speaker's pairing
+    window is shorter than this beacon's idle interval.
+    """
+    now = time.monotonic() if now is None else now
+    if attentive_deadline is not None and now < attentive_deadline:
+        return ATTENTIVE_INTERVAL_S
+    return ACTIVE_INTERVAL_S if playing else IDLE_INTERVAL_S
+
+
+def should_report_now(pending: bool, beacon_ok: bool) -> bool:
+    """Whether to skip the wait and beacon straight away.
+
+    Only when the last beacon actually got through. A pending result on a FAILED
+    beacon means the network is down, and skipping the wait there would retry
+    with no delay at all — a tight loop against a dead link, on a box whose
+    entire job is to sit quietly through outages and come back.
+    """
+    return pending and beacon_ok
+
+
+async def apply_relay_speaker(
+    relay,
+    server_value: object,
+    cache_path: Path = relaytarget.CACHE_PATH,
+    configured: str | None = None,
+) -> None:
+    """Point the relay at whatever the server says, if it says anything.
+
+    The server is not trusted to be the only gate — the same stance the command
+    allowlist takes, and for the same reason: this value becomes an argv
+    element. Anything malformed is refused and the live target is left alone.
+
+    The decision is cached locally because the box has to come back up relaying
+    to the right speaker after a power cut, in a room where nobody is present
+    and the network may not return first.
+    """
+    if relay is None:
+        return
+
+    server = relaytarget.from_server(server_value)
+    if server is None:
+        return  # no opinion, including a value we refused
+
+    wanted = relaytarget.resolve(server, None, configured)
+    if wanted == relay.target:
+        # Still cache it: the server's opinion may be new even when the
+        # resulting target is not, and an uncached "off" would be undone by
+        # config.toml on the next boot.
+        relaytarget.write_cache(cache_path, server)
+        return
+
+    try:
+        await relay.set_target(wanted)
+    except Exception:
+        log.exception("could not point the relay at %s", wanted)
+        return
+    relaytarget.write_cache(cache_path, server)
 
 
 def play_signature(sessions) -> tuple | None:
@@ -129,8 +287,9 @@ def play_signature(sessions) -> tuple | None:
 async def beacon_loop(
     config: Config,
     sessions=None,
-    interval_s: float = 60.0,
-    active_interval_s: float = 10.0,
+    relay=None,
+    interval_s: float = IDLE_INTERVAL_S,
+    active_interval_s: float = ACTIVE_INTERVAL_S,
     watch_interval_s: float = 1.0,
 ) -> None:
     """
@@ -150,8 +309,21 @@ async def beacon_loop(
     This does NOT touch spec 8's 10-second floor on the now-playing poll. That
     rule is about per-player cost and multiplies by everyone in the room; this
     is one device, so its cost is fixed no matter how many people are voting.
+
+    ATTENTIVE MODE. After a command is picked up the loop polls every few
+    seconds for a few minutes, because somebody is standing at the admin screen
+    waiting on a round trip. Without it, choosing a speaker costs up to a full
+    idle interval before the Pi even hears about it and another before the
+    answer comes back — longer than a speaker stays in pairing mode.
+
+    The first press still waits out one idle interval, and nothing here can fix
+    that: no message can reach the Pi until it next checks in. The admin screen
+    solves it by ordering the instructions so the wait happens BEFORE the
+    speaker is put into pairing mode, not during it.
     """
     pending_result: dict | None = None
+    pending_scan: dict | None = None
+    attentive_deadline: float | None = None
 
     async with httpx.AsyncClient(
         base_url=config.api_base_url,
@@ -159,6 +331,7 @@ async def beacon_loop(
         timeout=15.0,
     ) as client:
         while True:
+            beacon_ok = False
             try:
                 payload = {
                     "speaker_name": config.speaker_name,
@@ -183,25 +356,71 @@ async def beacon_loop(
                         log.exception("could not read aux state")
                 if pending_result is not None:
                     payload["result"] = pending_result
+                if pending_scan is not None:
+                    payload["scan"] = pending_scan
+                # What the audio arbiter actually selected, so the admin screen
+                # can show USB / jack / relay rather than guessing from config.
+                output = read_output()
+                if output is not None:
+                    payload["output"] = output
+                if relay is not None:
+                    # Whether the chosen speaker is actually playing, and why
+                    # not when it is not. A selection that stores fine and then
+                    # fails to connect is the likeliest thing to happen in a
+                    # locker room, and the screen has to be able to say so.
+                    payload["relay"] = {
+                        "mac": relay.target,
+                        "connected": relay.connected,
+                        "last_error": relay.last_error,
+                    }
 
                 resp = await client.post("/api/pi/beacon", json=payload)
 
                 if resp.status_code == 200:
-                    # Only clear the result once the server has actually taken
-                    # it, so a failed beacon does not lose the outcome.
+                    beacon_ok = True
+                    # Only clear these once the server has actually taken them,
+                    # so a failed beacon does not lose the outcome.
                     pending_result = None
-                    command = (resp.json() or {}).get("command")
+                    pending_scan = None
+                    body = resp.json() or {}
+
+                    # The chosen speaker rides the response as state, not as a
+                    # parameterised command. See the module docstring and the
+                    # speaker selection design for why that distinction is
+                    # load-bearing.
+                    await apply_relay_speaker(
+                        relay,
+                        body.get("relay_speaker"),
+                        configured=config.relay_speaker_mac,
+                    )
+
+                    command = body.get("command")
                     if command:
                         name = command.get("name", "")
                         log.info("command received: %s (%s)", name, command.get("id"))
-                        # reboot never gets to report back; say so before acting.
-                        ok, output = await asyncio.to_thread(_run, name)
-                        log.info("command %s -> ok=%s %s", name, ok, output[:200])
+                        # Somebody is at the admin screen. Pay attention for a
+                        # while, so the next round trip is seconds not minutes.
+                        attentive_deadline = attentive_until()
+
+                        allowed, why = (
+                            may_scan(sessions) if name == SCAN_COMMAND else (True, "")
+                        )
+                        if not allowed:
+                            ok, out, devices = False, why, None
+                        else:
+                            # reboot never gets to report back.
+                            ok, out, devices = await asyncio.to_thread(run_command, name)
+                        log.info("command %s -> ok=%s %s", name, ok, out[:200])
                         pending_result = {
                             "id": command.get("id"),
                             "ok": ok,
-                            "output": output[:2000],
+                            "output": out[:2000],
                         }
+                        if devices is not None:
+                            pending_scan = {
+                                "at": datetime.now(timezone.utc).isoformat(),
+                                "devices": devices,
+                            }
                 else:
                     log.warning("beacon rejected: http %d", resp.status_code)
 
@@ -212,9 +431,22 @@ async def beacon_loop(
             except Exception:
                 log.exception("beacon loop failed unexpectedly")
 
+            # Something to say, so say it now rather than sleeping on it. This
+            # is half the latency of a command: the result used to wait out a
+            # full cycle before being reported.
+            if should_report_now(
+                pending=pending_result is not None or pending_scan is not None,
+                beacon_ok=beacon_ok,
+            ):
+                continue
+
             # Wait, but wake early if what the site shows has changed.
             before = play_signature(sessions)
-            delay = active_interval_s if before is not None else interval_s
+            if attentive_deadline is not None and time.monotonic() < attentive_deadline:
+                delay = ATTENTIVE_INTERVAL_S
+            else:
+                attentive_deadline = None
+                delay = active_interval_s if before is not None else interval_s
             waited = 0.0
             while waited < delay:
                 await asyncio.sleep(min(watch_interval_s, delay - waited))
