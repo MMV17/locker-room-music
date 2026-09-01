@@ -159,8 +159,50 @@ systemctl is-active lockerroom-btwatch
 # because nobody can tell silence from health by looking at the units.
 echo "== audio out: verify =="
 AUDIO_OK=1
+SELECTED_KIND="$(cut -d: -f1 /run/lockerroom/audio-out 2>/dev/null | head -1 || true)"
+
+# RELAY MODE IS VERIFIED DIFFERENTLY, and this branch exists because the check
+# below got it spectacularly wrong: the "card" when relaying is a MAC, no ALSA
+# card matches it, and a correctly relaying box was told "THIS BOX WILL BE
+# SILENT" on 2026-08-31. That is the exact lie the comment above warns about,
+# on the one check that exists because nobody can tell silence from health by
+# looking at the units.
+#
+# There is no tone to play here: the audio leaves over Bluetooth, so the ALSA
+# default is NOT the path. What can be checked is that all four parts agree.
+if [ "$SELECTED_KIND" = "relay" ]; then
+  RELAY_MAC="$(cut -d: -f2- /run/lockerroom/audio-out 2>/dev/null | head -1 || true)"
+  echo "   routed to: relay -> $RELAY_MAC"
+  RELAY_OK=1
+  [ -s /run/lockerroom/relay-target ] || { echo "   ERROR: relay-target is missing"; RELAY_OK=0; }
+  if ! grep -q "DEV=$RELAY_MAC" /run/lockerroom/output.env 2>/dev/null; then
+    echo "   ERROR: output.env does not name $RELAY_MAC — the player is on the wrong device"
+    RELAY_OK=0
+  fi
+  if ! bluetoothctl info "$RELAY_MAC" 2>/dev/null | grep -q "Connected: yes"; then
+    echo "   ERROR: $RELAY_MAC is not connected"
+    RELAY_OK=0
+  fi
+  if ! systemctl is-active --quiet bluealsa-aplay; then
+    echo "   ERROR: bluealsa-aplay is not running"
+    RELAY_OK=0
+  fi
+  if [ "$RELAY_OK" = "1" ]; then
+    echo "   VERIFIED: connected, output.env points at it, player is up"
+    echo "   NOTE: no tone was played. Audio leaves over Bluetooth, so the ALSA"
+    echo "         default is not the path — only a real song proves this end to end."
+  else
+    AUDIO_OK=0
+  fi
+  SELECTED_CARD=""
+  SKIP_CARD_CHECK=1
+fi
+
 # What audio-route.sh actually chose. Falls back to finding the analog card
 # directly, so a box that has not had a routing deploy yet still verifies.
+if [ "${SKIP_CARD_CHECK:-0}" = "1" ]; then
+  SELECTED_CARD=""
+else
 SELECTED_CARD="$(sed -n 's/^[a-z]*://p' /run/lockerroom/audio-out 2>/dev/null | head -1 || true)"
 if [ -n "$SELECTED_CARD" ]; then
   echo "   routed to: $(cat /run/lockerroom/audio-out)"
@@ -172,7 +214,10 @@ ANALOG_IDX=""
 if [ -n "$SELECTED_CARD" ]; then
   ANALOG_IDX="$(sed -n "s/^ *\([0-9]*\) \[$SELECTED_CARD *\].*/\1/p" /proc/asound/cards 2>/dev/null | head -1 || true)"
 fi
-if [ -z "$SELECTED_CARD" ] || [ -z "$ANALOG_IDX" ]; then
+fi
+if [ "${SKIP_CARD_CHECK:-0}" = "1" ]; then
+  :
+elif [ -z "$SELECTED_CARD" ] || [ -z "$ANALOG_IDX" ]; then
   echo "   WARNING: no usable output card present — cannot verify."
   AUDIO_OK=0
 elif ! command -v aplay >/dev/null 2>&1; then
