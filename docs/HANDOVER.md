@@ -13,13 +13,13 @@ it is the canonical record and is current as of 2026-08-31, including its
 and playing music. Both Workers, D1 and the voting site are healthy. The
 2026-08-31 session added automatic audio output routing and a Bluetooth relay.
 
-## Committed and pushed — 2026-08-31
+## Committed and pushed — 2026-09-01
 
-The **aux handover countdown** feature, which for a week existed only in this
-working tree while running in production, is committed and on GitHub. Branch
-`audio-output-routing`, 21 commits, HEAD `e2c101b`, working tree clean, local
-and remote in sync. Its spec is
-`docs/superpowers/specs/2026-08-23-aux-handover-countdown-design.md`.
+Branch `audio-output-routing`, **37 commits, HEAD `fe8abfd`**, working tree
+clean, local and remote in sync. Nothing is stranded on this laptop.
+
+Everything below is deployed and live: migration 005 on prod D1, the Worker, and
+the Pi. Speaker selection works from the team app.
 
 Pushing on campus needs the 443 endpoint —
 `ssh://git@ssh.github.com:443/MMV17/locker-room-music.git` — which is already
@@ -27,39 +27,36 @@ set as `origin`. Port 22 is blocked.
 
 ## Unfinished work, roughly in priority order
 
-1. **Plan 2: the speaker scan-and-select admin UI.** Designed but not planned or
-   built. Today the relay speaker is set by a config key on the Pi, which needs
-   SSH to change. The intended flow: put the speaker in pairing mode, see
-   discoverable devices in the Admin screen, pick one, AuxGoat connects.
-   It must ride the existing outbound-443 `pi_commands` channel, because campus
-   blocks all inbound access to the Pi. Note this needs the **first
-   parameterised command** in a system deliberately built with none — every
-   existing command (`restart-listener`, `reboot`, `report-status`) maps to a
-   fixed argv. A MAC must be strictly validated on BOTH server and Pi and passed
-   as an argv element, never interpolated. See
-   `docs/superpowers/specs/2026-08-31-bluetooth-relay-output-design.md`.
-2. **Relay longevity is unproven.** It has only run for minutes. On 2026-08-23 a
-   relay test wedged the Bluetooth controller "shortly after" starting.
-   `lockerroom-btwatch` now recovers that automatically, but a long session has
-   not been run.
-3. **Artwork: negative responses are cached for 24h.** Both providers fetch with
+1. **The Settings screen has never been opened on a phone.** Built and deployed
+   2026-09-01, verified only by tsc and a build. Speaker selection lives at
+   `/settings`, reached from the jersey button in the Now Playing header.
+2. **The presence gate's ALLOW path is unverified end to end.** All three
+   `/api/speakers*` endpoints were confirmed to 401 anonymous callers, but the
+   permitted path was deliberately not tested from a browser — creating a
+   session would have added a fake player to the roster. Mack's phone is
+   claimed and was the aux holder, so it should pass; nobody has watched it.
+3. **Two hardware steps still unrun:** reboot the box and confirm it reconnects
+   to the same speaker unattended, and a long relay session for longevity. A
+   2026-08-23 relay test wedged the Bluetooth controller "shortly after"
+   starting; `lockerroom-btwatch` recovers that automatically now, but no long
+   session has been run.
+4. **Artwork: negative responses are cached for 24h.** Both providers fetch with
    `cf: { cacheTtl: 86400, cacheEverything: true }`, which caches failures too,
    so a transient failure sticks for a day and the admin retry cannot clear it.
    Fix is two lines in `backend/src/artwork.ts`:
    `cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": 86400, "400-599": 0 } }`.
-   Low priority — 66 of 73 tracks have artwork and the one real failure heals
-   itself. Fold it into the next Worker deploy rather than deploying specially.
-4. **No artwork-retry button in the Admin screen.** `POST /api/admin/artwork/retry`
+   Fold it into the next Worker deploy rather than deploying specially.
+5. **No artwork-retry button in the Admin screen.** `POST /api/admin/artwork/retry`
    exists and is documented as the corrective tool, but nothing in the UI calls
    it, so it is only reachable with curl and `X-Admin-Password`.
-5. **Junk AVRCP metadata is reaching the play data.** Two tracks recorded
+6. **Junk AVRCP metadata is reaching the play data.** Two tracks recorded
    `"Listening on MacBook Pro"` as the artist and one recorded `adsmoloco.com`
    as a title. Consider filtering at ingest.
-6. **Deferred: report the selected audio output in the heartbeat**, so the admin
-   screen shows whether the box is on USB, the jack, or the relay. The hook
-   already exists at `/run/lockerroom/audio-out`.
 7. **Anti-bypass is verified only on the JBL Charge 6.** It is a per-speaker
    property; re-test on any other speaker before relying on it.
+8. **No Forget button for paired speakers.** Deliberately out of scope — they
+   accumulate, which is cheap, and forgetting one costs the one-tap return.
+   Add it when the list actually gets annoying, which may be never.
 
 ## Gotchas that cost real time on this project
 
