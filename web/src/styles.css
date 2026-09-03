@@ -12,7 +12,12 @@
   --surface: #ffffff;
   --ink: #14171c;
   --ink-2: #4a515c;
-  --muted: #8a93a0;
+  /* Darkened from #8a93a0, which was 2.72:1 on --page and 3.11:1 on white —
+     under the 4.5:1 AA floor on both, and this token colours every piece of
+     secondary text in the product: artist names, timestamps, field labels,
+     inactive tabs. Same hue, dark enough to clear: 4.60:1 on --page,
+     5.26:1 on white. */
+  --muted: #666d76;
   --hairline: #e4e8ee;
 
   /* Set at boot from GET /api/theme. The defaults here are the same neutral
@@ -25,10 +30,23 @@
   /* Fixed and deliberately independent of --team. If the school colour
      happens to be red, the down vote is still red — semantic colour outranks
      brand colour on the one control this product exists for. */
-  --up: #16a34a;
-  --up-soft: rgba(22, 163, 74, 0.1);
+  --up: #12883e;
+  --up-soft: rgba(18, 136, 62, 0.1);
   --down: #dc2626;
   --down-soft: rgba(220, 38, 38, 0.1);
+
+  /* For these two colours AS TEXT ON THEIR OWN SOFT TINT — the .tally pills
+     and the .banner strips. That pairing is much harder than it looks: a
+     colour on a 10% wash of itself has very little room, and BOTH failed.
+     The old green managed 2.95:1 and even the corrected --up above only
+     reaches 4.00:1; the red, which passes everywhere else, is 4.14:1 there.
+     So the fill and the text on the fill cannot be the same value.
+
+     Same trick --team-ink already plays for the school colour, and for the
+     same reason. Do not use these as fills — --up and --down are the fills,
+     and white on those clears 4.5:1 for the pressed vote buttons. */
+  --up-ink: #117d39; /* 4.57:1 on --up-soft */
+  --down-ink: #cb2323; /* 4.74:1 on --down-soft */
 
   --r-card: 28px;
   --r-art: 24px;
@@ -80,10 +98,23 @@ input {
 
 /* ------------------------------------------------------------------ *
  * Type
+ *
+ * THE SCALE IS 12 / 14 / 16 / 20 / 25 / 31, plus 64 for the reveal score.
+ * Seven steps on a 1.25 ratio. Nothing else. If a new element seems to need
+ * a size that is not on this list, it wants an existing step and a different
+ * weight or colour instead.
+ *
+ * This is a rule because the file previously held FIFTEEN sizes — 10, 11, 12,
+ * 13, 14, 15, 16, 17, 19, 20, 21, 24, 26, 34, 64. Each was defensible alone.
+ * Together they were the problem: with 13, 14, 15, 16 and 17 all in play, a
+ * size change stops reading as a change in rank and starts reading as
+ * sloppiness, which is most of what made the app feel unfinished. A scale is
+ * only worth anything while it is complete, so adding one more off-scale size
+ * costs more than it looks like it does.
  * ------------------------------------------------------------------ */
 
 .t-display {
-  font-size: 34px;
+  font-size: 31px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
@@ -91,7 +122,7 @@ input {
 }
 
 .t-title {
-  font-size: 26px;
+  font-size: 25px;
   font-weight: 700;
   letter-spacing: -0.015em;
   line-height: 1.2;
@@ -106,7 +137,7 @@ input {
 }
 
 .t-sub {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 400;
   color: var(--muted);
   margin: 0;
@@ -114,7 +145,7 @@ input {
 
 /* The reference's letterspaced "SONGS" device, reused for every small label. */
 .t-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -137,6 +168,20 @@ input {
 
 /* ------------------------------------------------------------------ *
  * Layout
+ *
+ * SPACING IS ON A 4px GRID: 4 / 8 / 12 / 16 / 20 / 24 / 32 / 40 / 48 / 56.
+ * Every padding, margin and gap in this file is one of those. The file used
+ * to hold twenty different values including 2, 3, 5, 7, 13, 15, 22 and 26px,
+ * which is no rhythm at all.
+ *
+ * Radii: 8 / 12 / 16 / 24 / 28, or 999 for a pill. The 2px ones are on 4px
+ * bars where the radius is just half the height.
+ *
+ * Exempt, deliberately: anything inside a calc(), and fixed element
+ * dimensions — icon boxes, the 96px vote targets, the 46px thumbnails. Those
+ * are sized against the thing they contain or against a touch target, not
+ * against the page's rhythm, and rounding them to the grid would break what
+ * they are measured from.
  * ------------------------------------------------------------------ */
 
 .app {
@@ -158,7 +203,7 @@ input {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .stack {
@@ -176,9 +221,9 @@ input {
 
 .tabs {
   display: flex;
-  gap: 22px;
+  gap: 24px;
   border-bottom: 1px solid var(--hairline);
-  margin-bottom: 22px;
+  margin-bottom: 24px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -190,7 +235,7 @@ input {
 .tab {
   position: relative;
   padding: 0 0 12px;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 500;
   color: var(--muted);
   white-space: nowrap;
@@ -235,22 +280,22 @@ input {
 .goat {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   background: var(--surface);
   border-radius: var(--r-card);
   box-shadow: var(--shadow);
-  padding: 18px 20px;
+  padding: 20px 20px;
   margin-bottom: 20px;
 }
 
 .goat.is-tied {
   /* Nobody to put a number to, so the badge would be an empty hole. */
-  padding-left: 22px;
+  padding-left: 24px;
 }
 
 .goat-line {
   margin: 0;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 400;
   line-height: 1.3;
   color: var(--ink-2);
@@ -268,8 +313,8 @@ input {
 }
 
 .goat-sub {
-  font-size: 13px;
-  margin-top: 3px;
+  font-size: 14px;
+  margin-top: 4px;
 }
 
 .rows {
@@ -282,7 +327,7 @@ input {
 .row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--hairline);
   text-align: left;
@@ -324,7 +369,7 @@ input {
 .row-title {
   display: block;
   max-width: 100%;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.3;
   overflow: hidden;
@@ -335,7 +380,7 @@ input {
 .row-sub {
   display: block;
   max-width: 100%;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.35;
   color: var(--muted);
   overflow: hidden;
@@ -345,7 +390,7 @@ input {
 
 .row-score {
   flex: none;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -380,8 +425,8 @@ input {
 .jersey.is-sm {
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  font-size: 13px;
+  border-radius: 8px;
+  font-size: 14px;
 }
 
 /* ------------------------------------------------------------------ *
@@ -395,7 +440,7 @@ input {
   text-align: center;
   /* Tightened from 18px. Six gaps stack up on this screen, and the thumbs
      were landing under the tab bar. See .np-art. */
-  gap: 13px;
+  gap: 12px;
 }
 
 /* Three columns, not space-between. space-between only centres its middle
@@ -450,14 +495,14 @@ input {
  * ------------------------------------------------------------------ */
 
 .set {
-  padding-bottom: 90px; /* clear of the nav bar */
+  padding-bottom: 88px; /* clear of the nav bar */
 }
 
 .set-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 18px;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 
 .set-head h1 {
@@ -465,7 +510,7 @@ input {
 }
 
 .set-section {
-  margin-bottom: 28px;
+  margin-bottom: 32px;
 }
 
 .np-speaker svg {
@@ -498,10 +543,16 @@ input {
 
    Below roughly 600px of height it does scroll again, and that is the right
    answer — there is no honest way to fit artwork, three lines of metadata, a
-   DJ chip, a progress bar, a status line and two 84px targets into less. */
+   DJ chip, a progress bar, a status line and two 84px targets into less.
+
+   The 58px above is stale: measured again at 375x667 on 2026-09-02 it is 29px,
+   and it was 30px before the type scale and spacing grid landed. The screen
+   has gained a status line and a countdown since that number was written. It
+   is recorded here because it is the real headroom — anything added to this
+   screen now costs almost exactly what it is worth. */
 @media (max-height: 700px) {
   .np {
-    gap: 10px;
+    gap: 8px;
   }
 
   .np-art {
@@ -509,7 +560,7 @@ input {
   }
 
   .t-title {
-    font-size: 21px;
+    font-size: 20px;
   }
 
   .t-sub {
@@ -518,11 +569,11 @@ input {
 
   .np-album {
     font-size: 12px;
-    margin-top: 2px;
+    margin-top: 4px;
   }
 
   .dj-chip {
-    padding: 5px 12px 5px 5px;
+    padding: 4px 12px 4px 4px;
   }
 
   .vote {
@@ -538,7 +589,7 @@ input {
   /* Half the separation rather than none — a short screen still needs the
      break between reading and acting, it just cannot afford all of it. */
   .votes {
-    padding: 6px 0 0;
+    padding: 8px 0 0;
   }
 }
 
@@ -547,7 +598,7 @@ input {
 }
 
 .np-album {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   margin-top: 4px;
 }
@@ -557,8 +608,8 @@ input {
 .dj-chip {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 14px 7px 7px;
+  gap: 8px;
+  padding: 8px 16px 8px 8px;
   background: var(--surface);
   border-radius: 999px;
   box-shadow: var(--shadow);
@@ -567,7 +618,7 @@ input {
 
 .dj-chip-name {
   display: block;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.25;
   overflow: hidden;
@@ -580,7 +631,7 @@ input {
    page ("HOLY CROSS", "TEAM CODE") — it should register as a caption and let
    the name carry the weight. */
 .dj-chip-label {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -624,7 +675,7 @@ input {
 }
 
 .np-time {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -636,7 +687,7 @@ input {
 
 .votes {
   display: flex;
-  gap: 22px;
+  gap: 24px;
   justify-content: center;
   /* Breathing room above the thumbs, on purpose. They are the only controls
      on the screen and everything above them is information — the gap is what
@@ -694,15 +745,15 @@ input {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
   min-height: 18px;
 }
 
 .vw-state {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   line-height: 1;
 }
 
@@ -746,14 +797,16 @@ input {
   background: var(--hairline);
 }
 
-/* Flex, not inline text. The label is 11px and the clock 12px, and left as
-   inline spans their baselines sat a pixel apart — which is exactly the kind
-   of misalignment that reads as broken rather than as styling. Matching
-   line-height on both children is what actually holds them level. */
+/* Flex, not inline text. The label and the clock were 11px and 12px, and left
+   as inline spans their baselines sat a pixel apart — exactly the kind of
+   misalignment that reads as broken rather than as styling. Both are 12px now
+   that the type scale has no 11, so that specific pixel is gone, but the
+   matching line-height stays: it is what actually holds them level, and it
+   should not depend on two sizes happening to agree. */
 .vw-time {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   color: var(--muted);
   line-height: 1;
 }
@@ -786,7 +839,7 @@ input {
 }
 
 .vote-locked {
-  padding: 26px 0 10px;
+  padding: 24px 0 8px;
 }
 
 /* ------------------------------------------------------------------ *
@@ -797,10 +850,10 @@ input {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(14px + var(--safe-b));
+  bottom: calc(16px + var(--safe-b));
   z-index: 20;
   display: flex;
-  gap: 6px;
+  gap: 8px;
   padding: 8px;
   background: var(--surface);
   border-radius: 999px;
@@ -839,7 +892,7 @@ input {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
+  gap: 20px;
   padding: 24px;
   text-align: center;
   animation: reveal-in 260ms ease-out both;
@@ -878,7 +931,7 @@ input {
 
 .reveal-split {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: center;
 }
 
@@ -886,9 +939,9 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 18px;
+  padding: 8px 20px;
   border-radius: 999px;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -900,12 +953,12 @@ input {
 
 .tally.is-up {
   background: var(--up-soft);
-  color: var(--up);
+  color: var(--up-ink);
 }
 
 .tally.is-down {
   background: var(--down-soft);
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 /* ------------------------------------------------------------------ *
@@ -918,7 +971,7 @@ input {
   justify-content: center;
   gap: 8px;
   min-height: 52px;
-  padding: 0 22px;
+  padding: 0 24px;
   border-radius: 999px;
   font-size: 16px;
   font-weight: 600;
@@ -983,14 +1036,14 @@ input {
 .field {
   display: block;
   width: 100%;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .input {
   width: 100%;
   /* 16px minimum: iOS zooms any smaller input on focus and never zooms back. */
   font-size: 16px;
-  padding: 15px 16px;
+  padding: 16px 16px;
   border-radius: 16px;
   border: 1px solid var(--hairline);
   background: var(--surface);
@@ -1005,7 +1058,7 @@ input {
 
 .input.is-code {
   text-align: center;
-  font-size: 24px;
+  font-size: 25px;
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -1022,10 +1075,10 @@ input {
 }
 
 .empty-title {
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--ink);
-  margin: 0 0 6px;
+  margin: 0 0 8px;
 }
 
 .dot {
@@ -1043,7 +1096,7 @@ input {
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 
 .banner {
@@ -1051,17 +1104,17 @@ input {
   border-radius: 16px;
   font-size: 14px;
   font-weight: 500;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .banner.is-bad {
   background: var(--down-soft);
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .banner.is-ok {
   background: var(--up-soft);
-  color: var(--up);
+  color: var(--up-ink);
 }
 
 /* "You're waiting for the aux." Deliberately neutral rather than red or
@@ -1069,9 +1122,10 @@ input {
    ahead of you. Red would read as an error the player caused. */
 .banner.is-info {
   background: var(--hairline);
-  /* --ink-2, not --muted: muted on this background is about 2.3:1, which is
-     unreadable for a line whose whole job is explaining why nothing happened.
-     ink-2 clears 6.5:1 on the same fill. */
+  /* --ink-2, not --muted. Originally because muted was 2.3:1 on this fill;
+     muted has since been darkened and would now pass, but ink-2 is still
+     right — this line explains why nothing happened and should read as
+     primary text, not as a caption. */
   color: var(--ink-2);
 }
 
@@ -1082,7 +1136,7 @@ input {
   border: 2.5px solid var(--hairline);
   border-top-color: var(--muted);
   animation: spin 700ms linear infinite;
-  margin: 60px auto;
+  margin: 64px auto;
 }
 
 @keyframes spin {
@@ -1130,12 +1184,12 @@ input {
   background: var(--surface);
   border-radius: var(--r-card);
   box-shadow: var(--shadow-lift);
-  padding: 22px;
+  padding: 24px;
 }
 
 .modal-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 .modal-actions .btn {
