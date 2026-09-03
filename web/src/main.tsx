@@ -4,7 +4,6 @@ import "@fontsource-variable/outfit";
 import "./styles.css";
 import { App } from "./App";
 import { applyTheme, cachedTheme } from "./theme";
-import { applyBackground } from "./background";
 import { watchForStaleBuild } from "./staleBuild";
 import { captureHandoff } from "./handoff";
 
@@ -16,11 +15,6 @@ captureHandoff();
 // Paint in team colours on the very first frame. The network copy lands a
 // moment later in App and overwrites this if the admin has changed it.
 applyTheme(cachedTheme());
-
-// Same reasoning, and the reason this is not a React effect: a background that
-// fades in after the cards have landed reads as a bug rather than a backdrop.
-// Purely local — it asks the network for nothing.
-applyBackground();
 
 // A tab left open across a deploy is running a bundle the server no longer
 // has, and unknown asset paths come back as index.html with a 200 — so it

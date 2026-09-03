@@ -60,13 +60,11 @@ grep its output for success rather than reading it.
    starting; `lockerroom-btwatch` recovers that automatically now, but no long
    session has been run. **This is the only speaker-selection work left** —
    everything else about the feature has now been seen working.
-2. **The page has a background picture**, set by one constant,
-   `BACKGROUND_IMAGE`, at the top of `web/src/background.ts`. It takes a
-   `/bg/<name>.jpg` path or a full https address. `BACKGROUND_STRENGTH` next to
-   it is the opacity and has to be re-judged whenever the picture changes — the
-   current one is near-white so it sits at 0.85, where a photograph of a room
-   would wash out the type well below 0.4. Downscale anything before adding it;
-   `web/public/bg/CREDITS.md` has the one-liner and the reason.
+2. **The UI is up for a redesign.** 2026-09-02: a background picture was
+   tried and removed — the reaction was that the app "feels cheap", which a
+   backdrop does not fix. Nothing has been decided about what replaces it. The
+   background work is in the history if it is ever wanted back (`683e136` and
+   its three parents), but it is fully out of the tree, not switched off.
 3. **Artwork: negative responses are cached for 24h.** Both providers fetch with
    `cf: { cacheTtl: 86400, cacheEverything: true }`, which caches failures too,
    so a transient failure sticks for a day and the admin retry cannot clear it.
