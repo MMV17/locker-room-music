@@ -60,11 +60,11 @@ grep its output for success rather than reading it.
    starting; `lockerroom-btwatch` recovers that automatically now, but no long
    session has been run. **This is the only speaker-selection work left** —
    everything else about the feature has now been seen working.
-2. **The page background is built but switched off.** `DEFAULT_ID = "none"` in
-   `web/src/background.ts`. Four candidates ship; pick one on a phone with
-   `?bg=gym|arena|court|game` (`?bg=none` to stop), then set the default. The
-   four are CC BY-SA and `web/public/bg/CREDITS.md` is the required credit —
-   swap in Unsplash before settling on one and that obligation goes away.
+2. **The background photo is a placeholder.** It is on and set in
+   `web/src/background.ts` — one constant, `BACKGROUND_IMAGE`, which takes
+   either `/bg/<name>.jpg` or a full https address. Three other files are in
+   `web/public/bg/` to try. All four are CC BY-SA, so `web/public/bg/CREDITS.md`
+   has to stay reachable; swapping in an Unsplash photo drops that obligation.
 3. **Artwork: negative responses are cached for 24h.** Both providers fetch with
    `cf: { cacheTtl: 86400, cacheEverything: true }`, which caches failures too,
    so a transient failure sticks for a day and the admin retry cannot clear it.
