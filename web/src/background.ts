@@ -12,17 +12,22 @@ export const BACKGROUND_IMAGE = "/bg/opt1.jpg";
 /**
  * How much of it shows through, 0 to 1.
  *
- * The right value depends entirely on the picture. A near-white, low-contrast
- * one like the current abstract can sit high, because there is nothing in it
- * dark enough to interfere with the type. A photograph of an actual room
- * cannot: its dark areas start competing with the text laid over them, and
- * past roughly 0.35 it also lifts the white cards off the page and the album
- * artwork stops being the brightest thing on screen, which is the one thing
- * this app exists to show.
+ * The right value depends entirely on the picture, so change the picture and
+ * re-judge this number. Two things bound it.
  *
- * Change the picture, re-judge this number.
+ * Upward: a picture with anything dark in it starts competing with the text
+ * laid over it, and past roughly 0.35 it lifts the white cards off the page
+ * and the album artwork stops being the brightest thing on screen, which is
+ * the one thing this app exists to show. The current abstract is near-white
+ * and low-contrast, so it is not what holds this value down.
+ *
+ * Downward: below about 0.15 it stops reading as a deliberate texture and
+ * starts looking like a gradient that rendered wrong.
+ *
+ * 0.28 was picked by eye against the song list at phone width: the curves are
+ * present at the edges and quiet everywhere the content sits.
  */
-export const BACKGROUND_STRENGTH = 0.85;
+export const BACKGROUND_STRENGTH = 0.28;
 
 /* ------------------------------------------------------------------ *
  * Below here is just plumbing.
