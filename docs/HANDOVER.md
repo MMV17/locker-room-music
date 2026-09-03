@@ -60,11 +60,13 @@ grep its output for success rather than reading it.
    starting; `lockerroom-btwatch` recovers that automatically now, but no long
    session has been run. **This is the only speaker-selection work left** —
    everything else about the feature has now been seen working.
-2. **The background photo is a placeholder.** It is on and set in
-   `web/src/background.ts` — one constant, `BACKGROUND_IMAGE`, which takes
-   either `/bg/<name>.jpg` or a full https address. Three other files are in
-   `web/public/bg/` to try. All four are CC BY-SA, so `web/public/bg/CREDITS.md`
-   has to stay reachable; swapping in an Unsplash photo drops that obligation.
+2. **The page has a background picture**, set by one constant,
+   `BACKGROUND_IMAGE`, at the top of `web/src/background.ts`. It takes a
+   `/bg/<name>.jpg` path or a full https address. `BACKGROUND_STRENGTH` next to
+   it is the opacity and has to be re-judged whenever the picture changes — the
+   current one is near-white so it sits at 0.85, where a photograph of a room
+   would wash out the type well below 0.4. Downscale anything before adding it;
+   `web/public/bg/CREDITS.md` has the one-liner and the reason.
 3. **Artwork: negative responses are cached for 24h.** Both providers fetch with
    `cf: { cacheTtl: 86400, cacheEverything: true }`, which caches failures too,
    so a transient failure sticks for a day and the admin retry cannot clear it.

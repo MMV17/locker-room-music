@@ -1,40 +1,32 @@
-# Background photos — credits and how to swap one in
+# Background pictures
 
 **To change the background, edit `web/src/background.ts`** — one constant at the
 top of the file. This directory just holds the images.
 
-## Cutting a replacement
+## Preparing one
 
-macOS only, no dependencies. These files are already blurred, because blurring
-in CSS instead makes the browser recompute a viewport-sized blur and stutter
-while scrolling on an older phone.
-
-`sips` has no blur, so the blur comes from throwing the detail away and
-enlarging what is left — the resampler does the smoothing. The intermediate
-width *is* the blur radius: smaller is blurrier, and 110 is what these were cut
-at.
+Downscale it. A photo straight off a stock site is commonly 1–5 MB, and this is
+the first thing a phone on cellular has to fetch. 1100px wide is plenty at the
+size it renders and lands around 140 KB:
 
 ```sh
-sips -Z 110 whatever-you-downloaded.jpg --out /tmp/_t.jpg
-sips -Z 1000 -s format jpeg -s formatOptions 42 /tmp/_t.jpg --out web/public/bg/mine.jpg
+sips --resampleWidth 1100 -s format jpeg -s formatOptions 82 ~/Downloads/yours.jpg \
+     --out web/public/bg/yours.jpg
 ```
 
-Expect 30–50 KB. Much larger means the blur pass did not happen — check the
-intermediate file, not the quality setting. Then point `BACKGROUND_IMAGE` at
-`/bg/mine.jpg`.
+Use `--resampleWidth`, not `-Z`. `-Z` caps the *longest* side, so a portrait
+picture comes out far narrower than intended and looks soft once
+`background-size: cover` scales it up.
 
-## Credits
+Keep quality at 82. Backgrounds tend to be smooth gradients, which is exactly
+where JPEG banding shows, and dropping to 60 saves only about 30 KB.
 
-These four are placeholders. They are Creative Commons off Wikimedia Commons,
-which means using one on a public site requires the credit below to stay
-reachable. **Unsplash needs no attribution and no share-alike** — if you replace
-these with an Unsplash photo, this whole section can go.
+Then point `BACKGROUND_IMAGE` at `/bg/yours.jpg` and re-judge
+`BACKGROUND_STRENGTH` — the right opacity depends on the picture.
 
-| file | photographer | licence | source |
-|------|--------------|---------|--------|
-| gym.jpg | Linda Banks | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0) | [1958 Redfield, Arkansas Gymnasium Interior](https://commons.wikimedia.org/wiki/File:1958_Redfield,_Arkansas_Gymnasium_Interior.jpg) |
-| arena.jpg | Wiiii | [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0) | [Tokyo Metropolitan Gymnasium Interior](https://commons.wikimedia.org/wiki/File:Tokyo_Metropolitan_Gymnasium_Interior.jpg) |
-| court.jpg | &DC, Coulsdon, Greater London | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0) | [London 2012 Olympic Basketball Arena](https://commons.wikimedia.org/wiki/File:London_2012_Olympic_Basketball_Arena.jpg) |
-| game.jpg | Danny Karwoski | [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0) | [McDonough Gymnasium interior](https://commons.wikimedia.org/wiki/File:McDonough_Gymnasium_interior.jpg) |
+## Credit
 
-All four are downscaled and blurred from the originals.
+The current picture, `opt1.jpg`, was supplied by the operator. If it came from
+somewhere that requires attribution, record it here — this file is served
+publicly, so it is a place a credit can legitimately live. Unsplash requires
+none.
