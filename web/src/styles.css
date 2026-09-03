@@ -50,8 +50,37 @@ body {
   padding: 0;
 }
 
-body {
+/* The page colour lives on <html>, not <body>, so that <body>'s own background
+   stays transparent and the photo layer below has something to show through.
+   Setting both would simply hide the photo. */
+html {
   background: var(--page);
+}
+
+/* The background photo. See background.ts for why the file arrives already
+   blurred rather than being blurred here.
+
+   position: fixed rather than background-attachment: fixed — the latter is the
+   one that judders on iOS Safari, which is most of the phones this runs on.
+   z-index: -1 puts it behind every screen but still in front of the page
+   colour; nothing else in the app uses a negative z-index.
+
+   --bg-image is `none` until someone picks one, and `none` renders nothing at
+   all, so the untouched default is precisely the flat page this shipped with. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--bg-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: var(--bg-strength, 0.28);
+  pointer-events: none;
+}
+
+body {
   color: var(--ink);
   font-family: "Outfit Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 16px;
