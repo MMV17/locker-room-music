@@ -25,36 +25,61 @@ Pushing on campus needs the 443 endpoint —
 `ssh://git@ssh.github.com:443/MMV17/locker-room-music.git` — which is already
 set as `origin`. Port 22 is blocked.
 
+## Verified on 2026-09-02, in a browser
+
+The Settings screen and the speaker presence gate had both shipped unseen. They
+have now been driven end to end against a local Worker at phone width, and all
+four branches behave:
+
+- **offline** — "The AuxGoat is offline right now."
+- **not connected** — "Connect your phone to the AuxGoat over Bluetooth first."
+- **mid-song** — "Someone's song is playing. Wait for it to finish."
+- **allowed** — the audio-first list renders, `Show other devices (1)` reveals
+  the non-audio one, an unnamed device shows its MAC as the title, and tapping
+  one wrote `relay_speaker_mac` / `_name` / `_set_by = u3`, flipped the row to
+  "Playing through this" and revealed "Use the cable instead".
+
+The allow path was previously untested because a session would have added a
+fake player to the production roster. That objection does not apply to the
+local D1, which is already full of "Jake Tester" rows — do it there.
+
+**To set this up again:** the local D1 lags production. Apply `schema.sql`
+then `migrations/004` and `005` with `wrangler d1 execute lockerroom --local`
+(001-003 are already inside schema.sql and will report duplicate-column, which
+is correct). Then give a user a claimed device, point the newest heartbeat's
+`aux_holder_hash` at it, and close any open plays or the mid-song interlock
+fires. `devices.first_seen` is NOT NULL and is easy to forget — and note that
+`wrangler d1 execute` reports a failed INSERT quietly enough to miss if you
+grep its output for success rather than reading it.
+
 ## Unfinished work, roughly in priority order
 
-1. **The Settings screen has never been opened on a phone.** Built and deployed
-   2026-09-01, verified only by tsc and a build. Speaker selection lives at
-   `/settings`, reached from the jersey button in the Now Playing header.
-2. **The presence gate's ALLOW path is unverified end to end.** All three
-   `/api/speakers*` endpoints were confirmed to 401 anonymous callers, but the
-   permitted path was deliberately not tested from a browser — creating a
-   session would have added a fake player to the roster. Mack's phone is
-   claimed and was the aux holder, so it should pass; nobody has watched it.
-3. **Two hardware steps still unrun:** reboot the box and confirm it reconnects
+1. **Two hardware steps still unrun:** reboot the box and confirm it reconnects
    to the same speaker unattended, and a long relay session for longevity. A
    2026-08-23 relay test wedged the Bluetooth controller "shortly after"
    starting; `lockerroom-btwatch` recovers that automatically now, but no long
-   session has been run.
-4. **Artwork: negative responses are cached for 24h.** Both providers fetch with
+   session has been run. **This is the only speaker-selection work left** —
+   everything else about the feature has now been seen working.
+2. **The page background is built but switched off.** `DEFAULT_ID = "none"` in
+   `web/src/background.ts`. Four candidates ship; pick one on a phone with
+   `?bg=gym|arena|court|game` (`?bg=none` to stop), then set the default. The
+   four are CC BY-SA and `web/public/bg/CREDITS.md` is the required credit —
+   swap in Unsplash before settling on one and that obligation goes away.
+3. **Artwork: negative responses are cached for 24h.** Both providers fetch with
    `cf: { cacheTtl: 86400, cacheEverything: true }`, which caches failures too,
    so a transient failure sticks for a day and the admin retry cannot clear it.
    Fix is two lines in `backend/src/artwork.ts`:
    `cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": 86400, "400-599": 0 } }`.
    Fold it into the next Worker deploy rather than deploying specially.
-5. **No artwork-retry button in the Admin screen.** `POST /api/admin/artwork/retry`
+4. **No artwork-retry button in the Admin screen.** `POST /api/admin/artwork/retry`
    exists and is documented as the corrective tool, but nothing in the UI calls
    it, so it is only reachable with curl and `X-Admin-Password`.
-6. **Junk AVRCP metadata is reaching the play data.** Two tracks recorded
+5. **Junk AVRCP metadata is reaching the play data.** Two tracks recorded
    `"Listening on MacBook Pro"` as the artist and one recorded `adsmoloco.com`
    as a title. Consider filtering at ingest.
-7. **Anti-bypass is verified only on the JBL Charge 6.** It is a per-speaker
+6. **Anti-bypass is verified only on the JBL Charge 6.** It is a per-speaker
    property; re-test on any other speaker before relying on it.
-8. **No Forget button for paired speakers.** Deliberately out of scope — they
+7. **No Forget button for paired speakers.** Deliberately out of scope — they
    accumulate, which is cheap, and forgetting one costs the one-tap return.
    Add it when the list actually gets annoying, which may be never.
 
