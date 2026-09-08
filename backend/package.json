@@ -8,7 +8,8 @@
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "db:local": "wrangler d1 execute lockerroom --local --file=./schema.sql",
-    "db:remote": "wrangler d1 execute lockerroom --remote --file=./schema.sql"
+    "db:remote": "wrangler d1 execute lockerroom --remote --file=./schema.sql",
+    "predeploy": "find public -name '.DS_Store' -delete 2>/dev/null || true"
   },
   "dependencies": {
     "hono": "^4.6.14"

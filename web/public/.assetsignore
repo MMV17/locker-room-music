@@ -1,0 +1,10 @@
+# Uploaded assets are PUBLIC. Finder writes .DS_Store into any directory it is
+# asked to display, including build output, and wrangler will happily serve it
+# - two of them were live on hc.auxgoat.com until 2026-09-07. A .DS_Store lists
+# the names of everything that was ever in its directory, which is not a
+# catastrophe and is also not something to publish.
+#
+# This file lives in web/public/ rather than backend/public/ because vite's
+# emptyOutDir wipes the latter on every build.
+.DS_Store
+**/.DS_Store
