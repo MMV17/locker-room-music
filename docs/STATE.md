@@ -122,7 +122,7 @@ stop repeating.
 | Code | **Merged to `main`** and pushed to origin. 275 pi tests, 109 backend, clean build. |
 | Migrations 006 + 007 on prod D1 | **APPLIED 2026-09-21**, after a verified backup (92,891 bytes, 244 INSERTs, at `~/lockerroom-backups/`). Both are a single additive `CREATE TABLE IF NOT EXISTS`; 127 plays confirmed intact afterwards. |
 | Worker | **DEPLOYED 2026-09-21**, version `c8ab305d-968a-4273-94d8-6c138693024b`. |
-| Pi | **NOT DEPLOYED.** Not reachable: nothing answered on `auxgoat`, `192.168.2.3`, `192.168.2.2` or `192.168.1.6`, no `192.168.2.x` interface was up, Internet Sharing was off, and no Pi MAC was in the ARP table. This Mac was on `10.6.14.79`, not the home LAN. |
+| Pi | **DEPLOYED 2026-09-21 OVER THE SERIAL CONSOLE.** It was not reachable by any network path - nothing answered on `auxgoat`, `192.168.2.3`, `192.168.2.2` or `192.168.1.6`, no `192.168.2.x` interface was up, Internet Sharing was off, no Pi MAC in the ARP table, and this Mac was on `10.6.14.79` rather than the home LAN. `pi/scripts/serial-deploy.py` shipped it anyway. |
 
 **ORDER MATTERS AND IT WAS FOLLOWED: migrations BEFORE the Worker.**
 `throttle.ts` queries `auth_attempts` on every failed admin auth, so deploying
@@ -201,6 +201,69 @@ sudo git clone ssh://git@ssh.github.com:443/MMV17/locker-room-music.git \
 ```
 
 ---
+
+## The first real report found the box DEAF — and two bugs in the tooling (2026-09-21)
+
+The escape hatch was deployed over serial and exercised the same hour. It
+worked: `report-full` round-tripped **20,732 bytes in 1.2 seconds**, which
+under the old path would have been cut to 2000 characters and displayed forty
+at a time. Then it immediately earned itself back three times over.
+
+### The box could not be paired with, and every unit was green
+
+`hci0` was **DOWN**, `Powered: no`. Not the 2026-09-20 fault (up but not
+advertising) — the adapter was not up at all. The beacon was perfectly
+healthy the entire time, which is exactly why nobody had noticed.
+
+The cause, and it is the thing to check first from now on:
+
+```
+933: hci0: Bluetooth
+	Soft blocked: yes
+	Hard blocked: no
+```
+
+**An rfkill SOFT BLOCK.** The radio is switched off in software. `systemctl
+restart bluetooth`, `bt-agent`, `keep-discoverable` — none of it does anything,
+because none of it is the problem. `rfkill unblock bluetooth` is.
+
+**`report-full.sh` did not collect `rfkill`.** The one diagnostic built to
+explain a dead adapter showed the symptom and withheld the cause. It leads the
+adapter section now, and `remote-repair.sh` unblocks before it tries anything
+else.
+
+### THE REPAIR RESTARTED THE LISTENER AND LOST ITS OWN LOG
+
+Worse, and worth understanding properly:
+
+```
+lockerroom-listener.service:  Requires=bluetooth.service
+```
+
+systemd **propagates a restart across `Requires=`**. So `systemctl restart
+bluetooth` inside the repair restarted `lockerroom-listener` — the control
+channel — in the middle of the command it was running. The first run-repair,
+the one that diagnosed the rfkill block, **never reported at all**: dispatched,
+never completed, and the listener journal shows it stopped and started while
+the command was in flight.
+
+This is the "a mechanism that can replace the listener can destroy remote
+access while using it" rule arriving by a road that was not guarded. The
+package was protected from being MODIFIED and left wide open to being
+RESTARTED out from under itself. Restoring a snapshot does nothing about that.
+
+**So `bluetooth` is out of the repair's restart list.** If the adapter is still
+down after unblocking, it is restarted as a last resort with
+`--job-mode=ignore-dependencies`, which is the exact flag that suppresses the
+propagation. Five regression tests in `pi/tests/test_run_repair_guard.py` read
+the shipped scripts as text and hold this — including one asserting the
+`Requires=` line still exists, so if that ever changes the rule gets
+re-examined rather than silently kept or silently dropped.
+
+**The general lesson, which is bigger than this script:** before restarting
+ANY unit from a remote repair, check what `Requires=` it. A unit test of Python
+would not have caught this and did not. Running it against the real box did,
+within minutes.
 
 ## Six holes closed (2026-09-08, committed 2026-09-21)
 
