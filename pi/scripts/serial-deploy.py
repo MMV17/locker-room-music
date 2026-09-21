@@ -213,7 +213,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="plan only; opens no port")
     ap.add_argument("--user", default="pi")
     ap.add_argument("--from-env", action="store_true", help="read PI_PASSWORD")
-    ap.add_argument("--no-restart", action="store_true")
+    ap.add_argument("--no-restart", action="store_true",
+                    help="install only. NOTE: units keep running the OLD code until restarted")
     args = ap.parse_args()
 
     files = [(REPO / s, d, m) for s, d, m in PAYLOAD]
@@ -264,17 +265,32 @@ def main() -> int:
         run(s, "sudo find /opt/lockerroom/lockerroom -name '__pycache__' -exec rm -rf {} + 2>/dev/null; true")
 
         if not args.no_restart:
-            log("  restarting the listener...")
-            run(s, "sudo systemctl restart lockerroom-listener", timeout=45)
+            # EVERY unit whose code this deploy replaced, not just the listener.
+            # btwatch.sh was shipped without a restart once, which left the old
+            # block-rebinding script running from its open fd - the exact trap
+            # deploy.sh documents at its own `enable`/`restart` pair: "--now
+            # only starts a stopped unit and would silently skip a changed one
+            # - the same trap that made every netwatch deploy a no-op until
+            # 2026-08-09". A deploy that installs a fix and leaves the broken
+            # process running is worse than no deploy, because it reads as done.
+            for unit in ("lockerroom-btwatch", "lockerroom-listener"):
+                log(f"  restarting {unit}...")
+                run(s, f"sudo systemctl restart {unit}", timeout=45)
             time.sleep(3)
-            state = run(s, "systemctl is-active lockerroom-listener")
-            log(f"    lockerroom-listener: {state}")
-            if "active" not in state:
-                log("    NOT ACTIVE — check `journalctl -u lockerroom-listener -n 40`")
+            failed = []
+            for unit in ("lockerroom-btwatch", "lockerroom-listener"):
+                state = run(s, f"systemctl is-active {unit}")
+                log(f"    {unit}: {state}")
+                if "active" not in state:
+                    failed.append(unit)
+            if failed:
+                for unit in failed:
+                    log(f"    NOT ACTIVE — check `journalctl -u {unit} -n 40`")
                 return 1
 
         log("  verifying the new commands are installed...")
-        for f in ("/usr/local/bin/report-full.sh", "/usr/local/bin/run-repair.sh"):
+        for f in ("/usr/local/bin/report-full.sh", "/usr/local/bin/run-repair.sh",
+                  "/usr/local/bin/btwatch.sh"):
             log(f"    {run(s, f'test -x {f} && echo ok || echo MISSING')}  {f}")
         allowed = run(s, "grep -c 'report-full\\|run-repair' /opt/lockerroom/lockerroom/control.py")
         log(f"    control.py mentions the new commands {allowed} times")
