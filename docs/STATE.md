@@ -265,6 +265,58 @@ ANY unit from a remote repair, check what `Requires=` it. A unit test of Python
 would not have caught this and did not. Running it against the real box did,
 within minutes.
 
+### ROOT CAUSE: btwatch rebound into the block, 212 times
+
+Established from the box's own journal, and worth reading before touching the
+watchdog.
+
+**09:59:22** — the adapter became unpowerable. `bluetoothd` began logging
+`Failed to set mode: Failed (0x03)` every five seconds, and the box had been up
+since 09-20 with none before that. That is `MGMT_STATUS_NOT_POWERED`: an rfkill
+soft block.
+
+**What set it is NOT established.** Nothing precedes it in the journal — no
+kernel error, no command, no reboot. Do not let anyone tell you it was the
+relay: the first `relay speaker ... did not connect` is at **09:59:43**,
+twenty-one seconds AFTER, and all 1,270 of them follow it. That was a
+consequence.
+
+**Why it never recovered is fully established, and is the fixable part:**
+
+1. `btwatch` saw `hci0` was not `UP RUNNING` and rebound `hci_uart_bcm`.
+2. A rebind **destroys the rfkill device and creates a new one** — the index
+   climbed 933 → 934 → 935 across three observations an hour apart.
+3. `systemd-rfkill` keys its saved state by the device's platform name and
+   faithfully **restored the block onto the new device**.
+4. So every recovery re-applied the fault it was recovering from. **212
+   rebinds over nine hours.** The kernel reloaded the BCM4345C0 firmware
+   perfectly every single time.
+
+**It would have survived a reboot**, for exactly the same reason. That is the
+part worth remembering: this was not a transient, and power-cycling the box
+would not have cleared it.
+
+`provision.sh` ALREADY KNEW a fresh registration can come up blocked — it
+documents it from 2026-08-19 on a stock Trixie flash, and unblocks once at
+provision time. What nobody noticed is that **every rebind is a fresh
+registration.**
+
+`btwatch.sh` now unblocks before tearing the driver down (and if that is all
+that was wrong it recovers without restarting anything) and again after
+rebinding. It also backs off after five failed recoveries: the loop was not
+free — 44s of CPU, `bt-agent` SIGKILLed on stop timeouts repeatedly, and
+`lockerroom-listener` restarted every couple of minutes, **which is what lost
+the first run-repair's log.**
+
+**Two traps for whoever touches the watchdog next:**
+
+- `btwatch.sh` restarts `lockerroom-listener` by design, so the control channel
+  dies on every recovery and in-flight commands lose their result. That is
+  deliberate — handles have to re-bind to the new adapter — but it means a
+  wedge and a remote command at the same moment will not report.
+- A rebind cannot clear a soft block. If `hciconfig` says DOWN, check
+  `rfkill list bluetooth` BEFORE anything else.
+
 ### RESOLVED, entirely over the 443 beacon
 
 With both fixes deployed, `run-repair` cleared the block and the box came back:
