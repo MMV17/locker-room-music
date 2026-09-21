@@ -1,6 +1,6 @@
 # Project state — resume here
 
-Last worked: **2026-08-23**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-09-21**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
@@ -54,6 +54,148 @@ Build order status (spec section 10):
 | 5 | Voting site: join + now-playing | **Done — deployed, one real play recorded end to end** |
 | 6 | Results reveal, leaderboards, rating math | **Done — deployed, not yet exercised with real votes** |
 | 7 | Admin and device claiming | **Done — deployed; claiming exercised once** |
+
+---
+
+## The remote escape hatch (2026-09-21) — BUILT AND MERGED, NOT YET DEPLOYED
+
+**On 2026-09-20 the speaker stopped accepting Bluetooth pairings and it could
+not be fixed from off-site at all.** The box was online and beaconing, the
+controller was healthy, the listener took commands and nobody was connected —
+the adapter simply was not ADVERTISING, so no phone could see `AuxGoat 0001`.
+Almost certainly `keep-discoverable` and/or `bt-agent` not running.
+
+Everything about that was invisible from the Admin screen, and each reason is
+worth keeping because each one is a separate hole:
+
+- `report-status` checks `lockerroom-listener`, `bluetooth`, `bluealsa`. **None
+  of those were the broken units**, and it never looks at `bt-agent`,
+  `keep-discoverable`, `lockerroom-btwatch` or `hciconfig hci0` — whose
+  PSCAN/ISCAN flags ARE the answer.
+- No allowlisted command could restart the Bluetooth units.
+- `lockerroom-btwatch` only fires when the controller is not `UP RUNNING`, so a
+  healthy-but-silent adapter is exactly its blind spot.
+- Admin.tsx rendered `result.split("\n")[0].slice(0, 40)`, so even the service
+  states that WERE collected never reached a human.
+
+**Two new allowlisted commands**, on both gates (`PI_COMMANDS` in
+`backend/src/piControl.ts`, `ALLOWED` in `pi/lockerroom/control.py`), each with
+its own timeout, and still nothing anywhere that takes a parameter:
+
+| command | what it does |
+|---|---|
+| `report-full` | Read-only dump: `is-active` AND `is-enabled` for all nine units, `hciconfig hci0`, `audio-check.sh`, `nmcli`, `ip route`, `/etc/resolv.conf`, dmesg and a journal tail per unit. **Allowed mid-song** — it writes nothing. |
+| `run-repair` | Pulls the repo on the Pi and runs the committed `pi/scripts/remote-repair.sh`. **Refused mid-song**, like a scan. |
+
+**`is-enabled` is in there deliberately.** Units coming up disabled after a
+reboot has bitten this project three times — bt-agent and keep-discoverable
+missing from every deploy until 2026-08-19, the listener never enabled until
+the same day, netwatch deploys silent no-ops until 2026-08-09. An
+active-but-disabled unit works perfectly until the next power cut.
+
+**HOW `run-repair` TAKES A "PARAMETER" WITHOUT TAKING ONE.** What varies is the
+COMMIT YOU PUSHED. Write the fix into `pi/scripts/remote-repair.sh`, commit,
+push, press the button. The allowlist still maps a fixed name to a fixed argv
+on both ends and there is still no "run this string" command.
+
+**RUN-REPAIR MUST NEVER MODIFY THE LISTENER PACKAGE, and this is enforced
+rather than asserted.** The listener IS the control channel; a mechanism that
+can replace it can destroy remote access while using it. `run-repair.sh`
+snapshots `/opt/lockerroom/lockerroom` before the repair and, if the repair
+changed it, RESTORES the snapshot and restarts the listener.
+`pi/tests/test_run_repair_guard.py` drives the real script and proves an edit,
+a deletion and an added file are each undone. Listener code changes still need
+a shell — that is the point.
+
+**The dump does not travel in `pi_commands.result`**, which the beacon handler
+cuts to 2000 characters. It rides its own beacon payload into a new
+`pi_reports` table (migration 007), following the `bt_devices` precedent from
+005 exactly. Keyed by kind, so a repair log does not overwrite the diagnostic
+that justified running it. Capped at 64 KiB on both ends, and **a cut is
+ANNOUNCED inside the body** — silent truncation is the failure this exists to
+stop repeating.
+
+### Deploy state, 2026-09-21
+
+| piece | status |
+|---|---|
+| Code | **Merged to `main`** (`11cc949`). 275 pi tests, 109 backend, clean build. |
+| Migrations 006 + 007 on prod D1 | **NOT APPLIED.** Both tables still missing. |
+| Worker | **NOT DEPLOYED.** Must not go out before the migrations — `throttle.ts` queries `auth_attempts` on failed auth and would 500 the admin login. |
+| Pi | **NOT DEPLOYED.** Not reachable: nothing answered on `auxgoat`, `192.168.2.3`, `192.168.2.2` or `192.168.1.6`, and no `192.168.2.x` interface was up. |
+
+**The serial console works.** Verified 2026-09-21 at 115200 on
+`/dev/cu.usbserial-0001` — a bare CR returned `auxgoat login:`. So the box is
+powered and the CP2102 is attached; what is missing is an IP path, which is
+what `deploy.sh` needs. Plug in the USB-C cable and turn on Internet Sharing,
+or use home wifi.
+
+**`deploy.sh` now installs the escape hatch** — `report-full.sh` and
+`run-repair.sh` into `/usr/local/bin`, seeds `remote-repair.sh` into
+`/opt/lockerroom/repo` when no git clone is there yet, prints the clone command
+when it is missing, and verifies all three landed. **No new systemd units**, so
+there is nothing new to enable.
+
+**`run-repair` works before that clone exists** — it reports loudly that it
+could not pull and runs the script already on disk. Refusing to run the
+last-known repair because the network is also unwell would make the button
+useless exactly when it is needed. To finish the job properly:
+
+```bash
+sudo git clone ssh://git@ssh.github.com:443/MMV17/locker-room-music.git \
+  /opt/lockerroom/repo && sudo chown -R pi:pi /opt/lockerroom/repo
+```
+
+---
+
+## Six holes closed (2026-09-08, committed 2026-09-21)
+
+This sat uncommitted in the working tree for thirteen days. Two of the six are
+security holes and one is a data leak, so it is worth knowing they were ever
+open in case anything from that window looks wrong.
+
+- **No rate limiting anywhere.** `/api/admin/*` took unlimited `ADMIN_PASSWORD`
+  guesses with no lockout and no record that anyone had tried. The counter is a
+  D1 table rather than a Cloudflare binding because `apex/wrangler.toml` holds
+  the measurement proving the binding never bound: `[[unsafe.bindings]]`
+  deploys cleanly and does nothing — 72 wrong codes from one IP, zero 429s —
+  and `[[ratelimits]]` is ignored outright by wrangler 3.114. **Only FAILURES
+  are counted**, which is what makes a limit this low safe behind one school
+  NAT. Admin 10 per 5 min; team code 30 per 10 min.
+- **The leaderboards leaked live vote tallies.** They filtered on
+  `counted = 1 AND voided = 0`, and **`counted` DEFAULTS to 1 at INSERT**, so a
+  play still on the speaker already qualified. Not a hint — the board returns
+  `voters` and `score`, so `up - down = score * (voters + TRACK_K)`, and with
+  `up + down` known both fall out. On a track's first play the board row IS
+  that open play.
+- **Membership was checked only at sign-in.** Deactivating a player left every
+  session they already held fully authorized; they kept voting until they chose
+  to sign out.
+- **A paused song was closed on wall-clock time.** The duration watchdog slept
+  for duration + buffer from the song's start, and pausing never touched it —
+  so a song paused a few seconds in had its play record ended, its vote window
+  shut and aux ownership released with the audio still on the speaker. A 200ms
+  fixture closed at `played_ms=61`. Measured in PLAYED ms now.
+- **Claiming a phone had a race.** `AND user_id IS NULL` is what settles it, and
+  it must stay OUTSIDE the batch — a batch's later statements run whether or not
+  the first matched, so the loser would still have backfilled the play history
+  to itself.
+- **No sign out / switch user** in Settings. There is now.
+
+---
+
+## styles.css has an ordering rule now — read before appending (2026-09-21)
+
+`web/src/styles.css` ends with the short-screen overrides, and **they must stay
+last**. They used to sit above the base rules they override, and since both
+sides had the same specificity the later base rule simply won — four of them
+were dead, and `.vote` kept a 96px target instead of shrinking to 84px at
+375x667.
+
+The block says so itself: *"Anything added below this block will silently
+defeat it again."* This already caused the one merge conflict between the two
+2026-09-21 branches, and the resolution is not arbitrary — new rules go ABOVE
+that block. Check the order after any merge that touches this file.
 
 ---
 
