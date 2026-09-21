@@ -72,6 +72,23 @@ done
 # The adapter. This section is the reason the script exists.
 # ---------------------------------------------------------------------------
 section "BLUETOOTH ADAPTER"
+# RFKILL FIRST, because it outranks everything below it. A soft-blocked radio
+# reports hci0 DOWN and "Powered: no" no matter how many times bluetooth,
+# bt-agent and keep-discoverable are restarted - the units all look fine and
+# the box is simply deaf. Found exactly this way on 2026-09-21: every service
+# green, hci0 DOWN, and the only line that explained it was this one, which
+# this script did not collect at the time.
+echo "--- rfkill (a soft block here explains EVERYTHING below) ---"
+if command -v rfkill >/dev/null 2>&1; then
+  run 10 rfkill list
+  echo
+  echo "READ THIS FIRST: 'Soft blocked: yes' on hci0 means the radio is"
+  echo "  switched off in software. No service restart fixes that -"
+  echo "  'rfkill unblock bluetooth' does, and run-repair now runs it."
+else
+  echo "(rfkill is not installed)"
+fi
+echo
 if command -v hciconfig >/dev/null 2>&1; then
   run 10 hciconfig hci0
   echo

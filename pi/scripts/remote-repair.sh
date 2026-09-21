@@ -19,12 +19,26 @@ set -uo pipefail   # not -e: fix what can be fixed and report the rest.
 # Units that must be running AND enabled for the box to be a speaker. `enable`
 # matters as much as `restart`: an active-but-disabled unit works perfectly
 # until the next power cut, which has bitten this project three times.
-UNITS="bluetooth bt-agent keep-discoverable lockerroom-btwatch \
+# NOTE WHAT IS NOT IN THIS LIST: `bluetooth`.
+#
+# lockerroom-listener.service declares `Requires=bluetooth.service`, and
+# systemd PROPAGATES a restart across Requires= - so `systemctl restart
+# bluetooth` restarts the listener too. The listener is the control channel, so
+# that is a repair which kills the thing reporting it and loses its own log
+# every single time. Measured on 2026-09-21: the run-repair that found the
+# rfkill block never reported, and the listener journal showed it stopped and
+# started mid-command.
+#
+# This is the same hazard the "never modify the listener package" rule exists
+# for, arriving by a different road - not replacing the listener, but
+# restarting it out from under itself. Restarting bluetooth is handled
+# separately and deliberately at the bottom of this script.
+UNITS="bt-agent keep-discoverable lockerroom-btwatch \
 lockerroom-netwatch lockerroom-audio-route bluealsa bluealsa-aplay"
 
-# lockerroom-listener is NOT in that list, on purpose. Restarting it would kill
-# the beacon mid-command and lose the report of this very run. `restart-listener`
-# already exists as its own allowlisted command for when that is what you want.
+# lockerroom-listener is NOT in that list either, for the direct version of the
+# same reason. `restart-listener` is its own allowlisted command for when that
+# is genuinely what you want.
 
 echo "repair: $(date -Is 2>/dev/null)"
 echo
@@ -38,6 +52,22 @@ echo
 # lockerroom-btwatch never fired because it only triggers when the controller
 # is NOT UP RUNNING — a healthy-but-silent adapter is exactly its blind spot.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 0. Unblock the radio. This comes FIRST because nothing below it can work
+#    while the adapter is soft-blocked - hci0 stays DOWN and "Powered: no"
+#    through any number of service restarts, which is exactly how 2026-09-21
+#    presented: every unit green, the box invisible to every phone.
+# ---------------------------------------------------------------------------
+echo "===== rfkill ====="
+if command -v rfkill >/dev/null 2>&1; then
+  echo "  before:"; timeout 10 rfkill list bluetooth 2>&1 | sed 's/^/    /'
+  timeout 10 rfkill unblock bluetooth 2>&1 | sed 's/^/    /'
+  echo "  after:";  timeout 10 rfkill list bluetooth 2>&1 | sed 's/^/    /'
+else
+  echo "  rfkill is not installed - cannot check or clear a soft block"
+fi
+echo
+
 echo "===== units: enable + restart ====="
 for u in $UNITS; do
   state="$(systemctl is-active "$u" 2>/dev/null || echo unknown)"
@@ -97,6 +127,40 @@ if [ -x /usr/local/bin/audio-route.sh ]; then
   echo "  selected: $(cat /run/lockerroom/audio-out 2>/dev/null || echo unknown)"
 else
   echo "  /usr/local/bin/audio-route.sh is missing"
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 4. Only if the adapter is STILL down, restart bluetooth itself - and do it
+#    without propagating to the listener.
+#
+# `--job-mode=ignore-dependencies` is the whole point of this block. A plain
+# restart here takes the control channel down with it (Requires=), so the
+# operator loses the log of the repair they are watching. This is a last
+# resort, after unblocking and powering on have both failed.
+# ---------------------------------------------------------------------------
+echo "===== bluetooth service (last resort) ====="
+STILL_DOWN=0
+if command -v hciconfig >/dev/null 2>&1; then
+  hciconfig hci0 2>/dev/null | grep -q "UP RUNNING" || STILL_DOWN=1
+else
+  timeout 10 bluetoothctl show 2>/dev/null | grep -q "Powered: yes" || STILL_DOWN=1
+fi
+
+if [ "$STILL_DOWN" = "1" ]; then
+  echo "  adapter still down after unblocking - restarting bluetooth.service"
+  echo "  WITHOUT dependency propagation, so the listener survives it."
+  timeout 45 systemctl restart --job-mode=ignore-dependencies bluetooth 2>&1 | sed 's/^/    /'
+  sleep 3
+  timeout 15 bluetoothctl power on 2>&1 | sed 's/^/    /'
+  timeout 15 bluetoothctl discoverable on 2>&1 | sed 's/^/    /'
+  timeout 15 bluetoothctl pairable on 2>&1 | sed 's/^/    /'
+  if command -v hciconfig >/dev/null 2>&1; then
+    timeout 10 hciconfig hci0 2>&1 | sed 's/^/    /'
+  fi
+else
+  echo "  adapter is up - leaving bluetooth.service alone."
+  echo "  (restarting it would restart the listener too, via Requires=)"
 fi
 echo
 

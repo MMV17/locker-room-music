@@ -156,3 +156,64 @@ class TestDegradedPaths:
         write_repair(box, 'exit 3\n')
         result = run(box)
         assert "END OF REPAIR RUN" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# The repair must not restart the listener — including INDIRECTLY.
+#
+# lockerroom-listener.service declares `Requires=bluetooth.service`, and
+# systemd propagates a restart across Requires=. So `systemctl restart
+# bluetooth` in the repair script restarted the listener too, killing the
+# control channel mid-command and losing the log of that very run. Measured
+# 2026-09-21: the run-repair that diagnosed an rfkill soft block never reported
+# at all, and the listener journal showed it stopped and started mid-command.
+#
+# This is the "never modify the listener" rule arriving by a different road:
+# not replacing the listener, but restarting it out from under itself. These
+# tests read the shipped scripts as text, because that is where the mistake
+# lives and a unit test of Python would not have caught it.
+# --------------------------------------------------------------------------- #
+
+REPAIR_SH = Path(__file__).resolve().parents[1] / "scripts" / "remote-repair.sh"
+REPORT_SH = Path(__file__).resolve().parents[1] / "scripts" / "report-full.sh"
+LISTENER_UNIT = Path(__file__).resolve().parents[1] / "systemd" / "lockerroom-listener.service"
+
+
+class TestRepairCannotKillTheControlChannel:
+    def test_the_listener_requires_bluetooth_so_the_hazard_is_real(self):
+        """If this ever stops being true the rule below can be relaxed — but
+        check, do not assume."""
+        assert "Requires=bluetooth.service" in LISTENER_UNIT.read_text()
+
+    def test_bluetooth_is_not_in_the_blanket_restart_list(self):
+        body = REPAIR_SH.read_text()
+        units = body.split('UNITS="', 1)[1].split('"', 1)[0]
+        names = units.replace("\\", " ").split()
+        assert "bluetooth" not in names, (
+            "restarting bluetooth.service propagates to lockerroom-listener "
+            "via Requires= and takes down the control channel mid-repair"
+        )
+        assert "lockerroom-listener" not in names
+
+    def test_any_bluetooth_restart_ignores_dependencies(self):
+        """It may still be restarted as a last resort — but never in a way that
+        drags the listener with it."""
+        for line in REPAIR_SH.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if "systemctl restart" in stripped and "bluetooth" in stripped:
+                assert "--job-mode=ignore-dependencies" in stripped, (
+                    f"unguarded bluetooth restart would restart the listener: {stripped}"
+                )
+
+    def test_the_repair_clears_a_soft_block(self):
+        """An rfkill soft block reports hci0 DOWN and Powered: no through any
+        number of service restarts. It is the one thing that has to be cleared
+        before anything else is worth trying."""
+        assert "rfkill unblock" in REPAIR_SH.read_text()
+
+    def test_the_diagnostic_collects_rfkill(self):
+        """The line that explained the 2026-09-21 fault was missing from the
+        dump that was supposed to explain it."""
+        assert "rfkill" in REPORT_SH.read_text()
