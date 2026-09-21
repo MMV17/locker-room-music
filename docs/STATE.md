@@ -119,10 +119,42 @@ stop repeating.
 
 | piece | status |
 |---|---|
-| Code | **Merged to `main`** (`11cc949`). 275 pi tests, 109 backend, clean build. |
-| Migrations 006 + 007 on prod D1 | **NOT APPLIED.** Both tables still missing. |
-| Worker | **NOT DEPLOYED.** Must not go out before the migrations — `throttle.ts` queries `auth_attempts` on failed auth and would 500 the admin login. |
-| Pi | **NOT DEPLOYED.** Not reachable: nothing answered on `auxgoat`, `192.168.2.3`, `192.168.2.2` or `192.168.1.6`, and no `192.168.2.x` interface was up. |
+| Code | **Merged to `main`** and pushed to origin. 275 pi tests, 109 backend, clean build. |
+| Migrations 006 + 007 on prod D1 | **APPLIED 2026-09-21**, after a verified backup (92,891 bytes, 244 INSERTs, at `~/lockerroom-backups/`). Both are a single additive `CREATE TABLE IF NOT EXISTS`; 127 plays confirmed intact afterwards. |
+| Worker | **DEPLOYED 2026-09-21**, version `c8ab305d-968a-4273-94d8-6c138693024b`. |
+| Pi | **NOT DEPLOYED.** Not reachable: nothing answered on `auxgoat`, `192.168.2.3`, `192.168.2.2` or `192.168.1.6`, no `192.168.2.x` interface was up, Internet Sharing was off, and no Pi MAC was in the ARP table. This Mac was on `10.6.14.79`, not the home LAN. |
+
+**ORDER MATTERS AND IT WAS FOLLOWED: migrations BEFORE the Worker.**
+`throttle.ts` queries `auth_attempts` on every failed admin auth, so deploying
+the Worker first would have 500'd the admin login until the table existed.
+
+Verified live after propagation (which takes ~2 minutes — checking sooner tests
+the OLD worker):
+
+- the new build is served (`index-EthrsOHQ.js`), `/api/theme` returns JSON on
+  both hostnames
+- **the throttle works end to end**: one deliberately wrong admin password
+  returned `401 application/json`, not a 500, and wrote
+  `admin:<ip> count=1` to `auth_attempts`. That test row was then deleted, so
+  the table is empty and the budget is full.
+- `.DS_Store` is still not served — both paths answer `200 text/html`, which is
+  the app shell. **Check the content-type, never the status**, or this looks
+  like a leak that is not there.
+
+### THE ADMIN SCREEN IS NOW AHEAD OF THE BOX
+
+The `report full` and `run repair` buttons are live on the deployed site, and
+**the Pi will refuse both until it is deployed** — its `ALLOWED` dict does not
+have those names yet, so it answers `refused: 'report-full' is not an allowed
+command` and the row goes red. That is harmless and self-correcting, but it
+will look like the feature is broken. It is not; the box is simply behind.
+
+To finish, from a network that can reach it:
+
+```bash
+pi/scripts/deploy.sh pi@auxgoat          # home wifi
+pi/scripts/deploy.sh pi@192.168.2.3      # USB-C ethernet + Internet Sharing
+```
 
 **The serial console works.** Verified 2026-09-21 at 115200 on
 `/dev/cu.usbserial-0001` — a bare CR returned `auxgoat login:`. So the box is
