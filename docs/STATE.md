@@ -308,6 +308,37 @@ free — 44s of CPU, `bt-agent` SIGKILLed on stop timeouts repeatedly, and
 `lockerroom-listener` restarted every couple of minutes, **which is what lost
 the first run-repair's log.**
 
+**THE FIX IS IN THREE PLACES, AND THAT IS DELIBERATE** — because there are TWO
+ways a block reaches a freshly registered adapter and the evidence does not
+distinguish them:
+
+1. `systemd-rfkill` restores the state saved under that platform name, and a
+   rebind creates a NEW device every time.
+2. The device comes up blocked **on its own** — seen on a stock Trixie flash on
+   2026-08-19, first boot, with no saved state to restore.
+
+Masking `systemd-rfkill` would only address the first, which is why it was
+considered and NOT done. Instead:
+
+| where | when it runs |
+|---|---|
+| `provision.sh` | once, at provision |
+| `keep-discoverable.service` `ExecStartPre` | **at boot, and on every btwatch recovery** |
+| `btwatch.sh` | before and after every rebind, unconditionally |
+| `remote-repair.sh` | whenever an operator presses "run repair" |
+
+The `ExecStartPre` is the one that covers both mechanisms, because that unit
+restarts at boot AND every time the watchdog recovers. Verified running on the
+box 2026-09-21: `argv[]=/usr/sbin/rfkill unblock bluetooth`,
+`ignore_errors=yes`, `status=0`, with `unblock set for type bluetooth` in the
+journal.
+
+**Checked rather than assumed, about this box:** both radios unblocked, all
+seven saved rfkill states `0`, **wifi has never been blocked once** in the
+whole journal, and nothing outside these scripts calls rfkill. systemd-rfkill's
+only job here is remembering that a radio was off — never a feature on a
+speaker that needs both radios up.
+
 **Two traps for whoever touches the watchdog next:**
 
 - `btwatch.sh` restarts `lockerroom-listener` by design, so the control channel
