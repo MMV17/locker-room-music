@@ -265,6 +265,38 @@ ANY unit from a remote repair, check what `Requires=` it. A unit test of Python
 would not have caught this and did not. Running it against the real box did,
 within minutes.
 
+### RESOLVED, entirely over the 443 beacon
+
+With both fixes deployed, `run-repair` cleared the block and the box came back:
+
+```
+    before:  935: hci0: Bluetooth   Soft blocked: yes
+    after:   935: hci0: Bluetooth   Soft blocked: no
+    adapter is up - leaving bluetooth.service alone.
+```
+
+and the confirming `report-full` reports the line this whole feature exists
+for:
+
+```
+hci0:  Type: Primary  Bus: UART
+       UP RUNNING PSCAN ISCAN
+```
+
+**The listener beaconed straight through it** — 19:13:32 and 19:13:37, no
+restart. Diagnosed, fixed and confirmed without touching the box, which is
+precisely what could not be done on 2026-09-20.
+
+**Two things in that report that are NOT faults, so nobody chases them:**
+
+- `lockerroom-audio-route  inactive  enabled` is correct. It is `Type=oneshot`
+  with no `RemainAfterExit`, so it runs at boot, exits, and reports inactive
+  forever after. Green would be the surprising answer.
+- `relay_connected = 0`, `relay_error = connect failed`, output on
+  `jack:Headphones`. The configured JBL (`5C:AD:BA:F0:B2:61`) is not answering
+  — almost certainly powered off. Worth retrying now the radio is unblocked,
+  since before this it could not have connected under any circumstances.
+
 ## Six holes closed (2026-09-08, committed 2026-09-21)
 
 This sat uncommitted in the working tree for thirteen days. Two of the six are
