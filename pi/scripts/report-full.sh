@@ -56,11 +56,16 @@ echo "uptime:    $(uptime 2>/dev/null)"
 # Units. Both states, for every unit — the whole point.
 # ---------------------------------------------------------------------------
 section "UNITS (active / enabled)"
-printf '%-23s %-9s %s\n' "UNIT" "ACTIVE" "ENABLED"
+printf '%-23s %-13s %s\n' "UNIT" "ACTIVE" "ENABLED"
 for u in $UNITS; do
-  printf '%-23s %-9s %s\n' "$u" \
-    "$(systemctl is-active "$u" 2>/dev/null || echo unknown)" \
-    "$(systemctl is-enabled "$u" 2>/dev/null || echo unknown)"
+  # `systemctl is-active` exits NON-ZERO for every state that is not active -
+  # including "deactivating", "failed" and "inactive", which are the states
+  # this table exists to show. A naive `|| echo unknown` therefore appends a
+  # second word to exactly the rows that matter, and the table stops lining up
+  # precisely when something is wrong. Substitute only when there is NO answer.
+  act="$(systemctl is-active "$u" 2>/dev/null)"; [ -n "$act" ] || act=unknown
+  ena="$(systemctl is-enabled "$u" 2>/dev/null)"; [ -n "$ena" ] || ena=unknown
+  printf '%-23s %-13s %s\n' "$u" "$act" "$ena"
 done
 
 # ---------------------------------------------------------------------------
