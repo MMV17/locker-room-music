@@ -156,6 +156,28 @@ pi/scripts/deploy.sh pi@auxgoat          # home wifi
 pi/scripts/deploy.sh pi@192.168.2.3      # USB-C ethernet + Internet Sharing
 ```
 
+### OR OVER THE SERIAL CONSOLE, WITH NO NETWORK AT ALL
+
+`pi/scripts/serial-deploy.py` ships the listener modules and the scripts over
+the CP2102 console. Written 2026-09-21 because the box was powered and healthy
+with its console answering, and no IP path existed to it — which is exactly the
+situation the escape hatch is for, and it could not be installed.
+
+```bash
+python3 pi/scripts/serial-deploy.py --dry-run   # plan; opens no port
+python3 pi/scripts/serial-deploy.py             # prompts for the password
+```
+
+39 KB gzip+base64, about 150 chunked writes, roughly a minute. It is NOT a
+replacement for deploy.sh — no systemd units, no udev rules, no audio
+verification — so use deploy.sh whenever an IP path exists.
+
+**Every file is sha256-verified ON THE BOX before it is installed**, and
+nothing is restarted if any hash disagrees. A serial line has no flow control
+and drops bytes; a deploy that cannot prove what landed is not a deploy. The
+far side also gets `stty -echo` (restored afterwards), which halves the traffic
+and is what makes the output parseable at all.
+
 **The serial console works.** Verified 2026-09-21 at 115200 on
 `/dev/cu.usbserial-0001` — a bare CR returned `auxgoat login:`. So the box is
 powered and the CP2102 is attached; what is missing is an IP path, which is
