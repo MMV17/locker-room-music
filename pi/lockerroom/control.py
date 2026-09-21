@@ -65,9 +65,43 @@ ALLOWED: dict[str, tuple[list[str], float]] = {
     ),
     # 15s of discovery, then one `bluetoothctl info` per device found.
     "scan-speakers": (["sudo", "/usr/local/bin/bt-scan.sh"], 45),
+    # Read-only diagnostic dump. Built after 2026-09-20, when the box stopped
+    # accepting pairings and report-status could not see a single one of the
+    # units that were actually broken. Bounded generously because it shells out
+    # to audio-check.sh and reads a journal per unit; on a healthy box it takes
+    # a few seconds, and the ceiling is for a box with something wedged.
+    "report-full": (["sudo", "/usr/local/bin/report-full.sh"], 150),
+    # Pull the repo and run the COMMITTED repair script. Still no parameter:
+    # what varies is the commit you pushed. The script it runs must never touch
+    # the listener package - run-repair.sh snapshots it and puts it back if the
+    # repair modified it anyway.
+    "run-repair": (["sudo", "/usr/local/bin/run-repair.sh"], 240),
 }
 
 SCAN_COMMAND = "scan-speakers"
+REPORT_COMMAND = "report-full"
+REPAIR_COMMAND = "run-repair"
+
+# Commands whose real output is a document, not a line. Their body rides its own
+# beacon payload into `pi_reports` rather than `pi_commands.result`, which the
+# server cuts to 2000 characters - and a cut diagnostic hides the exact line
+# somebody went looking for. Same move the scan makes, same reason.
+REPORT_COMMANDS = frozenset({REPORT_COMMAND, REPAIR_COMMAND})
+
+# Refused while a song is playing. Scanning occupies the one antenna the phone's
+# audio and the outbound relay are already sharing; a repair restarts bluetooth
+# and every lockerroom unit, which cuts the music outright. report-full is NOT
+# here on purpose - it is strictly read-only, so there is no reason a DJ should
+# have to stop playing before anyone is allowed to look at the box.
+MID_SONG_REFUSED = frozenset({SCAN_COMMAND, REPAIR_COMMAND})
+
+# What one report may send. The server caps at 64 KiB too; this is the first
+# gate, so a wedged journal does not put a megabyte on the wire every time.
+# A cut is ANNOUNCED, never silent - see TRUNCATION_NOTICE.
+MAX_REPORT_CHARS = 64 * 1024
+TRUNCATION_NOTICE = (
+    "\n\n--- CUT HERE: the report hit the Pi's size limit and the REST IS MISSING ---"
+)
 
 # Where audio-route.sh records what it selected: "<kind>:<card>".
 OUTPUT_STATE_PATH = Path("/run/lockerroom/audio-out")
@@ -114,6 +148,70 @@ def run_command(name: str) -> tuple[bool, str, list[dict] | None]:
     devices = btscan.parse(output)
     n = len(devices)
     return True, f"found {n} device{'' if n == 1 else 's'}", devices
+
+
+def report_payload(
+    name: str, ok: bool, output: str
+) -> tuple[str, dict | None]:
+    """Split a long command's output into a one-line summary and its own payload.
+
+    Same move `run_command` makes for a scan, and for the same reason: the
+    server cuts `pi_commands.result` to 2000 characters, a diagnostic dump is
+    many times that, and a cut dump is worse than no dump because the line
+    somebody went looking for disappears with nothing on screen admitting it.
+    So the body rides its own beacon payload into `pi_reports`, and the result
+    keeps a summary that reads sensibly in the command history.
+
+    A FAILED command still produces a payload. A repair that reported a problem
+    is precisely the log worth reading, and the 2026-09-20 fault would have been
+    diagnosed from a dump whose script exited non-zero.
+
+    Returns (summary, payload) - and (output, None) untouched for every command
+    whose output is already a line rather than a document.
+    """
+    if name not in REPORT_COMMANDS:
+        return output, None
+
+    body = output or "(the command produced no output at all)"
+    if len(body) > MAX_REPORT_CHARS:
+        body = body[: MAX_REPORT_CHARS - len(TRUNCATION_NOTICE)] + TRUNCATION_NOTICE
+
+    kb = len(body) / 1024
+    if name == REPAIR_COMMAND:
+        headline = "repair finished" if ok else "repair reported a problem"
+    else:
+        headline = "full report" if ok else "full report (the script exited non-zero)"
+    summary = f"{headline} - {kb:.1f} KB, open it below"
+
+    return summary, {
+        "kind": name,
+        "at": datetime.now(timezone.utc).isoformat(),
+        "body": body,
+        "ok": ok,
+    }
+
+
+def may_run(name: str, sessions) -> tuple[bool, str]:
+    """Whether now is a reasonable moment to run `name`.
+
+    Generalises the mid-song refusal that scanning already had. A repair
+    restarts bluetooth and every lockerroom unit, so running one under a live
+    song cuts the music outright - a worse outcome than the stutter a scan
+    causes, and the same answer applies.
+
+    report-full is deliberately NOT refused. It is strictly read-only, so
+    nobody should have to wait for a song to end before they are allowed to
+    look at the box - and the moment you most want to look is usually the
+    moment something is playing badly.
+    """
+    if name not in MID_SONG_REFUSED:
+        return True, ""
+    allowed, why = may_scan(sessions)
+    if allowed:
+        return True, ""
+    if name == REPAIR_COMMAND:
+        return False, "refused: a song is playing - a repair restarts bluetooth and would cut it off"
+    return False, why
 
 
 def may_scan(sessions) -> tuple[bool, str]:
@@ -323,6 +421,7 @@ async def beacon_loop(
     """
     pending_result: dict | None = None
     pending_scan: dict | None = None
+    pending_report: dict | None = None
     attentive_deadline: float | None = None
 
     async with httpx.AsyncClient(
@@ -358,6 +457,8 @@ async def beacon_loop(
                     payload["result"] = pending_result
                 if pending_scan is not None:
                     payload["scan"] = pending_scan
+                if pending_report is not None:
+                    payload["report"] = pending_report
                 # What the audio arbiter actually selected, so the admin screen
                 # can show USB / jack / relay rather than guessing from config.
                 output = read_output()
@@ -382,6 +483,7 @@ async def beacon_loop(
                     # so a failed beacon does not lose the outcome.
                     pending_result = None
                     pending_scan = None
+                    pending_report = None
                     body = resp.json() or {}
 
                     # The chosen speaker rides the response as state, not as a
@@ -402,14 +504,17 @@ async def beacon_loop(
                         # while, so the next round trip is seconds not minutes.
                         attentive_deadline = attentive_until()
 
-                        allowed, why = (
-                            may_scan(sessions) if name == SCAN_COMMAND else (True, "")
-                        )
+                        allowed, why = may_run(name, sessions)
                         if not allowed:
-                            ok, out, devices = False, why, None
+                            ok, out, devices, report = False, why, None, None
                         else:
                             # reboot never gets to report back.
                             ok, out, devices = await asyncio.to_thread(run_command, name)
+                            # A dump or a repair log is a document, not a line.
+                            # Split it: the body travels as its own payload, the
+                            # summary stays in the command history. See
+                            # report_payload() and migration 007.
+                            out, report = report_payload(name, ok, out)
                         log.info("command %s -> ok=%s %s", name, ok, out[:200])
                         pending_result = {
                             "id": command.get("id"),
@@ -421,6 +526,8 @@ async def beacon_loop(
                                 "at": datetime.now(timezone.utc).isoformat(),
                                 "devices": devices,
                             }
+                        if report is not None:
+                            pending_report = report
                 else:
                     log.warning("beacon rejected: http %d", resp.status_code)
 
@@ -435,7 +542,9 @@ async def beacon_loop(
             # is half the latency of a command: the result used to wait out a
             # full cycle before being reported.
             if should_report_now(
-                pending=pending_result is not None or pending_scan is not None,
+                pending=pending_result is not None
+                or pending_scan is not None
+                or pending_report is not None,
                 beacon_ok=beacon_ok,
             ):
                 continue

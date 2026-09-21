@@ -40,6 +40,20 @@ interface PiCommand {
   result: string | null;
 }
 
+/**
+ * Long-form output from the box: a diagnostic dump or a repair log.
+ *
+ * Kept apart from PiCommand.result because it IS apart — the server truncates
+ * that column to 2000 characters, so the body travels on its own beacon
+ * payload into `pi_reports`. See backend/migrations/007-remote-diagnostics.sql.
+ */
+interface PiReport {
+  kind: string;
+  collected_at: string;
+  body: string;
+  ok: boolean;
+}
+
 interface BtDevice {
   mac: string;
   // null means the device advertises no name; we show the MAC for these rather
@@ -882,6 +896,11 @@ function Speaker({ call }: { call: Call }) {
   const { confirm, dialog } = useConfirm();
   const [commands, setCommands] = useState<PiCommand[] | null>(null);
   const [allowed, setAllowed] = useState<string[]>([]);
+  const [reports, setReports] = useState<PiReport[]>([]);
+  // Which command rows are expanded. A dump is long, so the history stays a
+  // list of one-liners until somebody asks for one — but "asks for one" has to
+  // be possible, which before 2026-09-21 it was not.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -892,6 +911,12 @@ function Speaker({ call }: { call: Call }) {
         setAllowed(r.allowed);
       })
       .catch(() => setCommands([]));
+    // Separate request because it is separate storage. A failure here must not
+    // blank the command list — the buttons are the half you need when the box
+    // is misbehaving.
+    call<{ reports: PiReport[] }>("/api/admin/pi/reports")
+      .then((r) => setReports(r.reports ?? []))
+      .catch(() => setReports([]));
   }, [call]);
 
   useEffect(load, [load]);
@@ -903,6 +928,19 @@ function Speaker({ call }: { call: Call }) {
         title: "Reboot the speaker?",
         body: "Music stops for about a minute, and whoever is DJing is cut off.",
         confirmLabel: "Reboot",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    // A repair restarts bluetooth and every lockerroom unit. The Pi refuses it
+    // mid-song on its own — the play state lives there, not here — but saying
+    // so before the press is better than a refusal coming back a minute later.
+    if (command === "run-repair") {
+      const ok = await confirm({
+        title: "Run the repair script?",
+        body:
+          "Restarts Bluetooth and the lockerroom services on the speaker. Music stops if anything is playing, and the speaker can show as offline for a few minutes while it runs. It will not touch the listener.",
+        confirmLabel: "Run repair",
         danger: true,
       });
       if (!ok) return;
@@ -956,22 +994,70 @@ function Speaker({ call }: { call: Call }) {
         </div>
       ) : (
         <div className="rows">
-          {commands.slice(0, 6).map((c) => (
-            <div key={c.id} className="row">
-              <span className="row-main">
-                <span className="row-title">{c.command.replace(/-/g, " ")}</span>
-                <span className="row-sub">
-                  {label(c)} · {formatWhen(c.created_at)}
-                  {c.result ? ` · ${c.result.split("\n")[0].slice(0, 40)}` : ""}
-                </span>
-              </span>
-              <button className="btn-quiet" onClick={load}>
-                Refresh
-              </button>
-            </div>
-          ))}
+          {commands.slice(0, 6).map((c) => {
+            /* Until 2026-09-21 this rendered `result.split("\n")[0].slice(0, 40)`,
+               so a command could collect exactly the right answer and still
+               never show it to anyone. That is not a cosmetic bug: on
+               2026-09-20 the service states that WERE collected never reached
+               a human, and the fault took an hour to find. The summary line
+               stays — a history of six one-liners is the right default — but
+               the full result is now one tap away. */
+            const expanded = !!open[c.id];
+            const summary = c.result ? c.result.split("\n")[0] : "";
+            const hasMore =
+              !!c.result && (c.result.includes("\n") || c.result !== summary);
+            return (
+              /* Every row uses the block layout with a flex header, expandable
+                 or not. Visually identical to the old flat row, and it avoids
+                 two different DOM shapes for what is one list. */
+              <div key={c.id} className="row is-expandable">
+                <div className="row-head">
+                  <span className="row-main">
+                    <span className="row-title">{c.command.replace(/-/g, " ")}</span>
+                    <span className="row-sub">
+                      {label(c)} · {formatWhen(c.created_at)}
+                      {summary ? ` · ${summary}` : ""}
+                    </span>
+                  </span>
+                  {hasMore ? (
+                    <button
+                      className="btn-quiet"
+                      onClick={() => setOpen((o) => ({ ...o, [c.id]: !expanded }))}
+                    >
+                      {expanded ? "Hide" : "Show all"}
+                    </button>
+                  ) : (
+                    <button className="btn-quiet" onClick={load}>
+                      Refresh
+                    </button>
+                  )}
+                </div>
+                {hasMore && expanded && <pre className="dump">{c.result}</pre>}
+              </div>
+            );
+          })}
         </div>
       )}
+
+      {/* The long-form output. Its own storage, because `pi_commands.result` is
+          cut to 2000 characters server-side and a truncated dump hides the line
+          you went looking for — see migration 007. Each kind keeps its latest,
+          so a repair log does not overwrite the diagnostic that justified
+          running it; reading the two together is the whole workflow. */}
+      {reports.map((r) => (
+        <div key={r.kind}>
+          <div className="dump-head">
+            <span className="t-label">{r.kind.replace(/-/g, " ")}</span>
+            <span className="dump-when">
+              <span className={r.ok ? "dump-ok" : "dump-bad"}>
+                {r.ok ? "ok" : "reported a problem"}
+              </span>{" "}
+              · {formatWhen(r.collected_at)}
+            </span>
+          </div>
+          <pre className="dump">{r.body}</pre>
+        </div>
+      ))}
     </Section>
   );
 }

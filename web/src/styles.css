@@ -1148,6 +1148,89 @@ input {
 
 
 /* ------------------------------------------------------------------ *
+ * Diagnostic dumps — the Admin screen's Speaker section
+ *
+ * Added 2026-09-21 with `report-full` and `run-repair`. This screen used to
+ * render `result.split("\n")[0].slice(0, 40)`, which meant a command could
+ * collect the right answer and still never show it to anybody — and on
+ * 2026-09-20 it did exactly that, on a box nobody could reach any other way.
+ * The whole point of the new commands is that what comes back is READABLE, on
+ * a phone, standing in a locker room.
+ *
+ * WHY pre-wrap RATHER THAN pre. A dump's unit table is 41 columns, which fits
+ * a 375px screen at 12px monospace with room to spare, so it renders aligned
+ * and un-wrapped. Long journal lines DO wrap, which is right: needing to
+ * scroll sideways to finish reading an error is how a diagnostic gets skimmed
+ * and missed. Alignment where it matters, wrapping where it helps.
+ *
+ * 12px is the bottom step of the type scale (12/14/16/20/25/31) and this is
+ * the one place in the product dense enough to want it. Do not invent a 10px
+ * for it — see the note at the top of the Type section.
+ * ------------------------------------------------------------------ */
+
+.dump {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  /* Tall enough to read a section without scrolling the page away from the
+     controls, short enough that one dump does not bury the next. */
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 8px 0 0;
+  padding: 12px;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--hairline);
+  /* Squarer than --r-card on purpose: this is a terminal, and the card radius
+     on monospace text reads as a mistake. */
+  border-radius: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The header strip above a dump: what it is, when it was collected, and
+   whether the command that produced it succeeded. */
+.dump-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.dump-when {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* A repair that reported a problem is still worth reading — this marks it
+   without hiding it. */
+.dump-bad {
+  color: var(--down-ink);
+  font-weight: 600;
+}
+
+.dump-ok {
+  color: var(--up-ink);
+  font-weight: 600;
+}
+
+/* A command row that can expand to show its whole result. The row keeps its
+   own padding and divider; only the inner layout changes, so an expanded row
+   still sits in the list correctly. */
+.row.is-expandable {
+  display: block;
+}
+
+.row.is-expandable .row-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ------------------------------------------------------------------ *
  * Short-screen overrides.
  *
  * THESE MUST STAY LAST. They were written at the top of the file, above
