@@ -362,3 +362,160 @@ class TestReportPromptly:
         """The result is still pending and will go up on the next attempt. What
         must not happen is retrying with no delay."""
         assert control.should_report_now(pending=True, beacon_ok=False) is False
+
+
+# --------------------------------------------------------------------------- #
+# The escape hatch: report-full and run-repair.
+#
+# Added 2026-09-21, after a fault on 2026-09-20 that took an hour to diagnose
+# and could not be fixed remotely at all. The box was online, beaconing and
+# taking commands; the adapter was UP RUNNING with no PSCAN/ISCAN, so no phone
+# could see it. `report-status` checks three units, none of which were the
+# broken ones, and no allowlisted command could restart the Bluetooth units.
+#
+# These two commands are the general escape hatch, and they are on the same
+# allowlist as everything else — so the invariant tests above (argv lists, per
+# entry timeouts, no interpolation) cover them automatically. That is the point
+# of writing those tests as a loop over ALLOWED.
+# --------------------------------------------------------------------------- #
+
+
+class TestEscapeHatchAllowlist:
+    def test_report_full_is_a_fixed_argv_with_no_arguments(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(control.subprocess, "run", _fake_run(seen))
+        control._run("report-full")
+        assert seen["argv"] == ["sudo", "/usr/local/bin/report-full.sh"]
+
+    def test_run_repair_is_a_fixed_argv_with_no_arguments(self, monkeypatch):
+        """The thing that varies is the COMMIT you pushed, not an argument
+        here. A parameterised repair command would be the shell this allowlist
+        exists to not be."""
+        seen = {}
+        monkeypatch.setattr(control.subprocess, "run", _fake_run(seen))
+        control._run("run-repair")
+        assert seen["argv"] == ["sudo", "/usr/local/bin/run-repair.sh"]
+
+    def test_a_repair_gets_longer_than_a_diagnostic_and_both_beat_uptime(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(control.subprocess, "run", _fake_run(seen))
+        control._run("report-status")
+        status = seen["timeout"]
+        control._run("report-full")
+        report = seen["timeout"]
+        control._run("run-repair")
+        repair = seen["timeout"]
+        assert report > status, "a dump shells out to audio-check.sh and nine journals"
+        assert repair > report, "a repair pulls the repo and restarts eight units"
+
+    def test_no_allowlisted_command_touches_the_listener_package(self):
+        """The listener IS the control channel. Nothing reachable from a button
+        on a web page may write to /opt/lockerroom/lockerroom — a mechanism
+        that can replace the listener can destroy remote access while using it.
+        run-repair.sh enforces this at runtime by snapshotting the package and
+        restoring it; this asserts no argv goes near it in the first place."""
+        for name, (argv, _) in control.ALLOWED.items():
+            for arg in argv:
+                assert "/opt/lockerroom/lockerroom" not in arg, name
+
+    def test_both_new_commands_are_actually_on_the_allowlist(self):
+        for name in control.REPORT_COMMANDS:
+            assert name in control.ALLOWED, f"{name} reports but cannot run"
+
+
+# --------------------------------------------------------------------------- #
+# A dump is a document, not a line. It rides its own beacon payload into
+# `pi_reports` rather than pi_commands.result, which the server cuts to 2000
+# characters — the same split a scan makes, for the same reason.
+# --------------------------------------------------------------------------- #
+
+
+class TestReportPayload:
+    def test_the_body_travels_whole_and_the_summary_stays_short(self):
+        body = "AuxGoat full report\n" + ("x" * 5000)
+        summary, report = control.report_payload("report-full", True, body)
+
+        assert report is not None
+        assert report["body"] == body, "the dump must arrive intact — that is the feature"
+        assert report["kind"] == "report-full"
+        assert report["ok"] is True
+        assert len(summary) < 80, "the command history row is one line on a phone"
+        assert len(summary[:2000]) == len(summary), "the summary must survive the cut"
+
+    def test_a_failed_command_still_sends_its_body(self):
+        """A repair that reported a problem is precisely the log worth reading,
+        and the 2026-09-20 fault would have been diagnosed from a dump whose
+        script exited non-zero."""
+        summary, report = control.report_payload("run-repair", False, "restart failed")
+        assert report is not None
+        assert report["body"] == "restart failed"
+        assert report["ok"] is False
+        assert "problem" in summary
+
+    def test_a_normal_command_is_left_completely_alone(self):
+        summary, report = control.report_payload("report-status", True, "up 4 minutes")
+        assert report is None
+        assert summary == "up 4 minutes"
+
+    def test_an_oversized_body_is_cut_but_never_silently(self):
+        """Silent truncation is the exact failure this whole payload exists to
+        stop repeating. A cut says so, in the body, where the person reading
+        the dump on their phone will see it."""
+        summary, report = control.report_payload(
+            "report-full", True, "y" * (control.MAX_REPORT_CHARS + 5000)
+        )
+        assert report is not None
+        assert len(report["body"]) <= control.MAX_REPORT_CHARS
+        assert "REST IS MISSING" in report["body"]
+
+    def test_no_output_at_all_is_said_rather_than_sent_as_empty(self):
+        """An empty body would store as nothing and read on screen as though
+        the command had never run."""
+        _, report = control.report_payload("report-full", True, "")
+        assert report is not None
+        assert "no output" in report["body"]
+
+
+# --------------------------------------------------------------------------- #
+# Mid-song refusal, generalised from scanning.
+# --------------------------------------------------------------------------- #
+
+
+class TestMayRun:
+    def test_a_repair_is_refused_while_a_song_is_playing(self):
+        """A repair restarts bluetooth and every lockerroom unit, which cuts
+        the music outright — worse than the stutter a scan causes."""
+        ok, why = control.may_run(
+            "run-repair", FakeSessions({"id": "p1", "status": "playing"})
+        )
+        assert ok is False
+        assert "playing" in why.lower()
+
+    def test_a_scan_is_still_refused_while_a_song_is_playing(self):
+        ok, _ = control.may_run(
+            "scan-speakers", FakeSessions({"id": "p1", "status": "playing"})
+        )
+        assert ok is False
+
+    def test_a_read_only_report_is_allowed_mid_song(self):
+        """report-full writes nothing and restarts nothing. The moment you most
+        want to look at the box is usually the moment something is playing
+        badly, so making a DJ stop first would be backwards."""
+        ok, _ = control.may_run(
+            "report-full", FakeSessions({"id": "p1", "status": "playing"})
+        )
+        assert ok is True
+
+    def test_everything_is_allowed_when_nothing_is_playing(self):
+        for name in control.ALLOWED:
+            assert control.may_run(name, FakeSessions(None))[0] is True, name
+
+    def test_a_broken_play_state_does_not_block_a_repair(self):
+        """Fails open, the same way may_scan does: a broken read must not be
+        the thing that stops someone fixing an unreachable box."""
+
+        class Boom:
+            def open_play_state(self):
+                raise RuntimeError("nope")
+
+        assert control.may_run("run-repair", Boom())[0] is True

@@ -158,6 +158,30 @@ CREATE TABLE IF NOT EXISTS bt_devices (
   scanned_at TEXT NOT NULL
 );
 
+-- Long-form output from the box: the diagnostic dump and the repair log.
+--
+-- Exists for the same reason bt_devices does. `pi_commands.result` is truncated
+-- to 2000 characters by the beacon handler, and a full diagnostic dump is many
+-- times that - so the body rides its own beacon payload into here instead. A
+-- TRUNCATED dump is worse than none: the line you went looking for vanishes
+-- with nothing on screen admitting it was dropped, which is how 2026-09-20 cost
+-- an hour on a box nobody could reach any other way.
+--
+-- Keyed by kind, so a repair log does not overwrite the diagnostic that
+-- justified running it - reading the two side by side is the whole workflow.
+-- Within a kind it is a snapshot, not a log. See migration 007 and
+-- src/piReports.ts.
+CREATE TABLE IF NOT EXISTS pi_reports (
+  kind         TEXT PRIMARY KEY,   -- 'report-full' | 'run-repair'
+  -- When the PI collected it, not when we stored it. On a box being repaired
+  -- the gap between those two is the interesting part.
+  collected_at TEXT NOT NULL,
+  -- Bounded at 64 KiB server-side, and a cut is ANNOUNCED inside the body.
+  body         TEXT NOT NULL,
+  -- A repair that failed is still worth storing: it is the log that says why.
+  ok           INTEGER NOT NULL DEFAULT 1
+);
+
 -- Operator-set values that must outlive a deploy. Currently the team colour
 -- and team name (spec 9.2: "one configurable team-color token that the
 -- operator sets once"). A table rather than a Worker secret because the admin

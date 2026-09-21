@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { normalize } from "./trackKey";
 import { PI_COMMANDS, isPiCommand, normaliseMac, OFFLINE_AFTER_MS } from "./piControl";
+import { listReports } from "./piReports";
 import {
   listDevices,
   getSelection,
@@ -357,6 +358,18 @@ admin.get("/api/admin/pi/commands", async (c) => {
        FROM pi_commands ORDER BY created_at DESC LIMIT 20`,
   ).all();
   return c.json({ commands: results, allowed: PI_COMMANDS });
+});
+
+/**
+ * The long-form output `report-full` and `run-repair` send up.
+ *
+ * Separate from /pi/commands because it is separate storage, for the reason
+ * migration 007 records: a diagnostic dump does not fit in the 2000 characters
+ * `pi_commands.result` keeps, and cutting it loses precisely the line that was
+ * worth collecting.
+ */
+admin.get("/api/admin/pi/reports", async (c) => {
+  return c.json({ reports: await listReports(c.env) });
 });
 
 admin.post("/api/admin/pi/commands", async (c) => {

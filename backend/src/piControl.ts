@@ -26,6 +26,23 @@ export const PI_COMMANDS = [
   // a speaker is state, and travels as a `settings` row on the beacon response
   // instead. See docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md.
   "scan-speakers",
+  // Read-only diagnostic dump: is-active AND is-enabled for every lockerroom
+  // unit, `hciconfig hci0`, audio-check.sh, the network, and recent journal
+  // lines. Built after 2026-09-20, when the box stopped accepting pairings and
+  // `report-status` could not see any of the units that were actually broken.
+  //
+  // Its body does NOT come back in pi_commands.result, which is truncated to
+  // 2000 characters. It rides its own beacon payload into `pi_reports`, the
+  // way a scan rides into bt_devices. See migration 007.
+  "report-full",
+  // Pull the repo on the Pi and run the COMMITTED repair script at a fixed
+  // path. Still no parameter: the thing you are varying is the commit you
+  // pushed, not an argument on this list.
+  //
+  // It must never touch the listener package — the listener IS this control
+  // channel, and a mechanism that can replace it can destroy remote access
+  // while using it. The Pi enforces that, not us. See pi/scripts/run-repair.sh.
+  "run-repair",
 ] as const;
 export type PiCommand = (typeof PI_COMMANDS)[number];
 

@@ -21,6 +21,7 @@ import { admin } from "./admin";
 import { theme } from "./theme";
 import { runBackup } from "./backup";
 import { parseScan, replaceDevices, getSelection } from "./speakers";
+import { parseReport, storeReport } from "./piReports";
 import { speakerRoutes } from "./speakerRoutes";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
@@ -329,6 +330,10 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       // which is truncated to 2000 characters below - a room with thirty
       // phones overflows that, and a truncated device list is worse than none.
       scan?: { at?: string; devices?: unknown };
+      // A diagnostic dump or a repair log. Its own payload for the same reason
+      // `scan` is: the result field below is cut to 2000 characters, and a
+      // truncated dump hides the line you went looking for. See piReports.ts.
+      report?: { kind?: string; at?: string; body?: string; ok?: boolean };
       // Whether the chosen speaker is actually playing, and why not when it is
       // not. A selection that stores fine and then fails to connect is the
       // likeliest thing to happen in a locker room.
@@ -371,6 +376,14 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       parseScan(body.scan.devices),
       typeof body.scan.at === "string" ? body.scan.at : nowIso(),
     );
+  }
+
+  // A full diagnostic dump or a repair log, stored whole. Replaced per kind, so
+  // a repair's log does not overwrite the diagnostic that justified running it.
+  // Anything malformed is dropped rather than stored - parseReport is the gate.
+  if (body.report) {
+    const report = parseReport(body.report);
+    if (report) await storeReport(c.env, report);
   }
 
   // What the box is actually playing through, so the admin screen can say so

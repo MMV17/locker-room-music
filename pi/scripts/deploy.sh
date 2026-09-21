@@ -59,6 +59,18 @@ scp -q "${REPO_ROOT}/pi/scripts/btwatch.sh" "${PI_HOST}:/tmp/btwatch.sh"
 # logic lives in a script rather than as a command string.
 scp -q "${REPO_ROOT}/pi/scripts/bt-scan.sh" "${PI_HOST}:/tmp/bt-scan.sh"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-btwatch.service" "${PI_HOST}:/tmp/lockerroom-btwatch.service"
+# The remote escape hatch, added 2026-09-21. NEITHER of these can be deployed
+# wirelessly - this script needs SSH, and on campus TCP/22 is filtered - so they
+# ship over the serial console or the USB-C ethernet cable, once. After that
+# they are what lets the box be seen and fixed over the 443 beacon.
+#
+# report-full.sh is read-only. run-repair.sh pulls the repo and runs the
+# committed repair script, and is the only one with teeth: it snapshots
+# /opt/lockerroom/lockerroom before the repair and restores it afterwards if the
+# repair modified it, because the listener IS the control channel.
+scp -q "${REPO_ROOT}/pi/scripts/report-full.sh" "${PI_HOST}:/tmp/report-full.sh"
+scp -q "${REPO_ROOT}/pi/scripts/run-repair.sh" "${PI_HOST}:/tmp/run-repair.sh"
+scp -q "${REPO_ROOT}/pi/scripts/remote-repair.sh" "${PI_HOST}:/tmp/remote-repair.sh"
 
 ssh "${PI_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
@@ -75,6 +87,8 @@ sudo install -m 755 /tmp/audio-check.sh /usr/local/bin/audio-check.sh
 sudo install -m 755 /tmp/audio-route.sh /usr/local/bin/audio-route.sh
 sudo install -m 755 /tmp/btwatch.sh /usr/local/bin/btwatch.sh
 sudo install -m 755 /tmp/bt-scan.sh /usr/local/bin/bt-scan.sh
+sudo install -m 755 /tmp/report-full.sh /usr/local/bin/report-full.sh
+sudo install -m 755 /tmp/run-repair.sh /usr/local/bin/run-repair.sh
 sudo mv /tmp/lockerroom-btwatch.service /etc/systemd/system/lockerroom-btwatch.service
 sudo mv /tmp/lockerroom-audio-route.service /etc/systemd/system/lockerroom-audio-route.service
 sudo mv /tmp/99-lockerroom-audio.rules /etc/udev/rules.d/99-lockerroom-audio.rules
@@ -86,6 +100,25 @@ sudo udevadm control --reload-rules
 # re-points it within a second of the next connection either way.
 sudo mkdir -p /etc/systemd/system/bluealsa-aplay.service.d
 sudo mv /tmp/bluealsa-aplay-aux.conf /etc/systemd/system/bluealsa-aplay.service.d/aux.conf
+# run-repair.sh runs the repair script from a git clone at a FIXED path, so that
+# pushing a commit is how a fix reaches a box nobody can reach. The clone cannot
+# be created from here - it needs the Pi's own credentials for GitHub over 443,
+# since port 22 is filtered on campus - so seed the script directly when there
+# is no clone yet. run-repair.sh handles that case on purpose: it reports
+# loudly that it could not pull and runs what is on disk anyway, because
+# refusing to run the last-known repair because the network is also unwell
+# would make the button useless exactly when it is needed.
+if [ -d /opt/lockerroom/repo/.git ]; then
+  echo "== repair: git clone present, pulls will manage remote-repair.sh =="
+else
+  echo "== repair: NO git clone at /opt/lockerroom/repo =="
+  echo "   Seeding the committed repair script directly. run-repair will work,"
+  echo "   but it cannot pick up NEW commits until the clone exists. To finish:"
+  echo "     sudo git clone ssh://git@ssh.github.com:443/MMV17/locker-room-music.git \\"
+  echo "       /opt/lockerroom/repo && sudo chown -R pi:pi /opt/lockerroom/repo"
+  sudo mkdir -p /opt/lockerroom/repo/pi/scripts
+  sudo install -m 755 /tmp/remote-repair.sh /opt/lockerroom/repo/pi/scripts/remote-repair.sh
+fi
 sudo systemctl daemon-reload
 # Route the audio BEFORE restarting the player, so the restart below lands on
 # the right card either way. `enable` so a speaker plugged in before power-on
@@ -131,6 +164,15 @@ systemctl is-active lockerroom-netwatch
 systemctl is-active bt-agent
 systemctl is-active keep-discoverable
 systemctl is-active lockerroom-btwatch
+
+# The escape hatch, verified as installed rather than assumed. A command on the
+# allowlist whose script is missing fails at the moment somebody is standing in
+# a locker room needing it to work.
+echo "== remote escape hatch =="
+for f in /usr/local/bin/report-full.sh /usr/local/bin/run-repair.sh \
+         /opt/lockerroom/repo/pi/scripts/remote-repair.sh; do
+  if [ -x "$f" ]; then echo "   ok      $f"; else echo "   MISSING $f"; fi
+done
 
 # Audio output drift check. This VERIFICATION is read-only; it diagnoses and
 # never fixes.
