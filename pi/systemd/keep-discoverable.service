@@ -5,6 +5,27 @@ Requires=bluetooth.service
 
 [Service]
 Type=simple
+# Clear any rfkill soft block BEFORE trying to make the adapter discoverable.
+#
+# On 2026-09-21 the box was deaf for nine hours with every unit green: hci0
+# DOWN, "Powered: no", and the only line that explained it was
+# "Soft blocked: yes". bluetoothctl cannot clear that, so this script's whole
+# loop - power on, discoverable on, pairable on - failed silently 6,500 times
+# while logging "Failed to set mode: Failed (0x03)" every five seconds.
+#
+# There are TWO ways a block gets onto a freshly registered adapter and this
+# covers both, which is why it is here rather than a systemd-rfkill mask:
+#
+#   1. systemd-rfkill restores the state it saved for that platform name, and
+#      btwatch's unbind/rebind creates a NEW device every time it recovers.
+#   2. The device comes up blocked on its own - seen on a stock Trixie flash
+#      on 2026-08-19, first boot, with no saved state to restore. See
+#      provision.sh, which unblocks once for exactly this reason.
+#
+# This unit restarts at boot AND on every btwatch recovery, so it is the one
+# place that covers both. The leading `-` means a failure here never stops the
+# unit starting: an unblock that cannot run must not also cost us the loop.
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
 ExecStart=/usr/local/bin/keep-discoverable.sh
 Restart=always
 RestartSec=2

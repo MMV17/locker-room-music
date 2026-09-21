@@ -63,6 +63,10 @@ PAYLOAD = [
     ("pi/scripts/report-full.sh",  "/usr/local/bin/report-full.sh",           "755"),
     ("pi/scripts/run-repair.sh",   "/usr/local/bin/run-repair.sh",            "755"),
     ("pi/scripts/btwatch.sh",      "/usr/local/bin/btwatch.sh",               "755"),
+    # A systemd unit, not a script. It needs a daemon-reload before its restart
+    # means anything, which the restart block below does.
+    ("pi/systemd/keep-discoverable.service",
+     "/etc/systemd/system/keep-discoverable.service", "644"),
 ]
 
 # remote-repair.sh is handled separately: it only gets seeded when there is no
@@ -273,12 +277,18 @@ def main() -> int:
             # - the same trap that made every netwatch deploy a no-op until
             # 2026-08-09". A deploy that installs a fix and leaves the broken
             # process running is worse than no deploy, because it reads as done.
-            for unit in ("lockerroom-btwatch", "lockerroom-listener"):
+            # A changed unit file is inert until systemd re-reads it. Without
+            # this the restart below relaunches the OLD definition and the
+            # deploy reads as successful.
+            log("  daemon-reload (a unit file changed)...")
+            run(s, "sudo systemctl daemon-reload", timeout=45)
+            units = ("keep-discoverable", "lockerroom-btwatch", "lockerroom-listener")
+            for unit in units:
                 log(f"  restarting {unit}...")
                 run(s, f"sudo systemctl restart {unit}", timeout=45)
             time.sleep(3)
             failed = []
-            for unit in ("lockerroom-btwatch", "lockerroom-listener"):
+            for unit in units:
                 state = run(s, f"systemctl is-active {unit}")
                 log(f"    {unit}: {state}")
                 if "active" not in state:

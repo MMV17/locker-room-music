@@ -205,3 +205,37 @@ class TestBackoff:
                   BTWATCH_BACKOFF_AFTER="never", BTWATCH_BACKOFF_S="9999",
                   BTWATCH_INTERVAL_S="0")
         assert "integer expression expected" not in r["out"]
+
+
+# --------------------------------------------------------------------------- #
+# The boot-time unblock.
+#
+# This one IS an assertion about file content, deliberately: a systemd unit is
+# configuration, not code, and there is no behaviour to drive. The thing that
+# must stay true is that SOMETHING clears an rfkill block before
+# keep-discoverable starts trying to make the adapter discoverable - because
+# bluetoothctl cannot, and its loop otherwise fails silently every 5 seconds.
+# --------------------------------------------------------------------------- #
+
+KEEP_DISC_UNIT = Path(__file__).resolve().parents[1] / "systemd" / "keep-discoverable.service"
+
+
+class TestBootTimeUnblock:
+    def test_the_unit_clears_a_soft_block_before_it_starts(self):
+        body = KEEP_DISC_UNIT.read_text()
+        pre = [l for l in body.splitlines() if l.startswith("ExecStartPre=")]
+        assert pre, "nothing unblocks the radio before keep-discoverable runs"
+        assert any("rfkill unblock" in l for l in pre)
+
+    def test_the_unblock_cannot_stop_the_unit_starting(self):
+        """`-` prefix. An unblock that fails - no rfkill installed, say - must
+        not also cost us the discoverable loop."""
+        pre = [l for l in KEEP_DISC_UNIT.read_text().splitlines()
+               if l.startswith("ExecStartPre=") and "rfkill" in l]
+        assert all(l.split("=", 1)[1].startswith("-") for l in pre)
+
+    def test_it_uses_an_absolute_path(self):
+        """systemd does not search PATH, and rfkill is in /usr/sbin."""
+        pre = [l for l in KEEP_DISC_UNIT.read_text().splitlines()
+               if l.startswith("ExecStartPre=") and "rfkill" in l]
+        assert all("/usr/sbin/rfkill" in l for l in pre)
