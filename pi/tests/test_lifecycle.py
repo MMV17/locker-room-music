@@ -356,6 +356,78 @@ async def test_duration_watchdog_close_actually_reaches_the_outbox():
 
 
 @pytest.mark.asyncio
+async def test_duration_watchdog_does_not_close_a_paused_song(monkeypatch):
+    """Found 2026-09-08. The duration watchdog sleeps for the song's duration
+    plus a buffer and then closes the play, counting WALL-CLOCK time from the
+    moment the song started. Pausing does not cancel it, suspend it, or rearm
+    it: _status_changed cancels transport_timer and arms pause_timer, and
+    leaves duration_timer running.
+
+    So a song paused a few seconds in was closed by this timer while it was
+    still sitting on the speaker with most of its audio unplayed - ending the
+    play record, closing the vote window, and releasing aux ownership for a
+    song nobody had finished listening to.
+
+    The server-side half of this was fixed on 2026-08-31: voteWindowClosesAt
+    holds the window open on the Pi's keepalive precisely so a pause does not
+    expire voting. That fix cannot help here, because the Pi sends an explicit
+    ended_at and the server believes it.
+
+    _transport_idle_watchdog twelve lines below already has exactly the guard
+    this needed - `if play.status == "paused": leave it open`."""
+    from datetime import timedelta
+    monkeypatch.setattr(lifecycle_mod, "DURATION_BUFFER", timedelta(seconds=0.1))
+
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    # A 200ms song, so the watchdog's wall-clock deadline is ~300ms away.
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore", duration=200), 0)
+    await settle()
+    await mgr.on_status_changed(DEV, "paused")
+
+    # Well past that deadline in wall-clock terms, and nowhere near PAUSE_GRACE
+    # (60s, deliberately not shrunk), so nothing else should have closed it.
+    await asyncio.sleep(0.5)
+
+    assert store.closed() == [], (
+        "a paused song must not be closed by the duration watchdog - it is "
+        "still on the speaker with audio left to play"
+    )
+
+
+@pytest.mark.asyncio
+async def test_duration_watchdog_still_closes_the_song_after_it_resumes(monkeypatch):
+    """The other half of the fix: not closing a paused song must not mean never
+    closing it. Once playback resumes, the watchdog owes the song the play time
+    it had left, and must then close it as it always did."""
+    from datetime import timedelta
+    monkeypatch.setattr(lifecycle_mod, "DURATION_BUFFER", timedelta(seconds=0.1))
+    # The watchdog notices a resume on its next look, and this test is not
+    # willing to wait the production second for it.
+    monkeypatch.setattr(lifecycle_mod, "DURATION_PAUSE_POLL", timedelta(seconds=0.05))
+
+    store = FakeStore()
+    mgr = SessionManager(store)
+    await connect(mgr)
+
+    await mgr.on_track_changed(DEV, track("Decode", "Paramore", duration=200), 0)
+    await settle()
+    await mgr.on_status_changed(DEV, "paused")
+    await asyncio.sleep(0.4)
+    assert store.closed() == [], "still paused, so still open"
+
+    await mgr.on_status_changed(DEV, "playing")
+    # 200ms of song plus a 100ms buffer, all of it still owed.
+    await asyncio.sleep(0.6)
+
+    assert len(store.closed()) == 1, (
+        "once it resumes and plays out its remaining time, the song closes"
+    )
+
+
+@pytest.mark.asyncio
 async def test_concurrent_track_changes_open_only_one_play():
     """Regression from production, 2026-08-05. BluezWatcher fires every
     PropertiesChanged into its own task. on_track_changed read current_play,

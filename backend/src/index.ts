@@ -12,6 +12,16 @@ import {
 } from "./crypto";
 import { trackKey, normalize } from "./trackKey";
 import { isVoteWindowOpen, voteWindowClosesAt, presentablePlay } from "./voteWindow";
+import { activeSessionUserId } from "./session";
+import {
+  clientAddress,
+  throttleCheck,
+  throttleNoteFailure,
+  throttleClear,
+  ADMIN_POLICY,
+  TEAM_CODE_POLICY,
+} from "./throttle";
+import type { SessionRow } from "./session";
 import { trackScore } from "./scoring";
 import { lookupArtwork } from "./artwork";
 import { freshCountdown } from "./auxCountdown";
@@ -61,13 +71,22 @@ const requireSession = async (c: any, next: any) => {
 
   const db: D1Database = c.env.DB;
   const tokenHash = await hashToken(token);
+  // LEFT JOIN, not JOIN: a token pointing at a missing user must reach
+  // activeSessionUserId as a null flag and be refused there, rather than
+  // vanishing into an empty result that reads the same as a bad cookie.
   const row = await db
-    .prepare("SELECT user_id FROM device_tokens WHERE token_hash = ?")
+    .prepare(
+      `SELECT t.user_id, u.active
+         FROM device_tokens t
+         LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.token_hash = ?`,
+    )
     .bind(tokenHash)
-    .first<{ user_id: string }>();
-  if (!row) return c.json({ error: "Not signed in" }, 401);
+    .first<SessionRow>();
+  const userId = activeSessionUserId(row);
+  if (!userId) return c.json({ error: "Not signed in" }, 401);
 
-  c.set("userId", row.user_id);
+  c.set("userId", userId);
   await db
     .prepare("UPDATE device_tokens SET last_seen_at = ? WHERE token_hash = ?")
     .bind(nowIso(), tokenHash)
@@ -76,10 +95,27 @@ const requireSession = async (c: any, next: any) => {
 };
 
 const requireAdmin = async (c: any, next: any) => {
+  const db: D1Database = c.env.DB;
+  const bucket = `admin:${clientAddress(c.req)}`;
+
+  // Checked BEFORE the comparison, so a blocked address never learns whether
+  // its guess was right. This Worker previously took unlimited guesses at the
+  // password that gates roster deletion and the speaker; see src/throttle.ts.
+  const gate = await throttleCheck(db, bucket, ADMIN_POLICY);
+  if (gate.blocked) {
+    return c.json({ error: "Too many attempts" }, 429, {
+      "Retry-After": String(gate.retryAfter),
+    });
+  }
+
   const pw = c.req.header("X-Admin-Password") ?? "";
   if (!c.env.ADMIN_PASSWORD || !safeEqual(pw, c.env.ADMIN_PASSWORD)) {
+    await throttleNoteFailure(db, bucket, ADMIN_POLICY);
     return c.json({ error: "Unauthorized" }, 401);
   }
+
+  // Getting it right forgives the misses that came before it.
+  await throttleClear(db, bucket);
   await next();
 };
 
@@ -460,6 +496,15 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
  * be used to enumerate players.
  */
 app.post("/api/session/check-code", async (c) => {
+  const db: D1Database = c.env.DB;
+  const bucket = `code:${clientAddress(c.req)}`;
+  const gate = await throttleCheck(db, bucket, TEAM_CODE_POLICY);
+  if (gate.blocked) {
+    return c.json({ error: "Too many attempts" }, 429, {
+      "Retry-After": String(gate.retryAfter),
+    });
+  }
+
   const body = await c.req
     .json<{ team_code?: string }>()
     .catch((): { team_code?: string } => ({}));
@@ -469,12 +514,25 @@ app.post("/api/session/check-code", async (c) => {
       normalizeTeamCode(c.env.TEAM_CODE),
     )
   ) {
+    await throttleNoteFailure(db, bucket, TEAM_CODE_POLICY);
     return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
   }
+  // The right code clears the slate, so a squad sharing one NAT never
+  // accumulates its way into a lockout.
+  await throttleClear(db, bucket);
   return c.body(null, 204);
 });
 
 app.post("/api/session", async (c) => {
+  const db: D1Database = c.env.DB;
+  const codeBucket = `code:${clientAddress(c.req)}`;
+  const gate = await throttleCheck(db, codeBucket, TEAM_CODE_POLICY);
+  if (gate.blocked) {
+    return c.json({ error: "Too many attempts" }, 429, {
+      "Retry-After": String(gate.retryAfter),
+    });
+  }
+
   const body = await c.req.json<{
     team_code: string;
     first_name: string;
@@ -494,8 +552,13 @@ app.post("/api/session", async (c) => {
       normalizeTeamCode(c.env.TEAM_CODE),
     )
   ) {
+    await throttleNoteFailure(db, codeBucket, TEAM_CODE_POLICY);
     return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
   }
+  // Only a WRONG code counts. Everything past this point - a missing name, a
+  // deactivated player - is a legitimate visitor who got the code right, and
+  // must not be counted toward a lockout.
+  await throttleClear(db, codeBucket);
 
   const first = (body.first_name ?? "").trim();
   const last = (body.last_name ?? "").trim();
@@ -548,6 +611,41 @@ app.post("/api/session", async (c) => {
     ok: true,
     user: { id: user.id, name: `${user.first_name} ${user.last_name}`.trim() },
   });
+});
+
+/**
+ * Hand the phone back.
+ *
+ * Settings has always offered "Not you? / Change", and until 2026-09-08 it
+ * navigated to /join - a route the app only renders when signedIn is false, so
+ * it fell straight through to Now Playing with the same account still loaded.
+ * There was nothing to call: no endpoint had ever been written.
+ *
+ * The token is deleted SERVER-side rather than only cleared from this browser.
+ * Clearing the cookie alone would leave a working session sitting in the
+ * database, and these are shared locker-room phones.
+ *
+ * Deliberately NOT behind requireSession: signing out has to succeed when the
+ * session is already gone, or a stale cookie strands somebody on an error they
+ * have no way to clear.
+ */
+app.post("/api/session/signout", async (c) => {
+  const token = getCookie(c, "lr_token");
+  if (token) {
+    await c.env.DB.prepare("DELETE FROM device_tokens WHERE token_hash = ?")
+      .bind(await hashToken(token))
+      .run();
+  }
+  // Same attributes as the cookie that was set, which is what makes the
+  // browser replace it rather than keep both.
+  setCookie(c, "lr_token", "", {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 0,
+  });
+  return c.json({ ok: true });
 });
 
 /**

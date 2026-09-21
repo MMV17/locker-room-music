@@ -1,5 +1,18 @@
 import type { PlayRow } from "./types";
 
+/**
+ * The only columns the vote-window rule actually reads.
+ *
+ * PlayRow satisfies this structurally, so every existing caller is unaffected.
+ * It exists so the leaderboard queries - which select per-play window columns
+ * alongside track and DJ fields, and never build a whole PlayRow - can ask the
+ * same question rather than re-deriving the rule in SQL.
+ */
+export type VoteWindowPlay = Pick<
+  PlayRow,
+  "started_at" | "ended_at" | "duration_ms" | "voided" | "keepalive_at"
+>;
+
 /** Grace after a play ends, for sync lag and slow thumbs (spec 6.3). */
 export const VOTE_GRACE_MS = 30_000;
 
@@ -26,7 +39,7 @@ export const KEEPALIVE_STALE_MS = 150_000;
  * stops a window hanging open forever when the Pi dies mid-song, which is
  * what spec 6.3 wrote it for.
  */
-export function voteWindowClosesAt(play: PlayRow, now: number = Date.now()): number {
+export function voteWindowClosesAt(play: VoteWindowPlay, now: number = Date.now()): number {
   if (play.ended_at) {
     return Date.parse(play.ended_at) + VOTE_GRACE_MS;
   }
@@ -45,9 +58,28 @@ export function voteWindowClosesAt(play: PlayRow, now: number = Date.now()): num
   return wallClockFallback;
 }
 
-export function isVoteWindowOpen(play: PlayRow, now: number = Date.now()): boolean {
+export function isVoteWindowOpen(play: VoteWindowPlay, now: number = Date.now()): boolean {
   if (play.voided) return false;
   return now < voteWindowClosesAt(play, now);
+}
+
+/**
+ * Whether this play's votes may appear in a public aggregate.
+ *
+ * Spec 6.3 in one place. Every endpoint that publishes a derivative of vote
+ * data - the track board, the DJ board, history - asks this and nothing else,
+ * so the rule cannot drift apart between them again. It did: the boards
+ * filtered on `counted = 1 AND voided = 0`, and `counted` DEFAULTS to 1 at
+ * INSERT, so a song still on the speaker was already being published. See
+ * test/tallyVisibility.test.ts for the arithmetic that made it a full leak.
+ *
+ * NOT the same as `!isVoteWindowOpen`. That is false for a voided play - its
+ * window is not open - which negates to "safe to publish", the exact opposite
+ * of what a voided play deserves.
+ */
+export function tallyVisible(play: VoteWindowPlay, now: number = Date.now()): boolean {
+  if (play.voided) return false;
+  return !isVoteWindowOpen(play, now);
 }
 
 /**

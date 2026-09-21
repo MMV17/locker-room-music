@@ -58,7 +58,7 @@ export function App() {
       ) : route === "/claim" ? (
         <Claim />
       ) : route === "/settings" ? (
-        <Settings />
+        <Settings onSignedOut={() => setSignedIn(false)} />
       ) : (
         <NowPlaying teamName={theme.team_name} />
       )}

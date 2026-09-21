@@ -22,6 +22,11 @@ MIN_PLAY_GRACE = timedelta(seconds=2)
 SKIP_THRESHOLD_MS = 30_000
 PAUSE_GRACE = timedelta(seconds=60)
 DURATION_BUFFER = timedelta(seconds=5)
+# How often the duration watchdog looks again while playback is PAUSED. Played
+# time is frozen then, so there is no deadline to sleep until and the watchdog
+# has to wait for a resume. A local asyncio sleep with no I/O behind it, and
+# bounded by PAUSE_GRACE closing the play anyway.
+DURATION_PAUSE_POLL = timedelta(seconds=1)
 # How long to wait after the A2DP transport goes idle before believing it
 # means "stopped". BlueZ delivers the transport's State and the player's
 # Status as two independent signals with no ordering guarantee, so on a pause
@@ -843,8 +848,37 @@ class SessionManager:
             )
 
     async def _duration_watchdog(self, session: Session, play: Play, duration_ms: int) -> None:
+        """Close a song once it has actually PLAYED its duration.
+
+        This used to be a single sleep of duration + buffer, measured from the
+        moment the song started - wall-clock time, which keeps running while
+        playback is paused. Pausing cancels transport_timer and arms
+        pause_timer, and never touched this one, so a song paused a few seconds
+        in was closed by this timer with most of its audio unplayed: the play
+        record ended, the vote window shut and aux ownership was released for a
+        song still sitting on the speaker. Found 2026-09-08, with a 200ms
+        fixture closing at played_ms=61.
+
+        The deadline is now measured in PLAYED milliseconds, which
+        played_ms_at() freezes while paused, so a pause suspends the countdown
+        and resuming resumes it. A song left paused forever is still closed -
+        by _pause_watchdog after PAUSE_GRACE, which is the timer that owns that
+        case.
+        """
+        target_ms = duration_ms + DURATION_BUFFER.total_seconds() * 1000
         try:
-            await asyncio.sleep(duration_ms / 1000 + DURATION_BUFFER.total_seconds())
+            while True:
+                if play.closed:
+                    return
+                if play.status == "paused":
+                    # played_ms_at() is frozen, so there is no deadline to sleep
+                    # until - wait for playback to resume and look again.
+                    await asyncio.sleep(DURATION_PAUSE_POLL.total_seconds())
+                    continue
+                remaining_ms = target_ms - play.played_ms_at(now())
+                if remaining_ms <= 0:
+                    break
+                await asyncio.sleep(remaining_ms / 1000)
         except asyncio.CancelledError:
             return
         async with self._lock:

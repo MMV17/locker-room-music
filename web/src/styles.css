@@ -535,64 +535,6 @@ input {
   display: block;
 }
 
-/* Short viewports — an iPhone SE at 375x667, or any small phone once Safari's
-   URL bar is showing. Shrinking only the artwork is not enough there: what
-   does not fit is the fixed furniture, so all of it gives a little. Measured
-   at 375x667 the thumbs sat 33px behind the tab bar; with this they clear it
-   by 58px and nothing scrolls.
-
-   Below roughly 600px of height it does scroll again, and that is the right
-   answer — there is no honest way to fit artwork, three lines of metadata, a
-   DJ chip, a progress bar, a status line and two 84px targets into less.
-
-   The 58px above is stale: measured again at 375x667 on 2026-09-02 it is 29px,
-   and it was 30px before the type scale and spacing grid landed. The screen
-   has gained a status line and a countdown since that number was written. It
-   is recorded here because it is the real headroom — anything added to this
-   screen now costs almost exactly what it is worth. */
-@media (max-height: 700px) {
-  .np {
-    gap: 8px;
-  }
-
-  .np-art {
-    width: min(46vw, 184px, 27svh);
-  }
-
-  .t-title {
-    font-size: 20px;
-  }
-
-  .t-sub {
-    font-size: 14px;
-  }
-
-  .np-album {
-    font-size: 12px;
-    margin-top: 4px;
-  }
-
-  .dj-chip {
-    padding: 4px 12px 4px 4px;
-  }
-
-  .vote {
-    width: 84px;
-    height: 84px;
-  }
-
-  .vote svg {
-    width: 34px;
-    height: 34px;
-  }
-
-  /* Half the separation rather than none — a short screen still needs the
-     break between reading and acting, it just cannot afford all of it. */
-  .votes {
-    padding: 8px 0 0;
-  }
-}
-
 .np-meta {
   width: 100%;
 }
@@ -1202,4 +1144,77 @@ input {
 .btn.is-primary.is-destructive {
   background: var(--down);
   color: #ffffff;
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Short-screen overrides.
+ *
+ * THESE MUST STAY LAST. They were written at the top of the file, above
+ * the base rules they override, and since both sides have the same
+ * specificity the later base rule simply won. Four of them were dead:
+ * .vote kept its 96px target instead of shrinking to 84px, and .votes,
+ * .dj-chip and .np-album likewise never shrank - so the one screen size
+ * this block exists for was laid out as if it were not here. Measured at
+ * 375x667 on 2026-09-08: vote controls 96px, not the intended 84px.
+ *
+ * Anything added below this block will silently defeat it again.
+ * ------------------------------------------------------------------ */
+/* Short viewports — an iPhone SE at 375x667, or any small phone once Safari's
+   URL bar is showing. Shrinking only the artwork is not enough there: what
+   does not fit is the fixed furniture, so all of it gives a little. Measured
+   at 375x667 the thumbs sat 33px behind the tab bar; with this they clear it
+   by 58px and nothing scrolls.
+
+   Below roughly 600px of height it does scroll again, and that is the right
+   answer — there is no honest way to fit artwork, three lines of metadata, a
+   DJ chip, a progress bar, a status line and two 84px targets into less.
+
+   The 58px above is stale: measured again at 375x667 on 2026-09-02 it is 29px,
+   and it was 30px before the type scale and spacing grid landed. The screen
+   has gained a status line and a countdown since that number was written. It
+   is recorded here because it is the real headroom — anything added to this
+   screen now costs almost exactly what it is worth. */
+
+@media (max-height: 700px) {
+  .np {
+    gap: 8px;
+  }
+
+  .np-art {
+    width: min(46vw, 184px, 27svh);
+  }
+
+  .t-title {
+    font-size: 20px;
+  }
+
+  .t-sub {
+    font-size: 14px;
+  }
+
+  .np-album {
+    font-size: 12px;
+    margin-top: 4px;
+  }
+
+  .dj-chip {
+    padding: 4px 12px 4px 4px;
+  }
+
+  .vote {
+    width: 84px;
+    height: 84px;
+  }
+
+  .vote svg {
+    width: 34px;
+    height: 34px;
+  }
+
+  /* Half the separation rather than none — a short screen still needs the
+     break between reading and acting, it just cannot afford all of it. */
+  .votes {
+    padding: 8px 0 0;
+  }
 }

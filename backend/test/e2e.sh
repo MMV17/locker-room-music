@@ -88,6 +88,35 @@ echo "$BODY" | grep -q '"code":"player_removed"' \
   && ok "removed player is tagged player_removed, not a code error" \
   || bad "player_removed tag" "$BODY"
 
+echo "== signing out =="
+# Settings offered "Not you? / Change", which navigated to /join - a route the
+# app only renders when signedIn is false, so it fell through to Now Playing
+# with the same account still loaded. Nothing signed anybody out, on the client
+# or the server, because there was no way to. Found 2026-09-08.
+SOJAR="$(mktemp)"
+curl -s -c "$SOJAR" -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Sam\",\"last_name\":\"Switcher$SUFFIX\",\"jersey_number\":\"3\"}" > /dev/null
+code=$(curl -s -b "$SOJAR" -o /dev/null -w '%{http_code}' "$BASE/api/now")
+[ "$code" = "200" ] && ok "the switcher is signed in to begin with" \
+  || bad "signout fixture" "got $code"
+
+code=$(curl -s -b "$SOJAR" -c "$SOJAR" -o /dev/null -w '%{http_code}' \
+  -X POST "$BASE/api/session/signout")
+[ "$code" = "200" ] && ok "signing out is accepted" || bad "signout" "got $code"
+
+# The token must be dead SERVER-side, not merely dropped by this client - a
+# cleared cookie alone would leave a working session behind on a shared phone.
+code=$(curl -s -b "$SOJAR" -o /dev/null -w '%{http_code}' "$BASE/api/now")
+[ "$code" = "401" ] && ok "the old session cookie no longer authenticates" \
+  || bad "signout left the token alive" "got $code"
+
+# Signing out twice, or without a session at all, is not an error - the button
+# must never strand somebody on a failure they cannot clear.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session/signout")
+[ "$code" = "200" ] && ok "signing out with no session is a no-op, not an error" \
+  || bad "idempotent signout" "got $code"
+rm -f "$SOJAR"
+
 echo "== play ingest =="
 # Fixture ids are unique per run. They used to be hardcoded, which made the
 # suite pass only against a freshly-created database: on a second run the play
@@ -211,6 +240,50 @@ HASH=$(echo "$UNCLAIMED" | sed -n 's/.*"mac_hash":"\([^"]*\)".*/\1/p')
 curl -s -b "$JAR" -X POST "$BASE/api/devices/$HASH/claim" > /dev/null
 code=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X POST "$BASE/api/devices/$HASH/claim")
 [ "$code" = "409" ] && ok "double claim rejected" || bad "double claim" "got $code"
+
+# The SEQUENTIAL double claim above always passed. The race did not: the handler
+# read user_id, saw NULL, and only then wrote, with the write carrying no
+# condition of its own. Two taps that both read before either wrote therefore
+# both returned ok, and the second overwrote the first AFTER the first had
+# backfilled the play history - leaving the phone owned by one player and its
+# songs credited to another. Found 2026-09-08.
+#
+# Two players, one unclaimed phone, several taps in flight at once. Exactly one
+# may win. SIX requests rather than two on purpose: with only two, the first
+# usually finished its read AND its write before the second read, so the broken
+# code passed most runs. Six overlap reliably.
+RJAR="$(mktemp)"
+curl -s -c "$RJAR" -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Riley\",\"last_name\":\"Racer$SUFFIX\",\"jersey_number\":\"7\"}" > /dev/null
+
+RACE_MAC="$MAC_PREFIX:$(printf '%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)))"
+curl -s -X POST "$BASE/api/plays" -H "X-Device-Key: $DEVICE_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"play_id\":\"race-$SUFFIX\",\"device_mac\":\"$RACE_MAC\",\"device_alias\":\"Contested phone\",\"title\":\"Two Weeks\",\"artist\":\"FKA twigs\",\"duration_ms\":240000,\"started_at\":\"$STARTED\"}" > /dev/null
+RACE_HASH=$(curl -s -b "$JAR" "$BASE/api/devices/unclaimed" \
+  | tr '{' '\n' | grep "Contested phone" | sed -n 's/.*"mac_hash":"\([^"]*\)".*/\1/p')
+
+if [ -z "$RACE_HASH" ]; then
+  bad "concurrent claim fixture" "could not resolve the contested device hash"
+else
+  RACE_OUT="$(mktemp -d)"
+  for i in 1 2 3 4 5 6; do
+    # Alternate the two players, so a win by either is a real ownership change.
+    if [ $((i % 2)) -eq 0 ]; then WHO="$JAR"; else WHO="$RJAR"; fi
+    # The trailing newline matters: %{http_code} emits none of its own, so the
+    # six results would otherwise concatenate into one unmatchable line.
+    curl -s -b "$WHO" -o /dev/null -w '%{http_code}\n' \
+      -X POST "$BASE/api/devices/$RACE_HASH/claim" > "$RACE_OUT/$i" &
+  done
+  wait
+  WON=$(cat "$RACE_OUT"/* | grep -c '^200$')
+  LOST=$(cat "$RACE_OUT"/* | grep -c '^409$')
+  [ "$WON" = "1" ] && [ "$LOST" = "5" ] \
+    && ok "concurrent claims: exactly one wins, the rest get 409" \
+    || bad "concurrent claim race" "got $WON x 200 and $LOST x 409 (want 1 and 5)"
+  rm -rf "$RACE_OUT"
+fi
+rm -f "$RJAR"
 
 # NOTE ON PLACEMENT: /api/pi/beacon is not a read-only endpoint — it hands out
 # any queued command. Run after "pi remote control" these beacons swallowed the
@@ -608,6 +681,64 @@ curl -s -X POST "$BASE/api/heartbeat" -H "X-Device-Key: $DEVICE_KEY" \
   -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}' > /dev/null
 curl -s -b "$JAR" "$BASE/api/now" | grep -q '"speaker_online":true' \
   && ok "speaker reports online after heartbeat" || bad "heartbeat" "not online"
+
+echo "== auth throttling =="
+# Until 2026-09-08 this Worker counted nothing: /api/admin/* took unlimited
+# ADMIN_PASSWORD guesses, with no lockout and no trace that anyone had tried.
+#
+# This section deliberately locks an address out for ADMIN_POLICY's whole
+# window, so it uses an address of its OWN, fresh per run. Without that it
+# locked out the machine running the suite: every later admin assertion came
+# back 429 and looked like a real regression, and a second run inside five
+# minutes failed before it started.
+#
+# Sending CF-Connecting-IP is only meaningful against a local dev server.
+# Cloudflare overwrites that header at the edge, so a client cannot choose its
+# own bucket in production - which is exactly why the throttle keys on it.
+THROTTLE_IP="203.0.113.$((RANDOM % 254 + 1))"
+THROTTLE_SEEN=""
+for i in $(seq 1 11); do
+  THROTTLE_SEEN=$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "CF-Connecting-IP: $THROTTLE_IP" \
+    -H "X-Admin-Password: definitely-wrong-$i" "$BASE/api/admin/users")
+done
+[ "$THROTTLE_SEEN" = "429" ] \
+  && ok "the 11th wrong admin password is throttled" \
+  || bad "admin throttle" "11th attempt got $THROTTLE_SEEN, want 429"
+
+RETRY_HDR=$(curl -s -D - -o /dev/null -H "CF-Connecting-IP: $THROTTLE_IP" \
+  -H "X-Admin-Password: wrong-again" \
+  "$BASE/api/admin/users" | tr -d '\r' | sed -n 's/^[Rr]etry-[Aa]fter: //p')
+[ -n "$RETRY_HDR" ] && [ "$RETRY_HDR" -gt 0 ] \
+  && ok "a throttled response says how long to wait ($RETRY_HDR s)" \
+  || bad "Retry-After" "got '$RETRY_HDR'"
+
+# The block is checked BEFORE the password is compared. That is deliberate and
+# load-bearing: comparing first would answer every guess and the counter would
+# protect nothing. The cost is that a locked-out address is locked out even
+# with the right password, which is why ADMIN_POLICY's window is five minutes
+# rather than the quarter hour a bank would pick.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "CF-Connecting-IP: $THROTTLE_IP" \
+  -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/users")
+[ "$code" = "429" ] \
+  && ok "a locked-out address is refused before the password is even read" \
+  || bad "throttle checked after the comparison" "correct password got $code, want 429"
+
+# Scope, not just address: the same locked-out address must still be able to
+# join, because the team code counts in a bucket of its own.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session/check-code" \
+  -H "CF-Connecting-IP: $THROTTLE_IP" \
+  -H 'content-type: application/json' -d "{\"team_code\":\"$TEAM_CODE\"}")
+[ "$code" = "204" ] \
+  && ok "an admin lockout does not lock that same address out of joining" \
+  || bad "buckets are not separate by scope" "check-code got $code, want 204"
+
+# A DIFFERENT address is untouched by all of the above.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "CF-Connecting-IP: 203.0.113.255" \
+  -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/users")
+[ "$code" = "200" ] \
+  && ok "one address's lockout does not affect another" \
+  || bad "throttle is not per-address" "got $code, want 200"
 
 rm -f "$JAR"
 echo

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { get } from "./../api";
+import { get, signOut } from "./../api";
 import type { NowResponse } from "./../api";
 import { useNavigate } from "./../router";
 import { SpeakerSection } from "./SpeakerSection";
@@ -17,8 +17,9 @@ import { SpeakerSection } from "./SpeakerSection";
  * Reached from the jersey button in the Now Playing header — already the "you"
  * control, and already labelled as the way to change who you are.
  */
-export function Settings() {
+export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
   const navigate = useNavigate();
+  const [switching, setSwitching] = useState(false);
   const [me, setMe] = useState<NowResponse["viewer"] | null>(null);
 
   useEffect(() => {
@@ -61,8 +62,23 @@ export function Settings() {
               <span className="row-title">Not you?</span>
               <span className="row-sub">Sign in as someone else</span>
             </span>
-            <button className="btn" onClick={() => navigate("/join")}>
-              Change
+            <button
+              className="btn"
+              disabled={switching}
+              onClick={async () => {
+                setSwitching(true);
+                try {
+                  await signOut();
+                } finally {
+                  // Even if the request failed, send them to the join screen -
+                  // App re-probes the session, so a still-valid one simply
+                  // lands them back here rather than stranding them.
+                  onSignedOut();
+                  navigate("/");
+                }
+              }}
+            >
+              {switching ? "Signing out…" : "Change"}
             </button>
           </div>
         </div>

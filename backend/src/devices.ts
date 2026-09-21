@@ -42,12 +42,34 @@ devices.post("/api/devices/:hash/claim", async (c) => {
   if (!device) return c.json({ error: "Unknown device" }, 404);
   if (device.user_id) return c.json({ error: "Device already claimed" }, 409);
 
+  /* The read above is a courtesy - it is what turns an unknown phone into a 404
+     and an already-claimed one into a friendly 409. It is NOT the thing that
+     decides the claim, because between that read and the write another tap can
+     land. `AND user_id IS NULL` is what actually settles it: SQLite applies the
+     condition and the write as one statement, so of any number of simultaneous
+     claims exactly one reports a changed row.
+
+     This must stay OUTSIDE the batch below. A batch is one transaction, but its
+     later statements run whether or not this one matched anything - so a loser
+     would still have backfilled the play history to itself, which is precisely
+     the corruption being fixed: the phone ends up owned by one player with its
+     songs credited to another. */
+  const claim = await c.env.DB.prepare(
+    "UPDATE devices SET user_id = ?, claimed_at = ? WHERE mac_hash = ? AND user_id IS NULL",
+  )
+    .bind(userId, new Date().toISOString(), hash)
+    .run();
+  if (!claim.meta.changes) {
+    // Lost the race. Somebody else owns the phone now.
+    return c.json({ error: "Device already claimed" }, 409);
+  }
+
+  /* Now that ownership is settled, credit the history to the winner. Not in the
+     same transaction as the claim any more, which is the deliberate trade: if
+     the Worker dies between the two, the phone is claimed with its old songs
+     left unattributed - visible, harmless, and fixable with an admin unclaim
+     and re-claim. The alternative was crediting them to the wrong player. */
   await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE devices SET user_id = ?, claimed_at = ? WHERE mac_hash = ?").bind(
-      userId,
-      new Date().toISOString(),
-      hash,
-    ),
     c.env.DB.prepare(
       "UPDATE plays SET user_id = ? WHERE device_hash = ? AND user_id IS NULL",
     ).bind(userId, hash),

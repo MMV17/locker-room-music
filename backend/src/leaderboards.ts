@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { trackScore, djScore, DJ_MIN_PLAYS, playsUntilQualified } from "./scoring";
 import { fallbackColor } from "./crypto";
+import { tallyVisible } from "./voteWindow";
 
 export const boards = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -24,32 +25,70 @@ function windowStart(window: string | undefined): string {
 boards.get("/api/leaderboard/tracks", async (c) => {
   const since = windowStart(c.req.query("window"));
 
+  /* Grouped by PLAY, not by track. Whether a tally may be published is a
+     property of one play - it reads that play's ended_at, duration_ms and
+     keepalive_at - so the rows have to arrive at that grain for tallyVisible
+     to judge them. Rolling up to the track happens below, over the survivors.
+     This is the same shape the DJ board below already uses. */
   const { results } = await c.env.DB.prepare(
     `SELECT
-       t.id, t.title, t.artist, t.artwork_url, t.track_key,
-       COUNT(DISTINCT p.id) AS plays,
+       p.id AS play_id, p.started_at, p.ended_at, p.duration_ms,
+       p.keepalive_at, p.voided,
+       t.id AS track_id, t.title, t.artist, t.artwork_url, t.track_key,
        SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
        SUM(CASE WHEN v.value = -1 THEN 1 ELSE 0 END) AS down
-     FROM tracks t
-     JOIN plays p ON p.track_id = t.id AND p.counted = 1 AND p.voided = 0
+     FROM plays p
+     JOIN tracks t ON t.id = p.track_id
      LEFT JOIN votes v ON v.play_id = p.id AND v.voided = 0
-     WHERE p.started_at >= ?
-     GROUP BY t.id
-     HAVING up + down > 0`,
+     WHERE p.counted = 1 AND p.voided = 0 AND p.started_at >= ?
+     GROUP BY p.id`,
   )
     .bind(since)
     .all<any>();
 
-  const scored = results
-    .map((r) => ({
-      id: r.id,
+  const now = Date.now();
+  type TrackAgg = {
+    title: string;
+    artist: string | null;
+    artwork_url: string | null;
+    track_key: string;
+    plays: number;
+    up: number;
+    down: number;
+  };
+  const byTrack = new Map<string, TrackAgg>();
+  for (const r of results) {
+    // Spec 6.3. A song still on the speaker contributes nothing at all - not
+    // its votes, and not its existence as a play count, which would leak that
+    // it is playing to anyone diffing the board.
+    if (!tallyVisible(r, now)) continue;
+    const entry = byTrack.get(r.track_id) ?? {
       title: r.title,
       artist: r.artist,
       artwork_url: r.artwork_url,
-      artwork_fallback: fallbackColor(r.track_key ?? ""),
-      plays: r.plays,
-      voters: (r.up ?? 0) + (r.down ?? 0),
-      score: trackScore(r.up ?? 0, r.down ?? 0),
+      track_key: r.track_key ?? "",
+      plays: 0,
+      up: 0,
+      down: 0,
+    };
+    entry.plays += 1;
+    entry.up += r.up ?? 0;
+    entry.down += r.down ?? 0;
+    byTrack.set(r.track_id, entry);
+  }
+
+  const scored = [...byTrack.entries()]
+    // Was `HAVING up + down > 0`: a track nobody voted on is not ranked.
+    .filter(([, e]) => e.up + e.down > 0)
+    .map(([id, e]) => ({
+      id,
+      title: e.title,
+      artist: e.artist,
+      artwork_url: e.artwork_url,
+      artwork_fallback: fallbackColor(e.track_key),
+      plays: e.plays,
+      voters: e.up + e.down,
+      score: trackScore(e.up, e.down),
     }))
     .sort((a, b) => b.score - a.score);
 
@@ -70,7 +109,8 @@ boards.get("/api/leaderboard/djs", async (c) => {
 
   const { results } = await c.env.DB.prepare(
     `SELECT
-       p.id AS play_id, p.user_id,
+       p.id AS play_id, p.user_id, p.started_at, p.ended_at, p.duration_ms,
+       p.keepalive_at, p.voided,
        TRIM(u.first_name || ' ' || u.last_name) AS name, u.jersey_number,
        SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
        SUM(CASE WHEN v.value = -1 THEN 1 ELSE 0 END) AS down
@@ -84,9 +124,13 @@ boards.get("/api/leaderboard/djs", async (c) => {
     .bind(since)
     .all<any>();
 
+  const now = Date.now();
   type DjEntry = { name: string; jersey: string | null; scores: number[] };
   const byUser = new Map<string, DjEntry>();
   for (const r of results) {
+    // Spec 6.3, the same rule the track board uses. An open play must also not
+    // count toward DJ_MIN_PLAYS qualification before it is final.
+    if (!tallyVisible(r, now)) continue;
     const entry: DjEntry = byUser.get(r.user_id) ?? {
       name: r.name,
       jersey: r.jersey_number,
@@ -134,6 +178,7 @@ boards.get("/api/history", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT
        p.id, p.started_at, p.ended_at, p.counted,
+       p.duration_ms, p.keepalive_at, p.voided,
        t.title, t.artist, t.artwork_url, t.track_key,
        TRIM(u.first_name || ' ' || u.last_name) AS dj_name, u.jersey_number,
        SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
@@ -150,11 +195,12 @@ boards.get("/api/history", async (c) => {
 
   const now = Date.now();
   const plays = results
-    // Never leak a tally for a song whose window is still open.
-    .filter((r) => {
-      const end = r.ended_at ? Date.parse(r.ended_at) : null;
-      return end !== null && now >= end + 30_000;
-    })
+    // Never leak a tally for a song whose window is still open. This used to
+    // re-derive the rule here with a literal 30_000 and no keepalive term,
+    // which was stricter than the real window and so happened to be safe -
+    // but it was a second copy of spec 6.3, and the boards' copy was the one
+    // that was wrong. There is one copy now.
+    .filter((r) => tallyVisible(r, now))
     .map((r) => ({
       id: r.id,
       title: r.title,

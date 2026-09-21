@@ -174,3 +174,15 @@ CREATE INDEX IF NOT EXISTS idx_plays_track_id   ON plays (track_id);
 CREATE INDEX IF NOT EXISTS idx_votes_play_id    ON votes (play_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_track_key ON tracks (track_key);
 CREATE INDEX IF NOT EXISTS idx_devices_user_id  ON devices (user_id);
+
+-- Failed-authentication counters, one row per (scope, address). See
+-- src/throttle.ts for why this is a table rather than a Cloudflare rate-limit
+-- binding, and why only FAILURES are counted.
+--
+-- window_start is epoch milliseconds rather than the ISO text used elsewhere:
+-- nothing human ever reads this table, and the throttle arithmetic is in ms.
+CREATE TABLE IF NOT EXISTS auth_attempts (
+  bucket        TEXT PRIMARY KEY,
+  window_start  INTEGER NOT NULL,
+  count         INTEGER NOT NULL
+);

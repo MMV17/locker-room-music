@@ -39,6 +39,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const get = <T,>(path: string) => request<T>(path);
+
+/**
+ * Hand the phone back to whoever picks it up next.
+ *
+ * Deletes the session on the SERVER and clears the cookie. "Not you? / Change"
+ * used to just navigate to /join, which the app only renders when signed out -
+ * so it landed back on Now Playing as the same person.
+ */
+export const signOut = () => post("/api/session/signout");
 export const post = <T,>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 export const put = <T,>(path: string, body: unknown, headers?: Record<string, string>) =>
