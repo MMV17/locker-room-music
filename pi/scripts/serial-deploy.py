@@ -42,6 +42,7 @@ import getpass
 import gzip
 import hashlib
 import os
+import re
 import select
 import sys
 import termios
@@ -109,6 +110,22 @@ class Serial:
         os.close(self.fd)
 
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][B0]")
+HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+def clean(text: str) -> str:
+    """Strip terminal escapes and CRs.
+
+    Bash on the box turns on bracketed paste, so `ESC[?2004h` arrives inline
+    with whatever a command printed. Parsing output without removing that is
+    how a correct sha256 got compared against `[?2004h` and every file was
+    reported as corrupt - the verification was right to refuse, it was simply
+    reading the wrong bytes.
+    """
+    return ANSI.sub("", text).replace("\r", "")
+
+
 def log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -139,6 +156,10 @@ def login(s: Serial, user: str, password: str) -> None:
         raise SystemExit(f"  LOGIN TIMED OUT; tail was {buf[-200:]!r}")
 
     # Our own prompt, and echo off. Both make everything after this parseable.
+    # Belt and braces: turn bracketed paste off at the source as well as
+    # stripping it on arrival. Either alone would do; both cost nothing.
+    s.write("bind 'set enable-bracketed-paste off' 2>/dev/null\r")
+    time.sleep(0.3)
     s.write(f"export PS1='{PROMPT}'; stty -echo\r")
     time.sleep(0.5)
     s.write("\r")
@@ -150,7 +171,7 @@ def run(s: Serial, cmd: str, timeout: float = 30) -> str:
     s.write(cmd + "\r")
     out = s.read_until(PROMPT, timeout)
     # Strip the trailing prompt and any leading echo of the command itself.
-    body = out[: out.rindex(PROMPT)]
+    body = clean(out[: out.rindex(PROMPT)])
     return body.replace(cmd, "", 1).strip()
 
 
@@ -168,10 +189,15 @@ def send_file(s: Serial, src: Path, dest: str, mode: str, sudo: bool = True) -> 
     # `< file` rather than a positional argument: GNU coreutils accepts both,
     # BSD base64 only the redirect, and this script gets run from a Mac.
     run(s, f"base64 -d < {tmp} | gunzip > {out}", timeout=30)
-    got = run(s, f"sha256sum {out} | cut -d' ' -f1", timeout=20).split()[-1]
+    # Match on SHAPE, not position: a 64-char hex token is unmistakable, and
+    # anything the terminal injects around it cannot be mistaken for one.
+    raw_out = run(s, f"sha256sum {out}", timeout=20)
+    m = HEX64.search(raw_out)
+    got = m.group(0) if m else f"<no hash in {raw_out[:60]!r}>"
 
     if got != want:
         log(f"    HASH MISMATCH for {src.name}: wanted {want[:16]} got {got[:16]}")
+        run(s, f"rm -f {tmp} {out}")
         return False
 
     pre = "sudo " if sudo else ""
