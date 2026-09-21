@@ -62,6 +62,7 @@ PAYLOAD = [
     ("pi/lockerroom/lifecycle.py", "/opt/lockerroom/lockerroom/lifecycle.py", "644"),
     ("pi/scripts/report-full.sh",  "/usr/local/bin/report-full.sh",           "755"),
     ("pi/scripts/run-repair.sh",   "/usr/local/bin/run-repair.sh",            "755"),
+    ("pi/scripts/btwatch.sh",      "/usr/local/bin/btwatch.sh",               "755"),
 ]
 
 # remote-repair.sh is handled separately: it only gets seeded when there is no

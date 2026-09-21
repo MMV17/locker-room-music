@@ -70,3 +70,59 @@ def test_recovery_is_announced(tmp_path):
     """It must be findable in the journal after the fact."""
     r = run(tmp_path, DOWN)
     assert "wedged" in r["out"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# The 2026-09-21 loop: 212 rebinds, nine hours, zero progress.
+#
+# An rfkill SOFT BLOCK survives an unbind/rebind, because the rebind destroys
+# the rfkill device and creates a new one, and systemd-rfkill restores the
+# saved block onto it. So the watchdog re-applied the fault it was recovering
+# from, once a minute, and would have done the same through a reboot.
+#
+# These read the shipped script as text: that is where the omission lived, and
+# where a future edit would put it back.
+# --------------------------------------------------------------------------- #
+
+from pathlib import Path
+
+BTWATCH = Path(__file__).resolve().parents[1] / "scripts" / "btwatch.sh"
+
+
+class TestSoftBlockRecovery:
+    def test_it_clears_a_soft_block_at_all(self):
+        body = BTWATCH.read_text()
+        assert "rfkill unblock" in body, (
+            "a rebind cannot clear an rfkill soft block; without this the "
+            "watchdog loops forever on the one fault it cannot fix"
+        )
+
+    def test_it_unblocks_before_tearing_the_driver_down(self):
+        """Cheapest fix first. If the radio was only blocked, unblocking
+        returns it to service without restarting the listener."""
+        body = BTWATCH.read_text()
+        recover = body.split("recover() {", 1)[1]
+        unblock_at = recover.index("unblock")
+        unbind_at = recover.index("/unbind")
+        assert unblock_at < unbind_at
+
+    def test_it_unblocks_again_after_rebinding(self):
+        """The device that appears after a rebind is a NEW rfkill device and
+        systemd-rfkill restores the saved state onto it."""
+        recover = BTWATCH.read_text().split("recover() {", 1)[1]
+        after_bind = recover.split("/bind", 1)[1]
+        assert "unblock" in after_bind.split("systemctl restart", 1)[0]
+
+    def test_it_backs_off_instead_of_hammering_forever(self):
+        """Every recovery restarts bluealsa, bt-agent, keep-discoverable and
+        lockerroom-listener. A watchdog that cannot win is expensive: the real
+        loop burned 44s of CPU and restarted the control channel often enough
+        to lose in-flight commands."""
+        body = BTWATCH.read_text()
+        assert "BACKOFF_AFTER" in body and "BACKOFF_S" in body
+
+    def test_a_successful_recovery_resets_the_failure_count(self):
+        """Otherwise a box that wedges occasionally over a long uptime would
+        eventually back off permanently for no reason."""
+        body = BTWATCH.read_text()
+        assert "FAILS=0" in body.split("while :;", 1)[1]
