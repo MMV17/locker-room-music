@@ -3,7 +3,7 @@ import { ApiError, get } from "./api";
 import type { NowResponse } from "./api";
 import { Nav, Spinner } from "./components";
 import { useRoute } from "./router";
-import { applyTheme, cacheTheme, cachedTheme } from "./theme";
+import { cacheTheme, cachedTheme } from "./theme";
 import type { Theme } from "./theme";
 import { Admin } from "./screens/Admin";
 import { Claim } from "./screens/Claim";
@@ -19,16 +19,16 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(cachedTheme);
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
 
-  // Team colours. Public endpoint, so this works on the join screen too.
+  // The team's NAME. Public endpoint, so this works on the join screen too.
+  // No colour any more — the palette is fixed; see styles.css.
   useEffect(() => {
     get<Theme>("/api/theme")
       .then((t) => {
         setTheme(t);
-        applyTheme(t);
         cacheTheme(t);
       })
       .catch(() => {
-        /* keep the cached colours; a themeless site still works */
+        /* keep the cached name; an unnamed site still works */
       });
   }, []);
 

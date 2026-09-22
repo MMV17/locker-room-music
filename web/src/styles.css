@@ -8,55 +8,88 @@
  * ------------------------------------------------------------------ */
 
 :root {
-  --page: #edf0f5;
-  --surface: #ffffff;
-  --ink: #14171c;
-  --ink-2: #4a515c;
-  /* Darkened from #8a93a0, which was 2.72:1 on --page and 3.11:1 on white —
-     under the 4.5:1 AA floor on both, and this token colours every piece of
-     secondary text in the product: artist names, timestamps, field labels,
-     inactive tabs. Same hue, dark enough to clear: 4.60:1 on --page,
-     5.26:1 on white. */
-  --muted: #666d76;
-  --hairline: #e4e8ee;
+  /* ------------------------------------------------------------------ *
+   * BLACK AND GOLD. Sampled from docs/AUXGOAT logo.png, not invented:
+   * the mark is 80% #000000, the goat and "aux" are #F8F2E9, and the
+   * crown and "goat" are #A98C5C. That gold is a BRONZE, not a yellow,
+   * and that is the whole difference between this looking expensive and
+   * looking like a casino. Do not "brighten" it.
+   *
+   * THE TEAM COLOUR IS GONE. --team, --team-ink, --team-soft and
+   * --team-on used to be set at boot from GET /api/theme, and every
+   * school got its own. That is retired: AuxGoat owns the chrome now.
+   * The team is still named on screen, it just is not coloured, so
+   * `theme.ts` carries a name and nothing else.
+   * ------------------------------------------------------------------ */
+  --page: #000000;
+  --surface: #121214;
+  --ink: #F8F2E9;
 
-  /* Set at boot from GET /api/theme. The defaults here are the same neutral
-     slate the API falls back to, so the first paint is never wrong-coloured. */
-  --team: #2f3a45;
-  --team-ink: #2f3a45; /* contrast-corrected for use as text on white */
-  --team-soft: rgba(47, 58, 69, 0.1);
-  --team-on: #ffffff; /* readable against a --team fill */
+  /* Ivory flattened over the page at 72% / 62% / 14%. Written as solid
+     hex rather than rgba() so a token dropped on --surface behaves the
+     same as one dropped on --page - an alpha would shift with whatever
+     is behind it, which is how a "verified" contrast number stops being
+     true two rules later. Measured on --page / on --surface:
+       --ink    18.87:1 / 16.81:1
+       --ink-2   9.54:1 /  8.50:1
+       --muted   7.14:1 /  6.36:1
+     --muted colours every piece of secondary text in the product and is
+     now better than it ever was on the light theme, which managed 4.60:1. */
+  --ink-2: #B3AEA8;
+  --muted: #9A9690;
+  --hairline: #232221;
+  /* Outlined CONTROLS need more edge than a divider does, and the
+     difference is a rule rather than taste: WCAG 1.4.11 asks 3:1 for a
+     meaningful UI boundary, and the settings button's outline IS how you
+     find it. The obvious choice - the divider colour, a touch lighter -
+     scores 1.80:1 and fails. Ivory at 40% is the lowest that clears 3:1
+     on BOTH --page (3.40:1) and --surface (3.03:1); anything dimmer only
+     passes on one of them, which is worse than failing on both because
+     it looks fine wherever you happen to test it. */
+  --hairline-strong: #63615D;
 
-  /* Fixed and deliberately independent of --team. If the school colour
-     happens to be red, the down vote is still red — semantic colour outranks
-     brand colour on the one control this product exists for. */
+  /* The one accent. 6.59:1 on --page, 5.87:1 on --surface, so it is
+     legal as text as well as as a rule. Used for chrome only - it never
+     touches a vote. */
+  --gold: #A98C5C;
+  --gold-soft: rgba(169, 140, 92, 0.12);
+
+  /* Fixed and deliberately independent of the brand. If the gold ever
+     changes, the down vote is still red - semantic colour outranks brand
+     colour on the one control this product exists for. White on either
+     fill clears AA: 4.55:1 on --up, 4.83:1 on --down. */
   --up: #12883e;
   --up-soft: rgba(18, 136, 62, 0.1);
   --down: #dc2626;
   --down-soft: rgba(220, 38, 38, 0.1);
 
-  /* For these two colours AS TEXT ON THEIR OWN SOFT TINT — the .tally pills
-     and the .banner strips. That pairing is much harder than it looks: a
-     colour on a 10% wash of itself has very little room, and BOTH failed.
-     The old green managed 2.95:1 and even the corrected --up above only
-     reaches 4.00:1; the red, which passes everywhere else, is 4.14:1 there.
-     So the fill and the text on the fill cannot be the same value.
+  /* FOR THESE TWO COLOURS AS TEXT ON THEIR OWN SOFT TINT - the .tally
+     pills and the .banner strips.
+     These INVERTED when the ground went black, and the old values are a
+     trap worth naming: on white, a 10% tint is pale and the ink had to be
+     DARKER than the base. On black the same tint is nearly black, so the
+     ink has to be LIGHTER. Carrying the light-theme values over looks
+     plausible and fails - #117d39 scores 3.76:1 on #020E06 and #cb2323
+     scores 3.61:1 on #160404. Both are now lightened along their own hue
+     until they clear: 5.33:1 and 5.03:1. Do not use these as fills. */
+  --up-ink: #199949;
+  --down-ink: #f42f2f;
 
-     Same trick --team-ink already plays for the school colour, and for the
-     same reason. Do not use these as fills — --up and --down are the fills,
-     and white on those clears 4.5:1 for the pressed vote buttons. */
-  --up-ink: #117d39; /* 4.57:1 on --up-soft */
-  --down-ink: #cb2323; /* 4.74:1 on --down-soft */
+  /* Squarer than the old 28/24/12. Over-rounding is most of what read as
+     consumer-cheap; near-square artwork reads considered. */
+  --r-card: 16px;
+  --r-art: 8px;
+  --r-thumb: 8px;
 
-  --r-card: 28px;
-  --r-art: 24px;
-  --r-thumb: 12px;
-
-  --shadow: 0 8px 28px rgba(20, 23, 28, 0.07), 0 2px 6px rgba(20, 23, 28, 0.04);
-  --shadow-lift: 0 14px 40px rgba(20, 23, 28, 0.12), 0 3px 8px rgba(20, 23, 28, 0.06);
+  /* On black a drop shadow is invisible, so separation is VALUE and
+     HAIRLINE instead. What is left is a 1px top highlight that gives a
+     raised surface an edge, plus enough ambient darkness to seat it. */
+  --shadow: inset 0 1px 0 rgba(248, 242, 233, 0.06), 0 8px 24px rgba(0, 0, 0, 0.55);
+  --shadow-lift: inset 0 1px 0 rgba(248, 242, 233, 0.09), 0 16px 40px rgba(0, 0, 0, 0.7);
 
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
+
 
 * {
   box-sizing: border-box;
@@ -142,6 +175,20 @@ input {
   color: var(--muted);
   margin: 0;
 }
+
+.t-chrome {
+  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Archivo carries the chrome, Outfit carries the content. That split IS the
+   design: labels, timers, jersey numbers and vote captions are one voice, and
+   the song is another. Tracking is 0.18-0.20em because Archivo is
+   normal-width — the 0.16em that suited a monospace trial read gappy here,
+   and the 0.22em that suited a condensed face read loose. */
 
 /* The reference's letterspaced "SONGS" device, reused for every small label. */
 .t-label {
@@ -255,7 +302,7 @@ input {
   bottom: -1px;
   height: 3px;
   border-radius: 2px;
-  background: var(--team);
+  background: var(--gold);
 }
 
 /* ------------------------------------------------------------------ *
@@ -308,7 +355,7 @@ input {
 
 .goat-word {
   font-weight: 700;
-  color: var(--team-ink);
+  color: var(--gold);
   white-space: nowrap;
 }
 
@@ -413,8 +460,9 @@ input {
   height: 46px;
   flex: none;
   border-radius: var(--r-thumb);
-  background: var(--team);
-  color: var(--team-on);
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  color: var(--ink);
   display: grid;
   place-items: center;
   font-size: 16px;
@@ -423,10 +471,13 @@ input {
 }
 
 .jersey.is-sm {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  font-size: 14px;
+  /* 44px, not the 30 this was. It is a real control — it opens Settings —
+     and 30 is under the 44pt minimum every platform asks for, in the corner
+     hardest to reach one-handed. The number stays small; the TARGET grew. */
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-thumb);
+  font-size: 15px;
 }
 
 /* ------------------------------------------------------------------ *
@@ -527,10 +578,15 @@ input {
      vertical room is left, so on a short viewport the art kept its 62vw and
      pushed the thumbs off the bottom. Height-relative, it gives up exactly the
      space that is scarce, and on a tall phone the vw cap still governs. */
-  width: min(58vw, 244px, 29svh);
+  /* Grown from min(58vw, 244px, 29svh). The artwork is the hero and was
+     competing with seven sibling blocks for attention. The svh term still
+     governs on a short viewport, which is the whole reason it is here. */
+  width: min(84vw, 326px, 38svh);
   aspect-ratio: 1;
   border-radius: var(--r-art);
-  box-shadow: var(--shadow-lift);
+  /* No lift shadow on black — it does nothing there. A hairline is what
+     seats a near-black cover against a black page. */
+  border: 1px solid var(--hairline);
   object-fit: cover;
   display: block;
 }
@@ -551,10 +607,12 @@ input {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px 8px 8px;
-  background: var(--surface);
-  border-radius: 999px;
-  box-shadow: var(--shadow);
+  /* Was a 999px pill on a raised surface. A pill reads cheap, and it was
+     floating for no reason — it is a caption for the artwork above it, so it
+     sits on a rule instead. */
+  padding: 14px 0 0;
+  width: 100%;
+  border-top: 1px solid var(--hairline);
   max-width: 100%;
 }
 
@@ -603,10 +661,10 @@ input {
 
 .np-bar {
   flex: 1;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
-  background: var(--hairline);
-  overflow: hidden;
+  background: var(--hairline-strong);
+  position: relative;
 }
 
 .np-bar-fill {
@@ -617,8 +675,10 @@ input {
 }
 
 .np-time {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--muted);
+  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.10em;
   font-variant-numeric: tabular-nums;
   flex: none;
 }
@@ -642,14 +702,18 @@ input {
    floor is Apple's 44pt touch target and this is more than double it. A
    control you have to scroll to reach is worse than one 8px smaller. */
 .vote {
-  width: 96px;
-  height: 96px;
+  width: 88px;
+  height: 88px;
   border-radius: 50%;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  /* Outlined, not a filled white disc. On black a white circle is the loudest
+     thing on screen, and the votes should not outrank the song until you are
+     actually choosing one. */
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
   display: grid;
   place-items: center;
-  color: var(--muted);
+  color: var(--ink-2);
+  position: relative;
   transition:
     background-color 120ms ease,
     color 120ms ease,
@@ -665,14 +729,68 @@ input {
   height: 42px;
 }
 
+/* THE SELECTED STATE CARRIES THREE SIGNALS, AND ONLY ONE OF THEM IS COLOUR.
+   It used to be colour alone — background --surface to green or red — which
+   is the exact pairing WCAG names as hardest to tell apart, on the one
+   control this product exists for. aria-pressed covered screen readers and
+   nothing covered a sighted colour-blind player. Now: the fill, a ring in the
+   same hue offset by the page, and a check badge rendered in the markup.
+   Desaturate the screen and the ring and badge still read.
+
+   Gold deliberately does not appear here. Semantic colour outranks brand
+   colour on the vote — the same rule that kept these independent of the old
+   --team. */
 .vote.is-on-up {
   background: var(--up);
+  border-color: var(--up);
   color: #fff;
+  box-shadow: 0 0 0 4px var(--page), 0 0 0 5px var(--up-ink);
 }
 
 .vote.is-on-down {
   background: var(--down);
+  border-color: var(--down);
   color: #fff;
+  box-shadow: 0 0 0 4px var(--page), 0 0 0 5px var(--down-ink);
+}
+
+/* The check badge. Ivory on near-black at 18.87:1, and it is a SHAPE, which
+   is the point — it survives the colour being gone. */
+.vote-check {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--page);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 0 3px var(--page);
+}
+
+.vote-check svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* The caption under each thumb — the third signal, and the only one that
+   says in words which way you voted. */
+.vote-cap {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.vote-cap.is-mine {
+  color: var(--ink);
+}
+
+.vote-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
 .vote:disabled {
@@ -812,8 +930,8 @@ input {
 }
 
 .nav-item.is-active {
-  color: var(--team-ink);
-  background: var(--team-soft);
+  color: var(--gold);
+  background: var(--gold-soft);
 }
 
 .nav-item svg {
@@ -927,8 +1045,8 @@ input {
 }
 
 .btn.is-primary {
-  background: var(--team);
-  color: var(--team-on);
+  background: var(--gold);
+  color: #12100C;
 }
 
 .btn.is-danger {
@@ -995,7 +1113,7 @@ input {
 }
 
 .input:focus {
-  border-color: var(--team);
+  border-color: var(--gold);
 }
 
 .input.is-code {
@@ -1281,8 +1399,12 @@ input {
     margin-top: 4px;
   }
 
+  /* The base rule is no longer a pill — it is a row on a hairline — so this
+     trims the space above the rule rather than restoring pill padding.
+     Carried over unchanged it would have re-pilled the chip on exactly the
+     screen size this block exists to serve. */
   .dj-chip {
-    padding: 4px 12px 4px 4px;
+    padding: 10px 0 0;
   }
 
   .vote {

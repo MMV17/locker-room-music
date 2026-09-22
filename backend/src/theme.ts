@@ -3,16 +3,25 @@ import type { Env } from "./types";
 
 export const theme = new Hono<{ Bindings: Env }>();
 
-/**
- * Until an admin sets one, a restrained neutral. Deliberately not a guess at
- * anyone's school colours - a wrong team colour looks worse than no team
- * colour, and spec 9.2 asks for a palette that does not assume one team.
- */
-export const DEFAULT_PRIMARY = "#2F3A45";
 export const DEFAULT_TEAM_NAME = "Locker Room";
 
-/** Six-digit hex only. See the validation note in the PUT handler. */
-const HEX = /^#[0-9a-f]{6}$/i;
+/*
+ * THERE IS NO TEAM COLOUR ANY MORE.
+ *
+ * This endpoint used to serve `primary`, a per-school hex the admin picked,
+ * which the client turned into four CSS custom properties. The palette is now
+ * fixed to the AuxGoat logo - black, ivory, antique gold - so a school is
+ * named here and nothing else. See the token block in web/src/styles.css.
+ *
+ * The `theme_primary` settings row is deliberately NOT deleted: it costs one
+ * unread row, and dropping stored state on a deploy is the kind of thing that
+ * is only ever noticed when you want it back. Nothing reads it.
+ *
+ * The hex validator went with it. If a colour ever returns, the note it
+ * carried is worth restoring too: the value was written into a CSS custom
+ * property on every page, so an unvalidated string here was a stylesheet
+ * injection into the whole site.
+ */
 
 async function getSetting(env: Env, key: string): Promise<string | null> {
   const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
@@ -36,13 +45,9 @@ async function putSetting(env: Env, key: string, value: string): Promise<void> {
  * it is a colour and a name that appear on every page anyway.
  */
 theme.get("/api/theme", async (c) => {
-  const [primary, teamName] = await Promise.all([
-    getSetting(c.env, "theme_primary"),
-    getSetting(c.env, "team_name"),
-  ]);
+  const teamName = await getSetting(c.env, "team_name");
   return c.json(
     {
-      primary: primary ?? DEFAULT_PRIMARY,
       team_name: teamName ?? DEFAULT_TEAM_NAME,
     },
     200,
@@ -53,22 +58,13 @@ theme.get("/api/theme", async (c) => {
 /**
  * Admin-gated by the requireAdmin middleware mounted on /api/admin/* .
  *
- * The hex check is not cosmetic. This value is written into a CSS custom
- * property on every page, so an unvalidated string here is a stylesheet
- * injection into the whole site. Reject anything that is not exactly
- * #rrggbb - including named colours and three-digit shorthand, both of which
- * are valid CSS and neither of which is worth widening the gate for.
+ * A `primary` in the body is now IGNORED rather than rejected: an admin tab
+ * left open across the deploy will still send one, and 400-ing a rename over
+ * a field nobody can see is a worse outcome than quietly dropping it.
  */
 theme.put("/api/admin/theme", async (c) => {
-  type Body = { primary?: string; team_name?: string };
+  type Body = { team_name?: string };
   const body: Body = await c.req.json<Body>().catch(() => ({}) as Body);
-
-  if (body.primary !== undefined) {
-    if (typeof body.primary !== "string" || !HEX.test(body.primary)) {
-      return c.json({ error: "Color must be a six-digit hex, like #862633" }, 400);
-    }
-    await putSetting(c.env, "theme_primary", body.primary.toLowerCase());
-  }
 
   if (body.team_name !== undefined) {
     const name = String(body.team_name).trim().slice(0, 60);
@@ -76,13 +72,6 @@ theme.put("/api/admin/theme", async (c) => {
     await putSetting(c.env, "team_name", name);
   }
 
-  const [primary, teamName] = await Promise.all([
-    getSetting(c.env, "theme_primary"),
-    getSetting(c.env, "team_name"),
-  ]);
-  return c.json({
-    ok: true,
-    primary: primary ?? DEFAULT_PRIMARY,
-    team_name: teamName ?? DEFAULT_TEAM_NAME,
-  });
+  const teamName = await getSetting(c.env, "team_name");
+  return c.json({ ok: true, team_name: teamName ?? DEFAULT_TEAM_NAME });
 });

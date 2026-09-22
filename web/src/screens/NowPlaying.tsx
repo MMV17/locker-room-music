@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get, post } from "./../api";
 import type { AuxState, MyDj, NowPlay, NowResponse } from "./../api";
 import { Artwork, Empty, Spinner, formatClock } from "./../components";
-import { IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
+import { IconCheck, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
@@ -149,7 +149,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
           >
             <IconSpeaker muted={!now?.speaker_online} />
           </span>
-          <span className="t-label np-head-team">{teamName}</span>
+          <span className="t-label t-chrome np-head-team">{teamName}</span>
           <button
             className="jersey is-sm"
             onClick={() => navigate("/settings")}
@@ -192,23 +192,57 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             ) : iAmDj ? (
               <DjStanding myDj={myDj} />
             ) : (
+              /* Each thumb is a button plus a caption, and the selected one
+                 also gets a check badge. Three signals, only one of which is
+                 colour — the old version said "you voted" by turning green or
+                 red and nothing else, which is the exact pairing that is
+                 hardest to tell apart. See .vote.is-on-up in styles.css. */
               <div className="votes">
-                <button
-                  className={"vote" + (play.my_vote === -1 ? " is-on-down" : "")}
-                  aria-label="Thumbs down"
-                  aria-pressed={play.my_vote === -1}
-                  onClick={() => vote(-1)}
-                >
-                  <ThumbDown />
-                </button>
-                <button
-                  className={"vote" + (play.my_vote === 1 ? " is-on-up" : "")}
-                  aria-label="Thumbs up"
-                  aria-pressed={play.my_vote === 1}
-                  onClick={() => vote(1)}
-                >
-                  <ThumbUp />
-                </button>
+                <span className="vote-pick">
+                  <button
+                    className={"vote" + (play.my_vote === -1 ? " is-on-down" : "")}
+                    aria-label="Thumbs down"
+                    aria-pressed={play.my_vote === -1}
+                    onClick={() => vote(-1)}
+                  >
+                    <ThumbDown />
+                    {play.my_vote === -1 && (
+                      <span className="vote-check">
+                        <IconCheck />
+                      </span>
+                    )}
+                  </button>
+                  <span
+                    className={
+                      "t-chrome vote-cap" + (play.my_vote === -1 ? " is-mine" : "")
+                    }
+                  >
+                    {play.my_vote === -1 ? "Your vote" : "Nah"}
+                  </span>
+                </span>
+
+                <span className="vote-pick">
+                  <button
+                    className={"vote" + (play.my_vote === 1 ? " is-on-up" : "")}
+                    aria-label="Thumbs up"
+                    aria-pressed={play.my_vote === 1}
+                    onClick={() => vote(1)}
+                  >
+                    <ThumbUp />
+                    {play.my_vote === 1 && (
+                      <span className="vote-check">
+                        <IconCheck />
+                      </span>
+                    )}
+                  </button>
+                  <span
+                    className={
+                      "t-chrome vote-cap" + (play.my_vote === 1 ? " is-mine" : "")
+                    }
+                  >
+                    {play.my_vote === 1 ? "Your vote" : "Fire"}
+                  </span>
+                </span>
               </div>
             )}
           </>
@@ -363,7 +397,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
               Still not "You're DJing" when it is you: the panel below the
               progress bar already says exactly that, and saying it twice reads
               as a bug rather than as emphasis. */}
-          <span className="dj-chip-label">Now on aux</span>
+          <span className="t-chrome dj-chip-label">Now on aux</span>
           <span className="dj-chip-name">{play.dj.name}</span>
         </span>
       </span>
@@ -376,7 +410,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
         <span className="dj-chip is-unclaimed">
           <span className="jersey is-sm">?</span>
           <span className="stack">
-            <span className="dj-chip-label">Now on aux</span>
+            <span className="t-chrome dj-chip-label">Now on aux</span>
             <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
             {/* The hint is what lets someone recognise their own phone in a
                 room where four are connected. Worth the third line here. */}
@@ -394,7 +428,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
     <span className="dj-chip is-unclaimed">
       <span className="jersey is-sm">?</span>
       <span className="stack">
-        <span className="dj-chip-label">Now on aux</span>
+        <span className="t-chrome dj-chip-label">Now on aux</span>
         <span className="dj-chip-name">Unknown phone</span>
       </span>
     </span>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./../api";
 import { Spinner, formatWhen, useConfirm } from "./../components";
 import { useNavigate } from "./../router";
-import { applyTheme, cacheTheme } from "./../theme";
+import { cacheTheme } from "./../theme";
 import type { Theme } from "./../theme";
 
 /**
@@ -198,13 +198,14 @@ export function Admin({ teamName }: { teamName: string }) {
 type Call = <T>(path: string, init?: RequestInit) => Promise<T>;
 
 /**
- * The one team colour. Everything else on the site is neutral, so this single
- * value is the whole brand — and because it is only ever used as an accent,
- * any school colour is safe here, including ones that would be unreadable as
- * a background.
+ * The team's name. That is the whole of it now.
+ *
+ * There used to be a colour picker here, and one hex drove the entire brand:
+ * the tab underline, jersey numbers, buttons. It is gone, and so is
+ * `theme.primary` — the palette is fixed to the logo's black, ivory and
+ * antique gold. A school is named, not coloured. See styles.css.
  */
 function Appearance({ call }: { call: Call }) {
-  const [primary, setPrimary] = useState("#2f3a45");
   const [name, setName] = useState("");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,10 +213,7 @@ function Appearance({ call }: { call: Call }) {
   useEffect(() => {
     fetch("/api/theme")
       .then((r) => r.json())
-      .then((t: Theme) => {
-        setPrimary(t.primary);
-        setName(t.team_name);
-      })
+      .then((t: Theme) => setName(t.team_name))
       .catch(() => undefined);
   }, []);
 
@@ -224,9 +222,8 @@ function Appearance({ call }: { call: Call }) {
     try {
       const t = await call<Theme & { ok: true }>("/api/admin/theme", {
         method: "PUT",
-        body: JSON.stringify({ primary, team_name: name }),
+        body: JSON.stringify({ team_name: name }),
       });
-      applyTheme(t);
       cacheTheme(t);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
@@ -245,40 +242,9 @@ function Appearance({ call }: { call: Call }) {
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
       </label>
 
-      <label className="field">
-        <span className="t-label">Team color</span>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input
-            type="color"
-            value={primary}
-            onChange={(e) => {
-              setPrimary(e.target.value);
-              // Live preview, so a school colour can be matched by eye.
-              applyTheme({ primary: e.target.value, team_name: name });
-            }}
-            style={{
-              width: 56,
-              height: 52,
-              padding: 4,
-              border: "1px solid var(--hairline)",
-              borderRadius: 16,
-              background: "var(--surface)",
-            }}
-            aria-label="Team color"
-          />
-          <input
-            className="input"
-            value={primary}
-            onChange={(e) => setPrimary(e.target.value)}
-            spellCheck={false}
-            autoCapitalize="none"
-          />
-        </div>
-      </label>
-
       <p className="t-sub" style={{ marginBottom: 12 }}>
-        Used for accents only — the tab underline, jersey numbers, buttons. Thumbs stay
-        green and red whatever you pick.
+        Shown in the header and on the join screen. The colours are AuxGoat's and are
+        not configurable.
       </p>
 
       <button className="btn is-primary is-block" onClick={save}>

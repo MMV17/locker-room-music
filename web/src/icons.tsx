@@ -16,6 +16,15 @@ const stroke = {
 /* The two that matter. Solid, because a filled shape reads at arm's length
    in a loud room where an outline does not. */
 
+/* The tick in the vote badge. A SHAPE, deliberately: it is what tells you
+   which way you voted once the colour is gone. See .vote-check. */
+export const IconCheck = ({ className }: P) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth={3.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m20 6-11 11-5-5" />
+  </svg>
+);
+
 export const ThumbUp = ({ className }: P) => (
   <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
     <path
