@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get, post } from "./../api";
 import type { AuxState, MyDj, NowPlay, NowResponse } from "./../api";
-import { Artwork, Empty, Spinner, formatClock } from "./../components";
-import { IconCheck, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
+import { Artwork, Empty, Spinner, formatClock, formatWhen } from "./../components";
+import { IconCheck, IconSettings, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
@@ -36,6 +36,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   const [myDj, setMyDj] = useState<MyDj | null>(null);
   const [revealFor, setRevealFor] = useState<NowPlay | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [speakerOpen, setSpeakerOpen] = useState(false);
 
   // The play we last saw with an *open* window. The reveal fires on the
   // transition out of that, which is also why a cold open onto an
@@ -141,21 +142,34 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               to the least important thing on the screen. The full sentence
               survives in the label, which is what a screen reader announces
               and what a long-press shows. */}
-          <span
-            className={"np-speaker" + (now?.speaker_online ? " is-live" : "")}
-            role="img"
-            aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}`}
-            title={`Speaker ${now?.speaker_online ? "online" : "offline"}`}
-          >
-            <IconSpeaker muted={!now?.speaker_online} />
+          <span className="np-speaker-wrap">
+            <button
+              className={"np-speaker" + (now?.speaker_online ? " is-live" : "")}
+              aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}. Details.`}
+              aria-expanded={speakerOpen}
+              onClick={() => setSpeakerOpen((v) => !v)}
+            >
+              <IconSpeaker muted={!now?.speaker_online} />
+            </button>
+            {speakerOpen && (
+              <SpeakerPopover
+                online={now?.speaker_online ?? false}
+                lastSeen={now?.speaker_last_seen ?? null}
+                aux={now?.aux ?? null}
+                onClose={() => setSpeakerOpen(false)}
+              />
+            )}
           </span>
           <span className="t-label t-chrome np-head-team">{teamName}</span>
+          {/* A gear, not the jersey number. The number was doing two jobs and
+              neither well: it read as a score, and nothing about it said
+              "settings". Identity moved to the profile header inside. */}
           <button
-            className="jersey is-sm"
+            className="np-gear"
             onClick={() => navigate("/settings")}
-            aria-label={`Signed in as ${now?.viewer?.name ?? "unknown"}. Settings.`}
+            aria-label={`Settings. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
           >
-            {now?.viewer?.jersey_number || (now?.viewer?.name?.[0] ?? "?")}
+            <IconSettings />
           </button>
         </header>
 
@@ -166,12 +180,17 @@ export function NowPlaying({ teamName }: { teamName: string }) {
           <NothingPlaying online={now?.speaker_online ?? false} aux={now?.aux ?? null} />
         ) : (
           <>
-            <Artwork
-              className="np-art"
-              src={play.artwork_url}
-              fallback={play.artwork_fallback}
-              alt={`Artwork for ${play.title}`}
-            />
+            {/* The artwork is the ONLY thing on this screen that gives. See
+                .np-artwrap — everything else has a job that does not
+                compress, so the art takes what is left and no more. */}
+            <div className="np-artwrap">
+              <Artwork
+                className="np-art"
+                src={play.artwork_url}
+                fallback={play.artwork_fallback}
+                alt={`Artwork for ${play.title}`}
+              />
+            </div>
 
             <div className="np-meta">
               <span className="np-eyebrow">
@@ -379,6 +398,68 @@ function WaitingBanner({ aux }: { aux: AuxState | null }) {
       You&rsquo;re connected, but {who} has the aux. Press play once
       they&rsquo;re done and it&rsquo;s yours.
     </div>
+  );
+}
+
+/**
+ * What the speaker icon actually means, on tap.
+ *
+ * The icon used to be a `role="img"` with a `title`, and a title attribute
+ * does nothing at all on a phone — so the one place the meaning was written
+ * down was unreachable on the only device this product runs on. It is a real
+ * button now.
+ *
+ * WHY IT SAYS WHEN AND NOT JUST WHETHER: `speaker_online` is only "the Pi has
+ * beaconed in the last three minutes". It says nothing about a phone being
+ * connected or about anything coming out of the speaker, and that distinction
+ * has misled people on this project before — "Live" was removed from this
+ * header for exactly that reason. Two minutes stale is a blip; two hours is a
+ * box to go and look at, and "Offline" alone cannot tell you which.
+ */
+function SpeakerPopover({
+  online,
+  lastSeen,
+  aux,
+  onClose,
+}: {
+  online: boolean;
+  lastSeen: string | null;
+  aux: AuxState | null;
+  onClose: () => void;
+}) {
+  const holder = aux?.holder ?? null;
+  return (
+    <>
+      {/* Catches the next tap anywhere. A popover you cannot dismiss by
+          tapping away is a popover people get stuck in. */}
+      <button className="pop-scrim" aria-label="Close" onClick={onClose} />
+      <div className="pop" role="dialog" aria-label="Speaker status">
+        <span className="pop-row">
+          <span className={"pop-dot" + (online ? " is-live" : "")} aria-hidden="true" />
+          <span className="t-chrome pop-state">{online ? "AuxGoat online" : "AuxGoat offline"}</span>
+        </span>
+        <p className="pop-line">
+          {online
+            ? "The box is powered up and on the network."
+            : "No check-in for over three minutes. It may be unplugged, or off the wifi."}
+        </p>
+        <p className="pop-line pop-meta">
+          {lastSeen ? `Last check-in ${formatWhen(lastSeen)}` : "It has never checked in."}
+        </p>
+        <span className="pop-rule" aria-hidden="true" />
+        <p className="pop-line">
+          {holder
+            ? holder.is_you
+              ? "Your phone has the aux."
+              : `${holder.name ?? holder.alias ?? "Someone"} has the aux.`
+            : "Nobody is connected over Bluetooth."}
+        </p>
+        <p className="pop-line pop-meta">
+          Online only means the box is reachable — not that a phone is
+          connected, and not that sound is coming out.
+        </p>
+      </div>
+    </>
   );
 }
 

@@ -580,22 +580,40 @@ input {
   color: var(--up);
 }
 
+/* THE ARTWORK IS THE ONLY THING THAT GIVES, and it is sized by the space left
+   over rather than by a guess at the viewport.
+
+   It used to be min(84vw, 326px, 38svh). The svh term was there to make the
+   page fit, and it did the opposite in practice: because the art GREW with the
+   viewport, hiding Safari's URL bar handed it the space and the content below
+   stayed just as clipped. Seen directly in two screenshots a minute apart —
+   bar shown, smaller art; bar hidden, bigger art; same overflow either way.
+
+   Now .np-artwrap is the flexible row and this only caps how large the art may
+   get. Everything below it — title, DJ line, progress, thumbs — has a job that
+   does not compress, so the art yields exactly what they need and no more. */
 .np-art {
-  /* The svh term is what makes the page fit. Width alone cannot know how much
-     vertical room is left, so on a short viewport the art kept its 62vw and
-     pushed the thumbs off the bottom. Height-relative, it gives up exactly the
-     space that is scarce, and on a tall phone the vw cap still governs. */
-  /* Grown from min(58vw, 244px, 29svh). The artwork is the hero and was
-     competing with seven sibling blocks for attention. The svh term still
-     governs on a short viewport, which is the whole reason it is here. */
-  width: min(84vw, 326px, 38svh);
+  width: min(84vw, 326px);
+  max-height: 100%;
   aspect-ratio: 1;
   border-radius: var(--r-art);
-  /* No lift shadow on black — it does nothing there. A hairline is what
-     seats a near-black cover against a black page. */
+  /* No lift shadow on black — it does nothing there. A hairline is what seats
+     a near-black cover against a black page. */
   border: 1px solid var(--hairline);
   object-fit: cover;
   display: block;
+}
+
+/* The flexible row. min-height: 0 is load-bearing: without it a flex item
+   refuses to shrink below its content size and the whole mechanism silently
+   does nothing. */
+.np-artwrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* LEFT, against .np's centre, and on purpose. A centred eyebrow with a
@@ -1411,6 +1429,130 @@ input {
 }
 
 /* ------------------------------------------------------------------ *
+ * The speaker status popover, and the gear
+ * ------------------------------------------------------------------ */
+
+.np-speaker-wrap {
+  position: relative;
+  justify-self: start;
+}
+
+/* A real button now. It was a role="img" with a title, and a title does
+   nothing on a phone — so the one place the meaning was written down could not
+   be reached on the only device this runs on. 44px, like every other control. */
+.np-speaker {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.np-speaker.is-live {
+  color: var(--up-ink);
+}
+
+.np-speaker svg {
+  width: 20px;
+  height: 20px;
+}
+
+.np-gear {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-thumb);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.np-gear svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* Anchored to the icon's corner rather than centred, because it is explaining
+   THAT icon. */
+.pop {
+  position: absolute;
+  top: 48px;
+  left: 0;
+  z-index: 40;
+  width: min(78vw, 290px);
+  padding: 14px 16px 16px;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-lift);
+  text-align: left;
+}
+
+/* Catches the next tap anywhere so the popover is always dismissible. Not a
+   div with an onClick: a real button is reachable by keyboard and announces
+   itself, and Escape-less popovers are a trap on a phone. */
+.pop-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pop-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.pop-dot.is-live {
+  background: var(--up-ink);
+}
+
+.pop-state {
+  font-size: 10px;
+  color: var(--ink);
+}
+
+.pop-line {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.pop-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pop-rule {
+  display: block;
+  height: 1px;
+  margin: 12px 0;
+  background: var(--hairline);
+}
+
+/* ------------------------------------------------------------------ *
  * Folding sections — the Admin screen
  *
  * Five sections had become one long scroll with no shape. Folded, the screen
@@ -1524,8 +1666,11 @@ input {
     gap: 8px;
   }
 
+  /* Only the CAP moves now. The flex row above decides the actual size, so
+     this is a ceiling for a small screen rather than a second guess at the
+     height — which is what the old 27svh term was. */
   .np-art {
-    width: min(46vw, 184px, 27svh);
+    width: min(64vw, 240px);
   }
 
   .t-title {

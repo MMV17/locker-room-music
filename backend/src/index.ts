@@ -796,6 +796,10 @@ app.get("/api/now", requireSession, async (c) => {
     aux_waiting: string | null;
     aux_free_in_ms: number | null;
   }>();
+  // Sent so the speaker icon can say WHEN, not just whether. "Offline" with no
+  // timestamp is the least actionable thing a status light can say — two
+  // minutes ago is a blip, two hours ago is a box to go and look at.
+  const speakerLastSeen = hb?.last_seen_at ?? null;
   const speakerOnline = hb
     ? Date.now() - Date.parse(hb.last_seen_at) < 3 * 60_000
     : false;
@@ -821,6 +825,7 @@ app.get("/api/now", requireSession, async (c) => {
     return c.json({
       play: null,
       speaker_online: speakerOnline,
+      speaker_last_seen: speakerLastSeen,
       viewer: viewer ?? null,
       aux,
     });
@@ -858,6 +863,7 @@ app.get("/api/now", requireSession, async (c) => {
 
   return c.json({
     speaker_online: speakerOnline,
+    speaker_last_seen: speakerLastSeen,
     // Who has the speaker. Null when it is offline or nothing has reported.
     aux,
     // Who the caller is. The client cannot work this out on its own, and it

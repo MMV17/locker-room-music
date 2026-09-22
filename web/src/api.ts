@@ -147,6 +147,9 @@ export interface AuxState {
 
 export interface NowResponse {
   speaker_online: boolean;
+  /** ISO timestamp of the Pi's last beacon, or null if it has never checked
+   *  in. Only meaningful alongside speaker_online — see the speaker popover. */
+  speaker_last_seen: string | null;
   viewer: Viewer | null;
   play: NowPlay | null;
   aux: AuxState | null;
