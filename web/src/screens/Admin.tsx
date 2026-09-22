@@ -185,12 +185,23 @@ export function Admin({ teamName }: { teamName: string }) {
         </button>
       </header>
 
-      <Appearance call={call} />
-      <Roster call={call} />
-      <Speaker call={call} />
+      {/* Ordered by why you opened this screen, not by when it was built.
+          It used to lead with the team name — a thing you set once a season —
+          and put the remote commands ABOVE the speaker picker they operate on.
+
+          The split that matters is doing vs reading, and output vs input:
+          Speaker output is where you change and fix the box, Bluetooth
+          pairings is the connections coming IN to it, and Diagnostics is
+          purely what came back. Forget used to sit on the output list, which
+          put a destructive button on the one list that answers a different
+          question entirely. */}
       <SpeakerOutput call={call} />
+      <Pairings call={call} />
       <Devices call={call} />
+      <Roster call={call} />
       <Plays call={call} />
+      <Appearance call={call} />
+      <Speaker call={call} />
     </main>
   );
 }
@@ -490,6 +501,118 @@ function Devices({ call }: { call: Call }) {
  * a season of data is not reproducible. Voiding an individual *vote* stays
  * API-only; picking one vote out of a tally is not a phone-screen task.
  */
+/**
+ * Bluetooth pairings — the INPUT side.
+ *
+ * Forget used to sit on the speaker picker, and that was wrong in a way worth
+ * writing down: that list answers "what does the box play OUT through", and a
+ * pairing answers "what connects IN to it". A JBL and a teammate's iPhone were
+ * appearing as near-identical rows with opposite meanings, and the destructive
+ * button was on the output list.
+ *
+ * WHAT THIS LIST ACTUALLY IS, because it is not quite "paired devices":
+ * bt-scan.sh reports "everything nearby plus everything ever paired", so a
+ * device here may never have been bonded. That is deliberate on its side — a
+ * paired-but-switched-off speaker has to stay selectable — and it means Forget
+ * can be pressed on something that was never paired. bt-forget.sh answers that
+ * honestly rather than claiming success, so the imprecision is safe to leave.
+ */
+function Pairings({ call }: { call: Call }) {
+  const { confirm, dialog } = useConfirm();
+  const [state, setState] = useState<SpeakerState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    call<SpeakerState>("/api/admin/pi/speakers")
+      .then(setState)
+      .catch(() => setState(null));
+  }, [call]);
+  useEffect(load, [load]);
+
+  const forget = async (mac: string, name: string | null) => {
+    const ok = await confirm({
+      title: `Forget ${name ?? mac}?`,
+      body:
+        "Use this when someone forgot the speaker on their phone and now cannot reconnect. They will have to pair again — one tap on their side. Nobody else is affected.",
+      confirmLabel: "Forget it",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await call("/api/admin/pi/forget", {
+        method: "POST",
+        body: JSON.stringify({ mac }),
+      });
+      // Nothing changes on screen until the Pi picks the command up on its next
+      // beacon, and the row stays either way — this list is what the last SCAN
+      // saw, not what is currently bonded. So say so rather than looking broken.
+      setNote(`Queued. ${name ?? mac} will be forgotten on the speaker's next check-in.`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not forget that device");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const devices = state?.devices ?? [];
+
+  return (
+    <Section title="Bluetooth pairings">
+      {dialog}
+      {error && <div className="banner is-bad">{error}</div>}
+      {note && <div className="banner is-info">{note}</div>}
+
+      <p className="t-sub" style={{ marginBottom: 12 }}>
+        What the speaker has paired with or seen nearby. Forget one when
+        somebody removed AuxGoat on their phone and now cannot reconnect —
+        Bluetooth has no way to tell us they did, so the speaker keeps a
+        pairing they no longer have and refuses them.
+      </p>
+
+      {devices.length === 0 ? (
+        <div className="empty">
+          <p className="empty-title">Nothing seen yet</p>
+          Run a scan from Speaker output first.
+        </div>
+      ) : (
+        <div className="rows">
+          {devices.map((d) => {
+            const chosen = state?.selected === d.mac;
+            return (
+              <div key={d.mac} className="row">
+                <span className="row-main">
+                  <span className="row-title">{d.name ?? d.mac}</span>
+                  <span className="row-sub">
+                    {chosen ? "This is the output speaker" : d.name ? d.mac : "No name"}
+                  </span>
+                </span>
+                {/* Not offered for the speaker in use: forgetting it drops
+                    audio with no error anywhere and costs the one-tap return.
+                    The server refuses it and the Pi refuses it again — but not
+                    drawing the button is the only one of the three a coach
+                    ever sees. */}
+                {!chosen && (
+                  <button
+                    className="btn-quiet is-danger"
+                    disabled={busy}
+                    onClick={() => forget(d.mac, d.name)}
+                  >
+                    Forget
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function Plays({ call }: { call: Call }) {
   const { confirm, dialog } = useConfirm();
   const [plays, setPlays] = useState<AdminPlay[] | null>(null);
@@ -642,6 +765,7 @@ function SpeakerOutput({ call }: { call: Call }) {
   // Without this, a bare `confirm` silently resolves to window.confirm — the
   // typechecker caught it, but only because the signatures differ.
   const { confirm, dialog } = useConfirm();
+  const [sent, setSent] = useState<string | null>(null);
   const [scanState, setScanState] = useState<"idle" | "queued" | "scanning" | "done">("idle");
 
   const load = useCallback(
@@ -695,41 +819,6 @@ function SpeakerOutput({ call }: { call: Call }) {
     }
   };
 
-  /**
-   * Forget one paired device, so a phone that forgot THIS BOX can pair again.
-   *
-   * Lives on the coach's screen and not in Settings' speaker picker, which is
-   * deliberately a DJ control (2026-09-01) behind requireSession — any
-   * signed-in teammate can reach that one, and a Forget button there would let
-   * anybody drop anybody else's pairing.
-   */
-  const forget = async (mac: string, name: string | null) => {
-    const ok = await confirm({
-      title: `Forget ${name ?? mac}?`,
-      body:
-        "Use this when someone forgot the speaker on their phone and now can't reconnect. They will have to pair again — one tap on their side. Nobody else is affected.",
-      confirmLabel: "Forget it",
-      danger: true,
-    });
-    if (!ok) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await call("/api/admin/pi/forget", {
-        method: "POST",
-        body: JSON.stringify({ mac }),
-      });
-      // No reload: nothing changes here until the Pi picks the command up on
-      // its next beacon, and the device stays in the list either way — the
-      // list is what the last SCAN saw, not what is currently bonded.
-      setError(null);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not forget that device");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const choose = async (mac: string | null, name: string | null) => {
     setBusy(true);
     setError(null);
@@ -758,6 +847,58 @@ function SpeakerOutput({ call }: { call: Call }) {
         return (a.name ?? a.mac).localeCompare(b.name ?? b.mac);
       })
     : [];
+
+  /**
+   * The four things a coach actually does to the box, named for what they DO.
+   *
+   * These used to be rendered straight off the allowlist —
+   * `allowed.map(cmd => cmd.replace(/-/g, " "))` — so every internal command
+   * name became a button: "restart listener", "report status", "report full",
+   * "forget selected phone". That is the protocol leaking onto a coach's
+   * screen. Two of them did not even belong: "scan speakers" duplicates the
+   * Scan button below, and "forget selected phone" does nothing at all without
+   * a target, which is set from the Bluetooth pairings section.
+   *
+   * "report status" is gone from the UI but stays on the allowlist — it is
+   * strictly less than a full check, and two buttons that differ only in
+   * thoroughness is a choice nobody wants to make while a speaker is dead.
+   */
+  const ACTIONS: { cmd: string; label: string; sub: string; danger?: boolean }[] = [
+    { cmd: "report-full", label: "Check it", sub: "Full diagnostic. Safe while music is playing." },
+    { cmd: "run-repair", label: "Try to fix it", sub: "Restarts Bluetooth and the services. Stops the music." , danger: true },
+    { cmd: "restart-listener", label: "Restart the app", sub: "Just the listener. Usually enough.", danger: true },
+    { cmd: "reboot", label: "Reboot the box", sub: "Last resort. About a minute offline.", danger: true },
+  ];
+
+  const send = async (cmd: string, label: string) => {
+    if (cmd !== "report-full") {
+      const ok = await confirm({
+        title: `${label}?`,
+        body:
+          cmd === "reboot"
+            ? "Music stops for about a minute, and whoever is DJing is cut off."
+            : cmd === "run-repair"
+              ? "Restarts Bluetooth and the lockerroom services. Music stops if anything is playing, and the speaker can show as offline for a few minutes. It will not touch the listener's code."
+              : "Restarts the listener. Anything playing right now is interrupted.",
+        confirmLabel: label,
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await call("/api/admin/pi/commands", {
+        method: "POST",
+        body: JSON.stringify({ command: cmd }),
+      });
+      setSent(`${label} — queued. The speaker picks it up on its next check-in.`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not queue that");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const scanMessage = {
     idle: "",
@@ -794,6 +935,28 @@ function SpeakerOutput({ call }: { call: Call }) {
                 </button>
               ) : null}
             </div>
+          </div>
+
+          {sent && <div className="banner is-info">{sent}</div>}
+
+          {/* Between the status and the picker on purpose: when something is
+              wrong you want the fix, not the list of speakers. */}
+          <div className="rows" style={{ marginBottom: 14 }}>
+            {ACTIONS.map((a) => (
+              <div key={a.cmd} className="row">
+                <span className="row-main">
+                  <span className="row-title">{a.label}</span>
+                  <span className="row-sub">{a.sub}</span>
+                </span>
+                <button
+                  className={a.danger ? "btn-quiet is-danger" : "btn"}
+                  disabled={busy}
+                  onClick={() => send(a.cmd, a.label)}
+                >
+                  Run
+                </button>
+              </div>
+            ))}
           </div>
 
           <p className="t-sub" style={{ marginBottom: 10 }}>
@@ -835,29 +998,13 @@ function SpeakerOutput({ call }: { call: Call }) {
                           : ""}
                       </span>
                     </span>
-                    <span style={{ display: "flex", gap: 8, flex: "none" }}>
-                      {/* Not offered for the speaker in use: forgetting it
-                          would drop audio with no error anywhere and cost the
-                          one-tap return. The server refuses it too, and the
-                          Pi refuses it a third time — but not drawing the
-                          button is the only one of the three the coach sees. */}
-                      {!chosen && (
-                        <button
-                          className="btn-quiet is-danger"
-                          disabled={busy}
-                          onClick={() => forget(d.mac, d.name)}
-                        >
-                          Forget
-                        </button>
-                      )}
-                      <button
-                        className={chosen ? "btn-quiet" : "btn"}
-                        disabled={busy || chosen}
-                        onClick={() => choose(d.mac, d.name)}
-                      >
-                        {chosen ? "In use" : "Use this one"}
-                      </button>
-                    </span>
+                    <button
+                      className={chosen ? "btn-quiet" : "btn"}
+                      disabled={busy || chosen}
+                      onClick={() => choose(d.mac, d.name)}
+                    >
+                      {chosen ? "In use" : "Use this one"}
+                    </button>
                   </div>
                 );
               })}
@@ -879,23 +1026,34 @@ function SpeakerOutput({ call }: { call: Call }) {
  * hang.
  */
 function Speaker({ call }: { call: Call }) {
-  const { confirm, dialog } = useConfirm();
   const [commands, setCommands] = useState<PiCommand[] | null>(null);
-  const [allowed, setAllowed] = useState<string[]>([]);
   const [reports, setReports] = useState<PiReport[]>([]);
   // Which command rows are expanded. A dump is long, so the history stays a
   // list of one-liners until somebody asks for one — but "asks for one" has to
   // be possible, which before 2026-09-21 it was not.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  /**
+   * navigator.clipboard needs a secure context; the site is https so it is
+   * there, but it still rejects when the page is not focused or permission is
+   * refused. Say so rather than silently doing nothing — a Copy button that
+   * appears to work and does not is worse than one that admits it failed.
+   */
+  const copy = async (kind: string, body: string) => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopied(kind);
+      window.setTimeout(() => setCopied(null), 2000);
+    } catch {
+      setError("Could not reach the clipboard — select the text and copy it by hand.");
+    }
+  };
 
   const load = useCallback(() => {
     call<{ commands: PiCommand[]; allowed: string[] }>("/api/admin/pi/commands")
-      .then((r) => {
-        setCommands(r.commands);
-        setAllowed(r.allowed);
-      })
+      .then((r) => setCommands(r.commands))
       .catch(() => setCommands([]));
     // Separate request because it is separate storage. A failure here must not
     // blank the command list — the buttons are the half you need when the box
@@ -907,69 +1065,16 @@ function Speaker({ call }: { call: Call }) {
 
   useEffect(load, [load]);
 
-  const send = async (command: string) => {
-    // Reboot cuts audio for whoever is DJing right now.
-    if (command === "reboot") {
-      const ok = await confirm({
-        title: "Reboot the speaker?",
-        body: "Music stops for about a minute, and whoever is DJing is cut off.",
-        confirmLabel: "Reboot",
-        danger: true,
-      });
-      if (!ok) return;
-    }
-    // A repair restarts bluetooth and every lockerroom unit. The Pi refuses it
-    // mid-song on its own — the play state lives there, not here — but saying
-    // so before the press is better than a refusal coming back a minute later.
-    if (command === "run-repair") {
-      const ok = await confirm({
-        title: "Run the repair script?",
-        body:
-          "Restarts Bluetooth and the lockerroom services on the speaker. Music stops if anything is playing, and the speaker can show as offline for a few minutes while it runs. It will not touch the listener.",
-        confirmLabel: "Run repair",
-        danger: true,
-      });
-      if (!ok) return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await call("/api/admin/pi/commands", {
-        method: "POST",
-        body: JSON.stringify({ command }),
-      });
-      load();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not queue that");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const label = (c: PiCommand) =>
     c.completed_at ? (c.ok ? "done" : "failed") : c.dispatched_at ? "running" : "queued";
 
   return (
-    <Section title="Speaker">
-      {dialog}
+    <Section title="Diagnostics">
       {error && <div className="banner is-bad">{error}</div>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
-        The speaker checks in about once a minute, so a command can take that long to
-        start.
+        What the speaker sent back. Run a check from <strong>Speaker output</strong>;
+        it checks in about once a minute, so a result can take that long to appear.
       </p>
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-        {allowed.map((cmd) => (
-          <button
-            key={cmd}
-            className="btn"
-            disabled={busy}
-            onClick={() => send(cmd)}
-          >
-            {cmd.replace(/-/g, " ")}
-          </button>
-        ))}
-      </div>
 
       {!commands ? (
         <Spinner />
@@ -1030,19 +1135,33 @@ function Speaker({ call }: { call: Call }) {
           you went looking for — see migration 007. Each kind keeps its latest,
           so a repair log does not overwrite the diagnostic that justified
           running it; reading the two together is the whole workflow. */}
+      {/* FOLDED, because a full report is 20 KB and it was pushing the command
+          history off the bottom of the screen every time one arrived. Collapsed
+          it is a one-line receipt; open it is the whole dump. */}
       {reports.map((r) => (
-        <div key={r.kind}>
-          <div className="dump-head">
-            <span className="t-label">{r.kind.replace(/-/g, " ")}</span>
-            <span className="dump-when">
+        <details key={r.kind} className="fold">
+          <summary className="fold-head">
+            <span className="fold-title t-section" style={{ fontSize: 16 }}>
+              {r.kind === "run-repair" ? "Repair log" : "Full report"}
+            </span>
+            <span className="dump-when" style={{ marginLeft: "auto", marginRight: 10 }}>
               <span className={r.ok ? "dump-ok" : "dump-bad"}>
-                {r.ok ? "ok" : "reported a problem"}
+                {r.ok ? "ok" : "problem"}
               </span>{" "}
               · {formatWhen(r.collected_at)}
             </span>
+            <span className="fold-mark" aria-hidden="true" />
+          </summary>
+          <div className="dump-action">
+            {/* The report is long and the useful thing to do with it is send it
+                to somebody. Selecting 20 KB of monospace by dragging on a phone
+                is not a realistic way to do that. */}
+            <button className="btn-quiet" onClick={() => copy(r.kind, r.body)}>
+              {copied === r.kind ? "Copied" : "Copy all"}
+            </button>
           </div>
           <pre className="dump">{r.body}</pre>
-        </div>
+        </details>
       ))}
     </Section>
   );

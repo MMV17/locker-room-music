@@ -1392,6 +1392,14 @@ input {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Sits between a folded report's summary and the dump itself. Right-aligned
+   so Copy all lands under the thumb rather than under the heading. */
+.dump-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
 /* The header strip above a dump: what it is, when it was collected, and
    whether the command that produced it succeeded. */
 .dump-head {
