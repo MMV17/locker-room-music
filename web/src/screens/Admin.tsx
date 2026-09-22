@@ -764,8 +764,6 @@ function SpeakerOutput({ call }: { call: Call }) {
   const [busy, setBusy] = useState(false);
   // Without this, a bare `confirm` silently resolves to window.confirm — the
   // typechecker caught it, but only because the signatures differ.
-  const { confirm, dialog } = useConfirm();
-  const [sent, setSent] = useState<string | null>(null);
   const [scanState, setScanState] = useState<"idle" | "queued" | "scanning" | "done">("idle");
 
   const load = useCallback(
@@ -848,58 +846,6 @@ function SpeakerOutput({ call }: { call: Call }) {
       })
     : [];
 
-  /**
-   * The four things a coach actually does to the box, named for what they DO.
-   *
-   * These used to be rendered straight off the allowlist —
-   * `allowed.map(cmd => cmd.replace(/-/g, " "))` — so every internal command
-   * name became a button: "restart listener", "report status", "report full",
-   * "forget selected phone". That is the protocol leaking onto a coach's
-   * screen. Two of them did not even belong: "scan speakers" duplicates the
-   * Scan button below, and "forget selected phone" does nothing at all without
-   * a target, which is set from the Bluetooth pairings section.
-   *
-   * "report status" is gone from the UI but stays on the allowlist — it is
-   * strictly less than a full check, and two buttons that differ only in
-   * thoroughness is a choice nobody wants to make while a speaker is dead.
-   */
-  const ACTIONS: { cmd: string; label: string; sub: string; danger?: boolean }[] = [
-    { cmd: "report-full", label: "Check it", sub: "Full diagnostic. Safe while music is playing." },
-    { cmd: "run-repair", label: "Try to fix it", sub: "Restarts Bluetooth and the services. Stops the music." , danger: true },
-    { cmd: "restart-listener", label: "Restart the app", sub: "Just the listener. Usually enough.", danger: true },
-    { cmd: "reboot", label: "Reboot the box", sub: "Last resort. About a minute offline.", danger: true },
-  ];
-
-  const send = async (cmd: string, label: string) => {
-    if (cmd !== "report-full") {
-      const ok = await confirm({
-        title: `${label}?`,
-        body:
-          cmd === "reboot"
-            ? "Music stops for about a minute, and whoever is DJing is cut off."
-            : cmd === "run-repair"
-              ? "Restarts Bluetooth and the lockerroom services. Music stops if anything is playing, and the speaker can show as offline for a few minutes. It will not touch the listener's code."
-              : "Restarts the listener. Anything playing right now is interrupted.",
-        confirmLabel: label,
-        danger: true,
-      });
-      if (!ok) return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await call("/api/admin/pi/commands", {
-        method: "POST",
-        body: JSON.stringify({ command: cmd }),
-      });
-      setSent(`${label} — queued. The speaker picks it up on its next check-in.`);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not queue that");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const scanMessage = {
     idle: "",
     queued: "Waiting for the speaker to check in — this can take up to a minute.",
@@ -909,7 +855,6 @@ function SpeakerOutput({ call }: { call: Call }) {
 
   return (
     <Section title="Speaker output">
-      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
 
       {!state ? (
@@ -935,28 +880,6 @@ function SpeakerOutput({ call }: { call: Call }) {
                 </button>
               ) : null}
             </div>
-          </div>
-
-          {sent && <div className="banner is-info">{sent}</div>}
-
-          {/* Between the status and the picker on purpose: when something is
-              wrong you want the fix, not the list of speakers. */}
-          <div className="rows" style={{ marginBottom: 14 }}>
-            {ACTIONS.map((a) => (
-              <div key={a.cmd} className="row">
-                <span className="row-main">
-                  <span className="row-title">{a.label}</span>
-                  <span className="row-sub">{a.sub}</span>
-                </span>
-                <button
-                  className={a.danger ? "btn-quiet is-danger" : "btn"}
-                  disabled={busy}
-                  onClick={() => send(a.cmd, a.label)}
-                >
-                  Run
-                </button>
-              </div>
-            ))}
           </div>
 
           <p className="t-sub" style={{ marginBottom: 10 }}>
@@ -1033,6 +956,9 @@ function Speaker({ call }: { call: Call }) {
   // be possible, which before 2026-09-21 it was not.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
   /**
@@ -1048,6 +974,58 @@ function Speaker({ call }: { call: Call }) {
       window.setTimeout(() => setCopied(null), 2000);
     } catch {
       setError("Could not reach the clipboard — select the text and copy it by hand.");
+    }
+  };
+
+    /**
+   * The four things a coach actually does to the box, named for what they DO.
+   *
+   * These used to be rendered straight off the allowlist —
+   * `allowed.map(cmd => cmd.replace(/-/g, " "))` — so every internal command
+   * name became a button: "restart listener", "report status", "report full",
+   * "forget selected phone". That is the protocol leaking onto a coach's
+   * screen. Two of them did not even belong: "scan speakers" duplicates the
+   * Scan button below, and "forget selected phone" does nothing at all without
+   * a target, which is set from the Bluetooth pairings section.
+   *
+   * "report status" is gone from the UI but stays on the allowlist — it is
+   * strictly less than a full check, and two buttons that differ only in
+   * thoroughness is a choice nobody wants to make while a speaker is dead.
+   */
+  const ACTIONS: { cmd: string; label: string; sub: string; danger?: boolean }[] = [
+    { cmd: "report-full", label: "Check it", sub: "Full diagnostic. Safe while music is playing." },
+    { cmd: "run-repair", label: "Try to fix it", sub: "Restarts Bluetooth and the services. Stops the music." , danger: true },
+    { cmd: "restart-listener", label: "Restart the app", sub: "Just the listener. Usually enough.", danger: true },
+    { cmd: "reboot", label: "Reboot the box", sub: "Last resort. About a minute offline.", danger: true },
+  ];
+
+  const send = async (cmd: string, label: string) => {
+    if (cmd !== "report-full") {
+      const ok = await confirm({
+        title: `${label}?`,
+        body:
+          cmd === "reboot"
+            ? "Music stops for about a minute, and whoever is DJing is cut off."
+            : cmd === "run-repair"
+              ? "Restarts Bluetooth and the lockerroom services. Music stops if anything is playing, and the speaker can show as offline for a few minutes. It will not touch the listener's code."
+              : "Restarts the listener. Anything playing right now is interrupted.",
+        confirmLabel: label,
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await call("/api/admin/pi/commands", {
+        method: "POST",
+        body: JSON.stringify({ command: cmd }),
+      });
+      setSent(`${label} — queued. The speaker picks it up on its next check-in.`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not queue that");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1070,11 +1048,35 @@ function Speaker({ call }: { call: Call }) {
 
   return (
     <Section title="Diagnostics">
+      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
+      {sent && <div className="banner is-info">{sent}</div>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
-        What the speaker sent back. Run a check from <strong>Speaker output</strong>;
-        it checks in about once a minute, so a result can take that long to appear.
+        Check the box, try to fix it, and read what it sent back. It checks in
+        about once a minute, so a result can take that long to appear.
       </p>
+
+      {/* The actions sit WITH their results rather than in Speaker output.
+          Pressing "Check it" in one section and reading its report in another
+          was the awkward seam in the first cut of this screen — the whole
+          point of a diagnostic is the thing it tells you. */}
+      <div className="rows" style={{ marginBottom: 16 }}>
+        {ACTIONS.map((a) => (
+          <div key={a.cmd} className="row">
+            <span className="row-main">
+              <span className="row-title">{a.label}</span>
+              <span className="row-sub">{a.sub}</span>
+            </span>
+            <button
+              className={a.danger ? "btn-quiet is-danger" : "btn"}
+              disabled={busy}
+              onClick={() => send(a.cmd, a.label)}
+            >
+              Run
+            </button>
+          </div>
+        ))}
+      </div>
 
       {!commands ? (
         <Spinner />
