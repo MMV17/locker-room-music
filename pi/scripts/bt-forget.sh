@@ -48,6 +48,16 @@ if [ -n "$LIVE_RELAY" ] && [ "${MAC^^}" = "${LIVE_RELAY^^}" ]; then
   exit 1
 fi
 
+# Say so rather than reporting a bare success. Removing a bond that was never
+# there ends in the right state, so this is not an error — but "forgotten" for
+# a device this box never knew would send the next reader looking for a bug
+# that is not here.
+if ! $BTCTL devices Paired 2>/dev/null | grep -qi "$MAC"; then
+  echo "not paired: $MAC is not bonded to this box, so there is nothing to forget"
+  rm -f "$TARGET_FILE"
+  exit 0
+fi
+
 NAME="$($BTCTL info "$MAC" 2>/dev/null | sed -n 's/^\s*Alias:\s*//p' | head -1)"
 echo "forgetting ${NAME:-$MAC} ($MAC)"
 
