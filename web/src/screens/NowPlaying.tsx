@@ -174,6 +174,10 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             />
 
             <div className="np-meta">
+              <span className="np-eyebrow">
+                <span className="t-chrome np-eyebrow-label">Now playing</span>
+                <span className="np-eyebrow-rule" aria-hidden="true" />
+              </span>
               <h1 className="t-title">{play.title}</h1>
               <p className="t-sub">{play.artist ?? "Unknown artist"}</p>
               {play.album && <p className="np-album">{play.album}</p>}

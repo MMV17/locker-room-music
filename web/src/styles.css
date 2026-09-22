@@ -591,8 +591,36 @@ input {
   display: block;
 }
 
+/* LEFT, against .np's centre, and on purpose. A centred eyebrow with a
+   trailing rule has nowhere to run to, and a left-aligned title under a
+   centred cover is what stops the screen reading as a generic player. */
 .np-meta {
   width: 100%;
+  text-align: left;
+}
+
+/* Names the screen and gives the title something to sit under. Gold, because
+   this is chrome — the accent's whole job. */
+.np-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.np-eyebrow-label {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--gold);
+}
+
+/* Runs out rather than stopping square. A hard-ended rule next to a short
+   label looks like a mistake; a fade reads as intentional. */
+.np-eyebrow-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(169, 140, 92, 0.55), rgba(169, 140, 92, 0));
 }
 
 .np-album {
@@ -670,8 +698,26 @@ input {
 .np-bar-fill {
   height: 100%;
   border-radius: 2px;
-  background: var(--ink);
+  /* Gold, not ivory. The played portion is the one place on this screen where
+     the accent carries information rather than decorating. */
+  background: var(--gold);
   transition: width 1s linear;
+  position: relative;
+}
+
+/* The playhead. .np-bar deliberately does NOT clip its children any more —
+   this dot is meant to sit proud of a 3px track, which is what makes a line
+   that thin findable at arm's length in a loud room. */
+.np-bar-fill::after {
+  content: "";
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--gold);
 }
 
 .np-time {
