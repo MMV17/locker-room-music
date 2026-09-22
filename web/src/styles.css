@@ -312,6 +312,12 @@ input {
 .card {
   background: var(--surface);
   border-radius: var(--r-card);
+  /* A BORDER, because the fill cannot do this job any more. The light theme
+     separated a raised surface with a shadow — white on #EDF0F5 was only
+     1.14:1, so the shadow was always what you were actually seeing. On black
+     a dark shadow is invisible, and #121214 on #000000 is 1.12:1, so without
+     an edge this had no visible boundary at all. */
+  border: 1px solid var(--hairline);
   box-shadow: var(--shadow);
   padding: 20px;
 }
@@ -367,6 +373,7 @@ input {
 .rows {
   background: var(--surface);
   border-radius: var(--r-card);
+  border: 1px solid var(--hairline);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -963,6 +970,7 @@ input {
   padding: 8px;
   background: var(--surface);
   border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
   box-shadow: var(--shadow-lift);
 }
 
@@ -1015,6 +1023,7 @@ input {
   width: min(46vw, 190px);
   aspect-ratio: 1;
   border-radius: var(--r-art);
+  border: 1px solid var(--hairline);
   box-shadow: var(--shadow-lift);
   object-fit: cover;
 }
@@ -1082,6 +1091,10 @@ input {
   font-size: 16px;
   font-weight: 600;
   background: var(--surface);
+  /* --hairline-strong, not --hairline: this is a CONTROL, and WCAG 1.4.11
+     asks 3:1 for a meaningful UI component boundary. The divider colour
+     manages 1.32:1 and would leave the control invisible. */
+  border: 1px solid var(--hairline-strong);
   box-shadow: var(--shadow);
   transition: transform 120ms ease;
 }
@@ -1093,6 +1106,8 @@ input {
 .btn.is-primary {
   background: var(--gold);
   color: #12100C;
+  /* Its own fill is the boundary; the inherited grey edge would fight it. */
+  border-color: var(--gold);
 }
 
 .btn.is-danger {
@@ -1151,7 +1166,7 @@ input {
   font-size: 16px;
   padding: 16px 16px;
   border-radius: 16px;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-strong);
   background: var(--surface);
   outline: none;
   -webkit-user-select: text;
@@ -1289,6 +1304,7 @@ input {
   max-width: 380px;
   background: var(--surface);
   border-radius: var(--r-card);
+  border: 1px solid var(--hairline);
   box-shadow: var(--shadow-lift);
   padding: 24px;
 }
@@ -1392,6 +1408,86 @@ input {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Folding sections — the Admin screen
+ *
+ * Five sections had become one long scroll with no shape. Folded, the screen
+ * opens as a five-item menu. Built on <details>/<summary> so the keyboard and
+ * screen-reader behaviour is the browser's rather than mine.
+ * ------------------------------------------------------------------ */
+
+.fold {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.fold:last-of-type {
+  border-bottom: 0;
+}
+
+/* The whole row is the hit target, and it is 56px tall — a fold header is a
+   control, and the 44px minimum applies to it as much as to a button. */
+.fold-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 4px 0;
+  cursor: pointer;
+  /* The default triangle is replaced by .fold-mark below. list-style on the
+     summary is what Firefox honours; ::-webkit-details-marker is Safari and
+     older Chrome, and both are needed. */
+  list-style: none;
+}
+
+.fold-head::-webkit-details-marker {
+  display: none;
+}
+
+/* Keyboard focus has to be visible, and removing the marker does not remove
+   the need for it. Gold, so it reads as ours rather than as the browser's. */
+.fold-head:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.fold-title {
+  color: var(--ink);
+}
+
+/* A chevron drawn from two borders, rotating 90deg when the fold opens. No
+   glyph, so it cannot be affected by a missing font. */
+.fold-mark {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-right: 4px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 140ms ease;
+}
+
+.fold[open] > .fold-head .fold-mark {
+  transform: rotate(45deg);
+}
+
+.fold[open] > .fold-head .fold-title {
+  color: var(--gold);
+}
+
+/* Breathing room under the header, and clear of the next fold's rule. */
+.fold > :not(.fold-head) {
+  margin-bottom: 16px;
+}
+
+.fold-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
 }
 
 /* ------------------------------------------------------------------ *

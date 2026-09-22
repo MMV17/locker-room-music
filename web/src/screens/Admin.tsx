@@ -603,39 +603,79 @@ function Plays({ call }: { call: Call }) {
 }
 
 /**
- * `action` sits on the heading row rather than under the content.
+ * A folding section. Five of these stack up on this screen and it had become a
+ * single scroll with no shape — Team, Roster, Phones, Speaker output, Speaker.
+ * Folded, the screen opens as a five-item menu.
  *
- * Recent plays is fifty rows long, so anything below it is a scroll away —
- * which is exactly where Clear history was, and it is the control most likely
- * to be wanted before reading any of them.
+ * `<details>` RATHER THAN A REACT ACCORDION, deliberately. It is keyboard
+ * operable, it announces expanded/collapsed to a screen reader, and it is
+ * find-in-page friendly, all without a line of code from me. A div with an
+ * onClick and an aria-expanded I maintained by hand would be strictly worse at
+ * every one of those.
+ *
+ * WHICH ONE IS OPEN IS REMEMBERED, per section, in localStorage. A coach
+ * usually comes here to do one thing repeatedly — clear a stuck play, fix the
+ * speaker — and reopening the same fold every time is the kind of small tax
+ * that makes a tool feel cheap. Wrapped in try/catch because localStorage
+ * throws in private mode, where the default simply applies.
+ *
+ * `action` moved from the heading row INTO the content. Its original note said
+ * it sat up there because Recent plays is fifty rows long and anything below
+ * is a scroll away — still true, and the content top is still above those
+ * rows. The heading cannot hold it any more: a button inside <summary> is a
+ * button that toggles the fold when you click it.
  */
+const FOLD_KEY = "lr_admin_folds";
+
+function readFolds(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(FOLD_KEY) ?? "{}") as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
 function Section({
   title,
   action,
+  defaultOpen = false,
   children,
 }: {
   title: string;
   action?: React.ReactNode;
+  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState<boolean>(() => readFolds()[title] ?? defaultOpen);
+
+  const remember = (next: boolean) => {
+    setOpen(next);
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify({ ...readFolds(), [title]: next }));
+    } catch {
+      /* private mode; the fold still works, it just will not be remembered */
+    }
+  };
+
   return (
-    <section style={{ marginBottom: 30 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 12,
-        }}
-      >
-        <h2 className="t-section">{title}</h2>
-        {action}
-      </div>
+    <details
+      className="fold"
+      open={open}
+      onToggle={(e) => {
+        const next = (e.currentTarget as HTMLDetailsElement).open;
+        if (next !== open) remember(next);
+      }}
+    >
+      <summary className="fold-head">
+        <span className="t-section fold-title">{title}</span>
+        <span className="fold-mark" aria-hidden="true" />
+      </summary>
+      {action && <div className="fold-action">{action}</div>}
       {children}
-    </section>
+    </details>
   );
 }
+
 
 /**
  * Which speaker the box plays OUT through.
