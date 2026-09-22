@@ -27,7 +27,7 @@ import { lookupArtwork } from "./artwork";
 import { freshCountdown } from "./auxCountdown";
 import { boards } from "./leaderboards";
 import { devices } from "./devices";
-import { admin } from "./admin";
+import { admin, identityKey as rosterIdentityKey } from "./admin";
 import { theme } from "./theme";
 import { runBackup } from "./backup";
 import { parseScan, replaceDevices, getSelection, getForgetTarget } from "./speakers";
@@ -594,7 +594,10 @@ app.post("/api/session", async (c) => {
     return c.json({ error: "First and last name are required" }, 400);
   }
 
-  const identityKey = `${normalize(first)}|${normalize(last)}|${normalize(jersey)}`;
+  // The shared helper, not a second copy. admin.ts carried the comment "Must
+  // stay identical to the key built in POST /api/session" for as long as there
+  // were two of these; now there is one and it cannot drift.
+  const identityKey = rosterIdentityKey(first, last, jersey || null);
 
   await c.env.DB.prepare(
     `INSERT INTO users (id, first_name, last_name, jersey_number, identity_key, active, created_at)
@@ -999,6 +1002,104 @@ app.get("/api/plays/:id/results", requireSession, async (c) => {
 app.use("/api/leaderboard/*", requireSession);
 app.use("/api/history", requireSession);
 app.use("/api/me/*", requireSession);
+
+/* ------------------------------------------------------------------ *
+ * Your own profile
+ *
+ * A player edits their own name and number here. The admin can already do it
+ * to anybody (PUT /api/admin/users/:id); this is the same operation aimed at
+ * yourself, and it carries the same trap.
+ * ------------------------------------------------------------------ */
+
+app.get("/api/me", requireSession, async (c) => {
+  const row = await c.env.DB.prepare(
+    "SELECT id, first_name, last_name, jersey_number FROM users WHERE id = ?",
+  )
+    .bind(c.get("userId"))
+    .first<{ id: string; first_name: string; last_name: string; jersey_number: string | null }>();
+  if (!row) return c.json({ error: "Unknown player" }, 404);
+  return c.json(row);
+});
+
+/**
+ * IDENTITY_KEY HAS TO BE RECOMPUTED, and that is the whole difficulty here.
+ *
+ * It is normalize(first)|normalize(last)|normalize(jersey) and it is UNIQUE,
+ * and it is what makes a re-signup — cleared cookies, new phone, reinstalled
+ * browser — find your existing row instead of creating a second one and
+ * splitting your play history in half. Leave it stale after a rename and the
+ * next sign-in matches nothing.
+ *
+ * The consequence is worth stating plainly, because it is not obvious and it
+ * is not a bug: after you change your name or number, signing up again with
+ * the OLD pair no longer finds you. The new pair does. That is the same
+ * behaviour an admin rename has always had.
+ *
+ * A collision is a real outcome rather than a theoretical one — two players
+ * called the same thing with the same number is exactly what the constraint
+ * is for — so it is caught and explained. The admin endpoint lets that throw
+ * and 500s; this one should not, since the person typing it can fix it.
+ */
+app.patch("/api/me", requireSession, async (c) => {
+  type Body = { first_name?: string; last_name?: string; jersey_number?: string };
+  const b: Body = await c.req.json<Body>().catch(() => ({}) as Body);
+  const id = c.get("userId");
+
+  const current = await c.env.DB.prepare(
+    "SELECT first_name, last_name, jersey_number FROM users WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ first_name: string; last_name: string; jersey_number: string | null }>();
+  if (!current) return c.json({ error: "Unknown player" }, 404);
+
+  const first = b.first_name?.trim() || current.first_name;
+  const last = b.last_name?.trim() || current.last_name;
+  const jersey =
+    b.jersey_number === undefined ? current.jersey_number : b.jersey_number.trim() || null;
+
+  if (!first || !last) return c.json({ error: "Both names are required" }, 400);
+  // Bounded because these are rendered on every screen and on the boards.
+  if (first.length > 40 || last.length > 40) {
+    return c.json({ error: "That name is too long" }, 400);
+  }
+  if (jersey && !/^[0-9]{1,3}$/.test(jersey)) {
+    return c.json({ error: "A jersey number is up to three digits" }, 400);
+  }
+
+  const key = rosterIdentityKey(first, last, jersey);
+
+  // Checked before the write so the message can name the problem. The UNIQUE
+  // constraint is still the thing that decides it - two people saving at once
+  // is settled by the catch below, not by this read.
+  const clash = await c.env.DB.prepare(
+    "SELECT id FROM users WHERE identity_key = ? AND id != ?",
+  )
+    .bind(key, id)
+    .first<{ id: string }>();
+  if (clash) {
+    return c.json(
+      { error: "Somebody on the roster already has that name and number." },
+      409,
+    );
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `UPDATE users SET first_name = ?, last_name = ?, jersey_number = ?, identity_key = ?
+       WHERE id = ?`,
+    )
+      .bind(first, last, jersey, key, id)
+      .run();
+  } catch {
+    // Lost the race with another save on the same name+number.
+    return c.json(
+      { error: "Somebody on the roster already has that name and number." },
+      409,
+    );
+  }
+
+  return c.json({ ok: true, first_name: first, last_name: last, jersey_number: jersey });
+});
 app.route("/", boards);
 
 app.use("/api/devices/*", requireSession);

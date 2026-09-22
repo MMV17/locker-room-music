@@ -1553,6 +1553,62 @@ input {
 }
 
 /* ------------------------------------------------------------------ *
+ * The profile header — Settings
+ *
+ * The gear in the Now Playing header used to be the jersey number, which read
+ * as a score on a dark header and said nothing about settings. Identity moved
+ * here, where there is room to show the number AND the name.
+ * ------------------------------------------------------------------ */
+
+.prof {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* The number is the badge, because that is how a locker room identifies
+   people. Outlined rather than filled: a gold block this large would spend the
+   accent on the least important thing on the screen. */
+.prof-badge {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-thumb);
+  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.prof-who {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.prof-name {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prof-sub {
+  font-size: 10px;
+  color: var(--gold);
+}
+
+/* ------------------------------------------------------------------ *
  * Folding sections — the Admin screen
  *
  * Five sections had become one long scroll with no shape. Folded, the screen

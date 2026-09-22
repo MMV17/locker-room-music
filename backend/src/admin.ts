@@ -59,8 +59,16 @@ admin.post("/api/admin/artwork/retry", async (c) => {
 
 /* Roster CRUD */
 
-/** Must stay identical to the key built in POST /api/session. */
-const identityKey = (first: string, last: string, jersey: string | null) =>
+/**
+ * The roster identity key: normalize(first)|normalize(last)|normalize(jersey).
+ *
+ * UNIQUE in the schema, and it is what makes a re-signup — cleared cookies, a
+ * new phone, a reinstalled browser — find an existing player instead of
+ * creating a second row and splitting their play history. Every writer of it
+ * calls THIS, which is why the old "must stay identical to" note is gone:
+ * signup, the admin rename and PATCH /api/me all share it now.
+ */
+export const identityKey = (first: string, last: string, jersey: string | null) =>
   `${normalize(first)}|${normalize(last)}|${normalize(jersey ?? "")}`;
 
 admin.get("/api/admin/users", async (c) => {
