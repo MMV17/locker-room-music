@@ -12,7 +12,12 @@
  *
  * See docs/superpowers/specs/2026-08-31-speaker-selection-ui-design.md.
  */
-import { normaliseMac, RELAY_SPEAKER_MAC_KEY, RELAY_SPEAKER_NAME_KEY } from "./piControl";
+import {
+  FORGET_DEVICE_MAC_KEY,
+  normaliseMac,
+  RELAY_SPEAKER_MAC_KEY,
+  RELAY_SPEAKER_NAME_KEY,
+} from "./piControl";
 import type { Env } from "./types";
 
 /** One device as the Pi's scan reported it. */
@@ -161,4 +166,41 @@ export async function setSelection(
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     ).bind(RELAY_SPEAKER_NAME_KEY, name ?? "", now),
   ]);
+}
+
+/**
+ * Which device the operator asked to forget, for the next
+ * `forget-selected-phone` to act on.
+ *
+ * Deliberately NOT the three-state convention getSelection() uses. "" means
+ * something real for a relay speaker — explicitly wired output — and means
+ * nothing here: there is no such thing as explicitly forgetting nothing. So
+ * this is a MAC or it is null, and null is what the Pi reads as "nothing
+ * pending".
+ */
+export async function getForgetTarget(env: Env): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
+    .bind(FORGET_DEVICE_MAC_KEY)
+    .first<{ value: string }>();
+  if (!row || row.value === "") return null;
+  // Anything stored that is not a MAC is dropped rather than passed on. The
+  // write path validates, so this only fires on a hand-edited row — and the
+  // Pi would refuse it anyway, which is the point of validating twice.
+  return normaliseMac(row.value);
+}
+
+/**
+ * Store which device to forget. `null` clears the request.
+ *
+ * The caller queues the command separately: this is only the target. That
+ * split is what keeps the allowlist free of parameters, and it is why a stale
+ * row here is harmless — nothing acts on it until somebody presses the button.
+ */
+export async function setForgetTarget(env: Env, mac: string | null): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  )
+    .bind(FORGET_DEVICE_MAC_KEY, mac ?? "", new Date().toISOString())
+    .run();
 }

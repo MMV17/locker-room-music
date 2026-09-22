@@ -674,6 +674,9 @@ function SpeakerOutput({ call }: { call: Call }) {
   const [state, setState] = useState<SpeakerState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Without this, a bare `confirm` silently resolves to window.confirm — the
+  // typechecker caught it, but only because the signatures differ.
+  const { confirm, dialog } = useConfirm();
   const [scanState, setScanState] = useState<"idle" | "queued" | "scanning" | "done">("idle");
 
   const load = useCallback(
@@ -727,6 +730,41 @@ function SpeakerOutput({ call }: { call: Call }) {
     }
   };
 
+  /**
+   * Forget one paired device, so a phone that forgot THIS BOX can pair again.
+   *
+   * Lives on the coach's screen and not in Settings' speaker picker, which is
+   * deliberately a DJ control (2026-09-01) behind requireSession — any
+   * signed-in teammate can reach that one, and a Forget button there would let
+   * anybody drop anybody else's pairing.
+   */
+  const forget = async (mac: string, name: string | null) => {
+    const ok = await confirm({
+      title: `Forget ${name ?? mac}?`,
+      body:
+        "Use this when someone forgot the speaker on their phone and now can't reconnect. They will have to pair again — one tap on their side. Nobody else is affected.",
+      confirmLabel: "Forget it",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await call("/api/admin/pi/forget", {
+        method: "POST",
+        body: JSON.stringify({ mac }),
+      });
+      // No reload: nothing changes here until the Pi picks the command up on
+      // its next beacon, and the device stays in the list either way — the
+      // list is what the last SCAN saw, not what is currently bonded.
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not forget that device");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const choose = async (mac: string | null, name: string | null) => {
     setBusy(true);
     setError(null);
@@ -765,6 +803,7 @@ function SpeakerOutput({ call }: { call: Call }) {
 
   return (
     <Section title="Speaker output">
+      {dialog}
       {error && <div className="banner is-bad">{error}</div>}
 
       {!state ? (
@@ -831,13 +870,29 @@ function SpeakerOutput({ call }: { call: Call }) {
                           : ""}
                       </span>
                     </span>
-                    <button
-                      className={chosen ? "btn-quiet" : "btn"}
-                      disabled={busy || chosen}
-                      onClick={() => choose(d.mac, d.name)}
-                    >
-                      {chosen ? "In use" : "Use this one"}
-                    </button>
+                    <span style={{ display: "flex", gap: 8, flex: "none" }}>
+                      {/* Not offered for the speaker in use: forgetting it
+                          would drop audio with no error anywhere and cost the
+                          one-tap return. The server refuses it too, and the
+                          Pi refuses it a third time — but not drawing the
+                          button is the only one of the three the coach sees. */}
+                      {!chosen && (
+                        <button
+                          className="btn-quiet is-danger"
+                          disabled={busy}
+                          onClick={() => forget(d.mac, d.name)}
+                        >
+                          Forget
+                        </button>
+                      )}
+                      <button
+                        className={chosen ? "btn-quiet" : "btn"}
+                        disabled={busy || chosen}
+                        onClick={() => choose(d.mac, d.name)}
+                      >
+                        {chosen ? "In use" : "Use this one"}
+                      </button>
+                    </span>
                   </div>
                 );
               })}

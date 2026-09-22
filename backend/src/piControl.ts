@@ -43,6 +43,15 @@ export const PI_COMMANDS = [
   // channel, and a mechanism that can replace it can destroy remote access
   // while using it. The Pi enforces that, not us. See pi/scripts/run-repair.sh.
   "run-repair",
+  // Forget ONE paired device. Bluetooth has no unpair message, so when
+  // somebody forgets this box on their phone we keep a bond they no longer
+  // have, and BlueZ refuses the re-pair — locking them out until the bond is
+  // removed HERE. Before this, that needed a serial cable.
+  //
+  // WHICH device is NOT a parameter: it rides the beacon response as a
+  // `settings` row and is validated on the Pi, the same split the speaker
+  // picker makes between scanning and selecting.
+  "forget-selected-phone",
 ] as const;
 export type PiCommand = (typeof PI_COMMANDS)[number];
 
@@ -80,3 +89,12 @@ export function normaliseMac(value: unknown): string | null {
 /** The settings keys the speaker picker owns. */
 export const RELAY_SPEAKER_MAC_KEY = "relay_speaker_mac";
 export const RELAY_SPEAKER_NAME_KEY = "relay_speaker_name";
+
+/**
+ * Which device `forget-selected-phone` will remove.
+ *
+ * A pending instruction rather than configuration, which is why the Pi keeps
+ * it on /run and not /var/lib: a forget request that survived a reboot would
+ * fire days later at a phone somebody had since re-paired.
+ */
+export const FORGET_DEVICE_MAC_KEY = "forget_device_mac";

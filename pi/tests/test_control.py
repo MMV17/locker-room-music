@@ -519,3 +519,89 @@ class TestMayRun:
                 raise RuntimeError("nope")
 
         assert control.may_run("run-repair", Boom())[0] is True
+
+
+# --------------------------------------------------------------------------- #
+# forget-selected-phone.
+#
+# Bluetooth has no unpair message: forgetting is local and one-sided. When
+# somebody forgets this box on their phone, iOS drops its link key and never
+# tells us, so we keep a bond the phone no longer has — and BlueZ refuses the
+# fresh Just Works re-pair (JustWorksRepairing defaults to `never`), locking
+# that person out permanently. Clearing it needed a serial cable until now.
+#
+# WHICH device is state on the beacon, not an argument, so the invariant tests
+# above still hold for this command — which is the point of writing them as a
+# loop over ALLOWED.
+# --------------------------------------------------------------------------- #
+
+from lockerroom import forgettarget  # noqa: E402
+
+
+class TestForgetSelectedPhone:
+    def test_it_is_a_fixed_argv_with_no_arguments(self, monkeypatch):
+        """The MAC does NOT appear here. If it ever does, the allowlist has
+        grown a parameter and the property it exists to protect is gone."""
+        seen = {}
+        monkeypatch.setattr(control.subprocess, "run", _fake_run(seen))
+        control._run("forget-selected-phone")
+        assert seen["argv"] == ["sudo", "/usr/local/bin/bt-forget.sh"]
+
+    def test_no_mac_can_reach_the_argv(self):
+        for name, (argv, _) in control.ALLOWED.items():
+            for arg in argv:
+                assert ":" not in arg or arg.startswith("/"), (
+                    f"{name} carries something MAC-shaped in its argv"
+                )
+
+    def test_it_is_allowed_mid_song(self):
+        """Removing a bond touches no audio path. Someone locked out should not
+        have to wait for a song to end to be let back in."""
+        ok, _ = control.may_run(
+            "forget-selected-phone", FakeSessions({"id": "p1", "status": "playing"})
+        )
+        assert ok is True
+
+
+class TestForgetTargetFromServer:
+    def test_a_mac_is_accepted_and_normalised(self):
+        assert forgettarget.from_server("5c:ad:ba:f0:b2:61") == "5C:AD:BA:F0:B2:61"
+
+    def test_junk_is_refused(self):
+        """The server is not trusted to be the only gate — this value becomes a
+        bluetoothctl argv element."""
+        for bad in ("$(reboot)", "not-a-mac", "5C:AD:BA:F0:B2", "; rm -rf /", 42, None):
+            assert forgettarget.from_server(bad) is None
+
+    def test_empty_string_is_nothing_pending_not_a_state(self):
+        """Unlike the relay speaker, "" means nothing here. There is no such
+        thing as explicitly forgetting nothing, and treating it as a state
+        would be a third case for every caller to get wrong."""
+        assert forgettarget.from_server("") is None
+
+    def test_write_then_read_round_trips(self, tmp_path):
+        p = tmp_path / "forget-target"
+        forgettarget.write("5C:AD:BA:F0:B2:61", path=p)
+        assert forgettarget.read(p) == "5C:AD:BA:F0:B2:61"
+
+    def test_none_clears_the_request(self, tmp_path):
+        p = tmp_path / "forget-target"
+        forgettarget.write("5C:AD:BA:F0:B2:61", path=p)
+        forgettarget.write(None, path=p)
+        assert not p.exists()
+        assert forgettarget.read(p) is None
+
+    def test_a_corrupt_file_reads_as_nothing_pending(self, tmp_path):
+        """A half-written MAC would pass a naive length check and name the
+        wrong device. Better to forget nothing than the wrong thing."""
+        p = tmp_path / "forget-target"
+        p.write_text("5C:AD:BA:F0")
+        assert forgettarget.read(p) is None
+
+    def test_the_target_lives_on_run_so_it_dies_at_reboot(self):
+        """This is pending work, not configuration — the opposite of
+        relaytarget, whose cache is on /var/lib precisely so it DOES survive.
+        A forget request that outlived a power cut would fire days later at a
+        phone somebody had since re-paired."""
+        assert str(forgettarget.TARGET_PATH).startswith("/run/")
+        assert not str(forgettarget.TARGET_PATH).startswith("/var/")

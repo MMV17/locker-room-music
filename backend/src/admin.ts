@@ -8,6 +8,7 @@ import {
   getSelection,
   getSelectionName,
   setSelection,
+  setForgetTarget,
 } from "./speakers";
 import { runBackup, listBackups } from "./backup";
 import { lookupArtwork } from "./artwork";
@@ -481,6 +482,83 @@ admin.put("/api/admin/pi/speakers", async (c) => {
   // next beacon - which is seconds away, because picking a speaker means a
   // scan was just run and the box is in attentive mode.
   return c.json({ ok: true, selected: mac, selected_name: name });
+});
+
+/**
+ * Forget one paired device, so a phone that forgot US can pair again.
+ *
+ * WHY THIS ENDPOINT EXISTS AT ALL. Bluetooth has no unpair message: forgetting
+ * is local and one-sided. Somebody hits "Forget This Device" on their phone,
+ * iOS drops its link key and never tells the box, and the box keeps a bond for
+ * a device that no longer has one. BlueZ then refuses the fresh Just Works
+ * re-pair (JustWorksRepairing defaults to `never`) and that person is locked
+ * out permanently. Before this, clearing it needed a serial cable — and on
+ * campus there is no other way in. One phone cost an evening on 2026-09-21.
+ *
+ * TWO THINGS TRAVEL, NOT ONE, and that is the same split the speaker picker
+ * makes rather than a quirk:
+ *
+ *   forgetting     an action with no parameters -> the allowlisted command
+ *   WHICH device   a fact the operator chose    -> a settings row on the beacon
+ *
+ * So this sets the target AND queues the command. The row alone does nothing;
+ * nothing is forgotten until the command fires, which is why a stale row is
+ * harmless.
+ */
+admin.post("/api/admin/pi/forget", async (c) => {
+  type Body = { mac?: string };
+  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+
+  const mac = normaliseMac(b.mac);
+  if (!mac) {
+    // Validated here and again on the Pi and once more in bt-forget.sh. Three
+    // gates is not paranoia for a value that ends up as a bluetoothctl argv
+    // element: this one keeps junk out of the database, the Pi's stops a
+    // compromised server being the only guard, and the script's stops a
+    // half-written /run file naming the wrong device.
+    return c.json({ error: "That is not a MAC address" }, 400);
+  }
+
+  // REFUSE THE SPEAKER WE PLAY THROUGH. Forgetting it drops audio with no
+  // error anywhere and costs the one-tap return the pairing exists for. The Pi
+  // refuses this too; catching it here is what lets us say why in the UI
+  // instead of surfacing it as a failed command a minute later.
+  const selected = await getSelection(c.env);
+  if (selected && selected.toUpperCase() === mac.toUpperCase()) {
+    return c.json(
+      {
+        error:
+          "That is the speaker this box plays through. Choose another speaker, or wired output, before forgetting it.",
+      },
+      409,
+    );
+  }
+
+  // One outstanding command at a time, same rule and same stale-dispatch
+  // escape hatch as /pi/commands. Checked BEFORE the target is written, so a
+  // refused request does not leave a target pointing somewhere unexpected.
+  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
+  const outstanding = await c.env.DB.prepare(
+    `SELECT id FROM pi_commands
+      WHERE completed_at IS NULL
+        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
+  )
+    .bind(staleCutoff)
+    .first<{ id: string }>();
+  if (outstanding) {
+    return c.json({ error: "A command is already queued or running" }, 409);
+  }
+
+  await setForgetTarget(c.env, mac);
+
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
+  )
+    .bind(id, "forget-selected-phone", nowIso())
+    .run();
+
+  return c.json({ ok: true, id, mac });
 });
 
 /* Backups. The cron runs daily; these exist so a backup can be taken before

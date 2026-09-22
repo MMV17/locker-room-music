@@ -30,7 +30,7 @@ import { devices } from "./devices";
 import { admin } from "./admin";
 import { theme } from "./theme";
 import { runBackup } from "./backup";
-import { parseScan, replaceDevices, getSelection } from "./speakers";
+import { parseScan, replaceDevices, getSelection, getForgetTarget } from "./speakers";
 import { parseReport, storeReport } from "./piReports";
 import { speakerRoutes } from "./speakerRoutes";
 
@@ -457,7 +457,20 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
   // speakers.ts getSelection().
   const relaySpeaker = await getSelection(c.env);
 
-  if (!pending) return c.json({ ok: true, command: null, relay_speaker: relaySpeaker });
+  // Which device a forget-selected-phone would remove. State, like the relay
+  // speaker, and sent on every response for the same reason: the Pi validates
+  // it on arrival and a missed beacon costs one interval rather than stranding
+  // the instruction. Null when nothing is pending.
+  const forgetDevice = await getForgetTarget(c.env);
+
+  if (!pending) {
+    return c.json({
+      ok: true,
+      command: null,
+      relay_speaker: relaySpeaker,
+      forget_device: forgetDevice,
+    });
+  }
 
   // reboot is fire-and-forget: the Pi is killed before it can report, so
   // record the outcome now rather than leaving a row that never completes.
@@ -476,6 +489,7 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
     ok: true,
     command: { id: pending.id, name: pending.command },
     relay_speaker: relaySpeaker,
+    forget_device: forgetDevice,
   });
 });
 

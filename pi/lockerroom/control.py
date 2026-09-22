@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from . import btscan, relaytarget
+from . import btscan, forgettarget, relaytarget
 
 if TYPE_CHECKING:  # pragma: no cover
     # Import for typing only. config.py needs tomllib (3.11+), and importing
@@ -76,6 +76,13 @@ ALLOWED: dict[str, tuple[list[str], float]] = {
     # the listener package - run-repair.sh snapshots it and puts it back if the
     # repair modified it anyway.
     "run-repair": (["sudo", "/usr/local/bin/run-repair.sh"], 240),
+    # Forget ONE paired device, so a phone that forgot us can pair again.
+    # Bluetooth has no unpair message, so a one-sided forget leaves us holding
+    # a bond the phone no longer has, and BlueZ then refuses the re-pair.
+    # WHICH device is state on the beacon, not an argument here - see
+    # forgettarget.py. A disconnect plus a remove plus verification; 30s is
+    # generous for all three.
+    "forget-selected-phone": (["sudo", "/usr/local/bin/bt-forget.sh"], 30),
 }
 
 SCAN_COMMAND = "scan-speakers"
@@ -495,6 +502,13 @@ async def beacon_loop(
                         body.get("relay_speaker"),
                         configured=config.relay_speaker_mac,
                     )
+
+                    # Which device the operator asked to forget. State, like
+                    # the relay speaker, and validated here for the same
+                    # reason: it becomes an argv element. Written to /run for
+                    # bt-forget.sh to pick up when the command fires - the
+                    # command is the trigger, this is only the target.
+                    forgettarget.write(forgettarget.from_server(body.get("forget_device")))
 
                     command = body.get("command")
                     if command:

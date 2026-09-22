@@ -58,6 +58,10 @@ scp -q "${REPO_ROOT}/pi/scripts/btwatch.sh" "${PI_HOST}:/tmp/btwatch.sh"
 # listener as a FIXED argv on the command allowlist, which is why the scanning
 # logic lives in a script rather than as a command string.
 scp -q "${REPO_ROOT}/pi/scripts/bt-scan.sh" "${PI_HOST}:/tmp/bt-scan.sh"
+# Forgets ONE paired device, so a phone that forgot this box can pair again.
+# Invoked as a fixed argv from the allowlist; the MAC arrives as state on the
+# beacon and is written to /run by the listener. See lockerroom/forgettarget.py.
+scp -q "${REPO_ROOT}/pi/scripts/bt-forget.sh" "${PI_HOST}:/tmp/bt-forget.sh"
 scp -q "${REPO_ROOT}/pi/systemd/lockerroom-btwatch.service" "${PI_HOST}:/tmp/lockerroom-btwatch.service"
 # The remote escape hatch, added 2026-09-21. NEITHER of these can be deployed
 # wirelessly - this script needs SSH, and on campus TCP/22 is filtered - so they
@@ -87,6 +91,7 @@ sudo install -m 755 /tmp/audio-check.sh /usr/local/bin/audio-check.sh
 sudo install -m 755 /tmp/audio-route.sh /usr/local/bin/audio-route.sh
 sudo install -m 755 /tmp/btwatch.sh /usr/local/bin/btwatch.sh
 sudo install -m 755 /tmp/bt-scan.sh /usr/local/bin/bt-scan.sh
+sudo install -m 755 /tmp/bt-forget.sh /usr/local/bin/bt-forget.sh
 sudo install -m 755 /tmp/report-full.sh /usr/local/bin/report-full.sh
 sudo install -m 755 /tmp/run-repair.sh /usr/local/bin/run-repair.sh
 sudo mv /tmp/lockerroom-btwatch.service /etc/systemd/system/lockerroom-btwatch.service
@@ -170,6 +175,7 @@ systemctl is-active lockerroom-btwatch
 # a locker room needing it to work.
 echo "== remote escape hatch =="
 for f in /usr/local/bin/report-full.sh /usr/local/bin/run-repair.sh \
+         /usr/local/bin/bt-forget.sh \
          /opt/lockerroom/repo/pi/scripts/remote-repair.sh; do
   if [ -x "$f" ]; then echo "   ok      $f"; else echo "   MISSING $f"; fi
 done

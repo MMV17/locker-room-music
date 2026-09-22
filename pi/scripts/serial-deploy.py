@@ -63,6 +63,9 @@ PAYLOAD = [
     ("pi/scripts/report-full.sh",  "/usr/local/bin/report-full.sh",           "755"),
     ("pi/scripts/run-repair.sh",   "/usr/local/bin/run-repair.sh",            "755"),
     ("pi/scripts/btwatch.sh",      "/usr/local/bin/btwatch.sh",               "755"),
+    ("pi/scripts/bt-forget.sh",    "/usr/local/bin/bt-forget.sh",             "755"),
+    ("pi/lockerroom/forgettarget.py",
+     "/opt/lockerroom/lockerroom/forgettarget.py", "644"),
     # A systemd unit, not a script. It needs a daemon-reload before its restart
     # means anything, which the restart block below does.
     ("pi/systemd/keep-discoverable.service",
@@ -300,7 +303,7 @@ def main() -> int:
 
         log("  verifying the new commands are installed...")
         for f in ("/usr/local/bin/report-full.sh", "/usr/local/bin/run-repair.sh",
-                  "/usr/local/bin/btwatch.sh"):
+                  "/usr/local/bin/btwatch.sh", "/usr/local/bin/bt-forget.sh"):
             log(f"    {run(s, f'test -x {f} && echo ok || echo MISSING')}  {f}")
         allowed = run(s, "grep -c 'report-full\\|run-repair' /opt/lockerroom/lockerroom/control.py")
         log(f"    control.py mentions the new commands {allowed} times")

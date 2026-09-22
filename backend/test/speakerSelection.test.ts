@@ -140,3 +140,37 @@ describe("parseScan", () => {
     expect(parseScan([null, 7, "x"])).toEqual([]);
   });
 });
+
+/**
+ * forget-selected-phone.
+ *
+ * Bluetooth has no unpair message, so a one-sided forget leaves the box
+ * holding a bond the phone no longer has, and BlueZ refuses the re-pair.
+ * The action and the target travel separately for the same reason scanning and
+ * selecting do — the allowlist takes no parameters.
+ */
+describe("forget-selected-phone", () => {
+  it("is on the allowlist", () => {
+    expect(isPiCommand("forget-selected-phone")).toBe(true);
+  });
+
+  it("takes no argument, however tempting", () => {
+    expect(isPiCommand("forget-selected-phone 5C:AD:BA:F0:B2:61")).toBe(false);
+    expect(isPiCommand("forget-selected-phone --all")).toBe(false);
+  });
+
+  it("leaves the no-parameter property intact across the whole list", () => {
+    // The property this design exists to protect. A name with whitespace is a
+    // name carrying an argument.
+    for (const c of PI_COMMANDS) expect(c).not.toMatch(/\s/);
+  });
+
+  it("validates the target the same way the relay speaker is validated", () => {
+    // Both end up as a bluetoothctl argv element on the Pi, so both go
+    // through normaliseMac here and are checked again there.
+    expect(normaliseMac("5c:ad:ba:f0:b2:61")).toBe("5C:AD:BA:F0:B2:61");
+    expect(normaliseMac("$(reboot)")).toBeNull();
+    expect(normaliseMac("5C:AD:BA:F0:B2:61; rm -rf /")).toBeNull();
+    expect(normaliseMac("5C:AD:BA:F0:B2")).toBeNull();
+  });
+});
