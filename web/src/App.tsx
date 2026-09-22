@@ -11,7 +11,7 @@ import { DjBoard } from "./screens/DjBoard";
 import { History } from "./screens/History";
 import { Join } from "./screens/Join";
 import { NowPlaying } from "./screens/NowPlaying";
-import { Settings } from "./screens/Settings";
+import { AccountScreen, ProfileScreen, SpeakerScreen } from "./screens/Settings";
 import { SongBoard } from "./screens/SongBoard";
 
 export function App() {
@@ -57,8 +57,16 @@ export function App() {
         <History />
       ) : route === "/claim" ? (
         <Claim />
+      ) : route === "/settings/profile" ? (
+        <ProfileScreen />
+      ) : route === "/settings/speaker" ? (
+        <SpeakerScreen />
+      ) : route === "/settings/account" ? (
+        <AccountScreen onSignedOut={() => setSignedIn(false)} />
       ) : route === "/settings" ? (
-        <Settings onSignedOut={() => setSignedIn(false)} />
+        /* Anything still pointing at the old single page lands on Profile
+           rather than a blank screen. */
+        <ProfileScreen />
       ) : (
         <NowPlaying teamName={theme.team_name} />
       )}

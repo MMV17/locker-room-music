@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, patch, signOut } from "./../api";
-import { Fold } from "./../components";
 import { useNavigate } from "./../router";
 import { SpeakerSection } from "./SpeakerSection";
 
-interface Me {
+export interface Me {
   id: string;
   first_name: string;
   last_name: string;
@@ -12,90 +11,105 @@ interface Me {
 }
 
 /**
- * Everything a player sets for themselves.
+ * The three settings screens.
  *
- * Reached from the GEAR in the Now Playing header. That used to be the jersey
- * number, which was doing two jobs and neither well — on a dark header it read
- * as a score, and nothing about it said settings. Identity moved in here, to
- * the header below, where there is room to say it properly.
- *
- * Folded, because this screen is a short menu of unrelated things: who you
- * are, what the box plays through, and how you get out. Flat, they read as one
- * undifferentiated list.
+ * They used to be three folds on one Settings page, reached from the gear.
+ * The gear now opens a menu instead and each item lands on its own screen —
+ * one thing per page, with a back button, rather than a page that is three
+ * things at once. The fold was the right shape for Admin, which has five
+ * sections a coach moves between; it was the wrong shape for this, where you
+ * arrive already knowing which of the three you came for.
  */
-export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
+
+function SettingsFrame({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   const navigate = useNavigate();
-  const [me, setMe] = useState<Me | null>(null);
-
-  useEffect(() => {
-    get<Me>("/api/me")
-      .then(setMe)
-      .catch(() => setMe(null));
-  }, []);
-
-  const initials = me
-    ? (me.first_name[0] ?? "") + (me.last_name[0] ?? "")
-    : "";
-
   return (
     <main className="screen set">
       <header className="set-head">
         <button className="btn-quiet" onClick={() => navigate("/")}>
-          ‹ Back
+          &lsaquo; Back
         </button>
-        <h1 className="t-section">Settings</h1>
+        <h1 className="t-section">{title}</h1>
       </header>
+      {children}
+    </main>
+  );
+}
 
-      {/* The profile header. The number is the badge because that is how a
-          locker room identifies people; the name is what confirms it is you. */}
+/** Your name, your number, and the profile header that shows them. */
+export function ProfileScreen() {
+  const [me, setMe] = useState<Me | null>(null);
+  useEffect(() => {
+    get<Me>("/api/me").then(setMe).catch(() => setMe(null));
+  }, []);
+  const initials = me ? (me.first_name[0] ?? "") + (me.last_name[0] ?? "") : "";
+
+  return (
+    <SettingsFrame title="Profile">
+      {/* The number is the badge, because that is how a locker room identifies
+          people; the name confirms it is you. */}
       <div className="prof">
         <span className="prof-badge" aria-hidden="true">
           {me?.jersey_number || initials || "?"}
         </span>
         <span className="prof-who">
           <span className="prof-name">
-            {me ? `${me.first_name} ${me.last_name}` : "…"}
+            {me ? `${me.first_name} ${me.last_name}` : "\u2026"}
           </span>
           <span className="t-chrome prof-sub">
             {me?.jersey_number ? `Number ${me.jersey_number}` : "No number set"}
           </span>
         </span>
       </div>
+      <ProfileForm me={me} onSaved={setMe} />
+    </SettingsFrame>
+  );
+}
 
-      <Fold title="Profile">
-        <ProfileForm me={me} onSaved={setMe} />
-      </Fold>
+/** Everything about what the box plays through. */
+export function SpeakerScreen() {
+  return (
+    <SettingsFrame title="Speaker & connection">
+      <SpeakerSection />
+    </SettingsFrame>
+  );
+}
 
-      <Fold title="Speaker & connection">
-        <SpeakerSection />
-      </Fold>
-
-      <Fold title="Account">
-        <div className="rows">
-          <div className="row">
-            <span className="row-main">
-              <span className="row-title">Claim your phone</span>
-              <span className="row-sub">Get credit for the songs you play</span>
-            </span>
-            <button className="btn" onClick={() => navigate("/claim")}>
-              Open
-            </button>
-          </div>
-          <div className="row">
-            <span className="row-main">
-              <span className="row-title">Sign out</span>
-              <span className="row-sub">Sign in as someone else</span>
-            </span>
-            <SignOutButton onSignedOut={onSignedOut} navigate={navigate} />
-          </div>
+/** Signing in and out, and an honest note about what gates this. */
+export function AccountScreen({ onSignedOut }: { onSignedOut: () => void }) {
+  const navigate = useNavigate();
+  return (
+    <SettingsFrame title="Account">
+      <div className="rows">
+        <div className="row">
+          <span className="row-main">
+            <span className="row-title">Claim your phone</span>
+            <span className="row-sub">Get credit for the songs you play</span>
+          </span>
+          <button className="btn" onClick={() => navigate("/claim")}>
+            Open
+          </button>
         </div>
-        <p className="t-sub" style={{ marginTop: 10 }}>
-          There is no password yet — the team code is the only gate. Anyone who
-          has it can sign in under any name, which is the trade this made to
-          avoid a hand-maintained roster.
-        </p>
-      </Fold>
-    </main>
+        <div className="row">
+          <span className="row-main">
+            <span className="row-title">Sign out</span>
+            <span className="row-sub">Sign in as someone else</span>
+          </span>
+          <SignOutButton onSignedOut={onSignedOut} navigate={navigate} />
+        </div>
+      </div>
+      <p className="t-sub" style={{ marginTop: 10 }}>
+        There is no password yet &mdash; the team code is the only gate. Anyone who
+        has it can sign in under any name, which is the trade this made to avoid
+        a hand-maintained roster.
+      </p>
+    </SettingsFrame>
   );
 }
 

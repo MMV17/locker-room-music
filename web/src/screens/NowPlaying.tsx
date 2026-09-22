@@ -37,6 +37,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   const [revealFor, setRevealFor] = useState<NowPlay | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [speakerOpen, setSpeakerOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // The play we last saw with an *open* window. The reveal fires on the
   // transition out of that, which is also why a cold open onto an
@@ -163,14 +164,18 @@ export function NowPlaying({ teamName }: { teamName: string }) {
           <span className="t-label t-chrome np-head-team">{teamName}</span>
           {/* A gear, not the jersey number. The number was doing two jobs and
               neither well: it read as a score, and nothing about it said
-              "settings". Identity moved to the profile header inside. */}
-          <button
-            className="np-gear"
-            onClick={() => navigate("/settings")}
-            aria-label={`Settings. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
-          >
-            <IconSettings />
-          </button>
+              "settings". Identity moved into the Profile screen. */}
+          <span className="np-gear-wrap">
+            <button
+              className="np-gear"
+              aria-label={`Settings. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              <IconSettings />
+            </button>
+            {menuOpen && <SettingsMenu onClose={() => setMenuOpen(false)} />}
+          </span>
         </header>
 
         {error && <div className="banner is-bad">{error}</div>}
@@ -398,6 +403,43 @@ function WaitingBanner({ aux }: { aux: AuxState | null }) {
       You&rsquo;re connected, but {who} has the aux. Press play once
       they&rsquo;re done and it&rsquo;s yours.
     </div>
+  );
+}
+
+/**
+ * The gear's menu. Three destinations, each its own screen.
+ *
+ * A menu rather than a straight jump to a settings page: you almost always
+ * arrive here knowing which of the three you came for, and a page that is
+ * three things at once makes you read all of them first. Anchored to the right
+ * rail because that is the icon it belongs to.
+ */
+function SettingsMenu({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+  const go = (to: string) => {
+    onClose();
+    navigate(to);
+  };
+  const items: [string, string, string][] = [
+    ["/settings/profile", "Profile", "Your name and number"],
+    ["/settings/speaker", "Speaker & connection", "What the box plays through"],
+    ["/settings/account", "Account", "Claim a phone, sign out"],
+  ];
+  return (
+    <>
+      <button className="pop-scrim" aria-label="Close" onClick={onClose} />
+      <div className="pop is-right" role="menu" aria-label="Settings">
+        {items.map(([to, label, sub]) => (
+          <button key={to} className="pop-item" role="menuitem" onClick={() => go(to)}>
+            <span>
+              {label}
+              <span className="pop-item-sub">{sub}</span>
+            </span>
+            <span className="pop-item-mark" aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 

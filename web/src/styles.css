@@ -531,7 +531,12 @@ input {
   text-overflow: ellipsis;
 }
 
-.np-head > .jersey {
+/* The right rail's occupant, whatever it is. This said `.jersey` and the gear
+   replaced the jersey, so the gear landed at the START of its 1fr track and
+   pushed "HOLY CROSS" off the centre line — the exact bug the three-rail grid
+   above was built to fix, reintroduced by renaming the element. */
+.np-head > .jersey,
+.np-head > .np-gear-wrap {
   justify-self: end;
 }
 
@@ -1461,6 +1466,10 @@ input {
   height: 20px;
 }
 
+/* Borderless, mirroring the speaker icon on the opposite rail. A boxed gear
+   read as the heaviest thing in the header, which is backwards — it is the
+   least urgent control on the screen. The 44px TARGET stays; only the outline
+   is gone, and the two rails are now symmetrical by construction. */
 .np-gear {
   width: 44px;
   height: 44px;
@@ -1468,11 +1477,14 @@ input {
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-thumb);
+  border: 0;
   background: transparent;
-  color: var(--ink-2);
+  color: var(--muted);
   cursor: pointer;
+}
+
+.np-gear-wrap {
+  position: relative;
 }
 
 .np-gear svg {
@@ -1486,6 +1498,8 @@ input {
   position: absolute;
   top: 48px;
   left: 0;
+  /* .is-right flips the anchor for the gear's rail — a popover pinned left
+     from the right-hand icon would hang off the screen. */
   z-index: 40;
   width: min(78vw, 290px);
   padding: 14px 16px 16px;
@@ -1507,6 +1521,52 @@ input {
   padding: 0;
   background: transparent;
   cursor: default;
+}
+
+.pop.is-right {
+  left: auto;
+  right: 0;
+}
+
+/* A menu inside a popover: each row navigates. Full-width rows rather than a
+   list of links, so the whole strip is the target. */
+.pop-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pop-item + .pop-item {
+  border-top: 1px solid var(--hairline);
+}
+
+.pop-item-sub {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.pop-item-mark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid var(--muted);
+  border-right: 2px solid var(--muted);
+  transform: rotate(45deg);
 }
 
 .pop-row {
