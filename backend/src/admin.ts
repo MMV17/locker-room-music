@@ -20,6 +20,36 @@ export const admin = new Hono<{ Bindings: Env }>();
 const nowIso = () => new Date().toISOString();
 
 /**
+ * Where the covers stand, and a few stored cover URLs for the Admin screen to
+ * load as a test.
+ *
+ * A colour block on a phone has two causes the UI cannot tell apart: the
+ * server never found a cover (Deezer/iTunes refused it), or it did and the
+ * PHONE could not load the image — the covers come straight from
+ * cdn-images.dzcdn.net and mzstatic.com, and the campus filter already blocks
+ * the whole auxgoat.com zone. Counts answer the first; loading `samples` on
+ * the coach's own phone, on the same network, answers the second.
+ */
+admin.get("/api/admin/artwork/status", async (c) => {
+  const { results: counts } = await c.env.DB.prepare(
+    "SELECT artwork_state AS state, COUNT(*) AS n FROM tracks GROUP BY artwork_state",
+  ).all<{ state: string; n: number }>();
+  const { results: samples } = await c.env.DB.prepare(
+    `SELECT t.title, t.artwork_url AS url FROM tracks t
+       JOIN plays p ON p.track_id = t.id
+      WHERE t.artwork_state = 'found' AND t.artwork_url IS NOT NULL
+      GROUP BY t.id ORDER BY MAX(p.started_at) DESC LIMIT 3`,
+  ).all<{ title: string; url: string }>();
+  const by = Object.fromEntries(counts.map((r) => [r.state, r.n]));
+  return c.json({
+    found: by.found ?? 0,
+    none: by.none ?? 0,
+    pending: by.pending ?? 0,
+    samples,
+  });
+});
+
+/**
  * Re-run artwork lookup for tracks that came back empty.
  *
  * Artwork is cached forever per spec 6.4, which is right — but it means a

@@ -99,11 +99,26 @@ cover never appears. Case "a" — the UI's colour-block fallback, not a layout
 bug — so the server lookup returned nothing for every track.
 
 **Probably NOT caused by the dual-connection above:** the lookup is
-server-side from title + artist + album, and all three are arriving. The
-lookup code had not changed since 2026-08-05, when covers were verified in
-production. So something outside the code changed — most likely Deezer and
-iTunes both refusing or rate-limiting Cloudflare's shared egress IPs. **Not
-confirmed**: the dev container cannot reach the Worker, Deezer or iTunes.
+server-side from title + artist + album, and all three are arriving.
+
+**Root cause NOT yet established. Two candidates, and the UI cannot tell them
+apart** — `Artwork` shows the same colour block for a null URL and for an
+image that failed to load:
+
+1. **The server never found a cover.** Deezer and iTunes refusing or
+   rate-limiting Cloudflare's shared egress IPs. The lookup code had not
+   changed since 2026-08-05, when covers were verified in production.
+2. **The server found it and the PHONE cannot load it.** Covers are loaded by
+   `<img>` straight from `cdn-images.dzcdn.net` / `is*-ssl.mzstatic.com`. The
+   campus filter already blocks the whole `auxgoat.com` zone; blocking music
+   CDNs would give exactly "every song, with no code change". Covers that
+   worked on 2026-08-05 were checked from a laptop, not a phone on campus.
+
+Ruled out by reading the code: no second path creates tracks without a
+lookup; `/api/now` passes `artwork_url` through unchanged since it was
+written; there is no CSP or `_headers` file that could block images. The dev
+container could not test either candidate — its network policy denies the
+Worker, Deezer and iTunes.
 
 The real defect was that it was undiagnosable. Every failure — HTTP error,
 refusal, thrown fetch, matcher rejection — collapsed into the same `null`, and
@@ -119,12 +134,20 @@ the retry endpoint had no button. Fixed on branch
 | Retry is batched (12 tracks, `offset` cursor, `remaining`, `next_offset`) | ~3 fetches per track; the free plan's 50-subrequest cap would make every fetch past it throw and masquerade as an outage |
 | Retry returns `failures[]` with reasons for up to 5 songs | the count alone could not say what is wrong |
 | **Admin → Album covers → Find missing covers** | the endpoint had no button since 2026-08-05 |
+| `GET /api/admin/artwork/status` + a load test in Album covers | counts found/none/pending, and loads the 3 most recently played stored covers **on the coach's phone**, saying "Loads" or "Could not load on this network" per image host |
 
-**Next step after deploying:** press *Find missing covers* and read the
-reasons. `deezer: Quota limit exceeded` / `HTTP 403` / `HTTP 429` on both
-providers means egress blocking and the fix is a different source or a proxy;
-`N results, none matched artist` means the matcher; `0 results` on both means
-the queries themselves are wrong.
+**Next step after deploying:** open Admin → Album covers **on a phone on
+campus wifi** and read it top to bottom:
+
+- **Covers stored, test images say "Could not load on this network"** →
+  candidate 2. Confirm by loading the same screen on cellular. The fix is to
+  serve covers through the Worker (same origin, an unfiltered hostname) —
+  which also stops the phone contacting Deezer/Apple at all.
+- **"0 with a cover" / many without** → candidate 1. Press *Find missing
+  covers* and read the reasons: `Quota limit exceeded` / `HTTP 403` /
+  `HTTP 429` on both providers means egress blocking and needs another source
+  or a proxy; `N results, none matched artist` means the matcher; `0 results`
+  on both means the queries.
 
 ## The remote escape hatch (2026-09-21) — BUILT AND MERGED, NOT YET DEPLOYED
 
