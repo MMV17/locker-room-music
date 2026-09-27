@@ -200,6 +200,7 @@ export function Admin({ teamName }: { teamName: string }) {
       <Devices call={call} />
       <Roster call={call} />
       <Plays call={call} />
+      <Covers call={call} />
       <Appearance call={call} />
       <Speaker call={call} />
     </main>
@@ -719,6 +720,103 @@ function Plays({ call }: { call: Call }) {
             </div>
           ))}
           </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
+interface RetryResult {
+  retried: number;
+  found: number;
+  remaining: number;
+  next_offset: number;
+  failures: { title: string; artist: string | null; why: string[] }[];
+}
+
+/**
+ * Album covers that came back as a colour block.
+ *
+ * The retry endpoint existed since 2026-08-05 but had no button, so the only
+ * way to heal a missing cover was curl. And it answered with a count, which
+ * on 2026-09-27 — every song a colour block — could not say whether Deezer
+ * refused, iTunes refused, or both answered and the matcher said no. It shows
+ * the reason now, per song, because the reason IS the diagnosis.
+ *
+ * Batched server-side (a Worker has a cap on outbound fetches per request),
+ * so "Next batch" carries the cursor the last answer handed back.
+ */
+function Covers({ call }: { call: Call }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<RetryResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (offset: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(
+        await call<RetryResult>("/api/admin/artwork/retry", {
+          method: "POST",
+          body: JSON.stringify({ offset }),
+        }),
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not retry covers");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Album covers">
+      {error && <div className="banner is-bad">{error}</div>}
+      <div className="rows" style={{ marginBottom: result ? 12 : 0 }}>
+        <div className="row">
+          <span className="row-main">
+            <span className="row-title">Find missing covers</span>
+            <span className="row-sub">
+              Looks up songs showing a colour block again. Safe any time.
+            </span>
+          </span>
+          <button className="btn" disabled={busy} onClick={() => run(0)}>
+            {busy ? "Looking…" : "Run"}
+          </button>
+        </div>
+      </div>
+
+      {result && (
+        <>
+          <p className="t-sub" style={{ marginBottom: 8 }}>
+            {result.retried === 0
+              ? "No songs are missing a cover."
+              : `Tried ${result.retried}, found ${result.found}.` +
+                (result.remaining ? ` ${result.remaining} more to try.` : "")}
+          </p>
+          {result.failures.length > 0 && (
+            <div className="rows">
+              {result.failures.map((f, i) => (
+                <div key={i} className="row">
+                  <span className="row-main">
+                    <span className="row-title">{f.title}</span>
+                    <span className="row-sub">
+                      {f.artist ?? "Unknown artist"} · {f.why.join(" · ")}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.remaining > 0 && (
+            <button
+              className="btn-quiet"
+              disabled={busy}
+              onClick={() => run(result.next_offset)}
+              style={{ marginTop: 8 }}
+            >
+              Next batch
+            </button>
+          )}
         </>
       )}
     </Section>

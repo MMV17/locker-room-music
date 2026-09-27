@@ -1,6 +1,6 @@
 # Project state — resume here
 
-Last worked: **2026-09-21**. Spec is `docs/spec.md`. Repo lives at
+Last worked: **2026-09-27**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
 
@@ -56,6 +56,75 @@ Build order status (spec section 10):
 | 7 | Admin and device claiming | **Done — deployed; claiming exercised once** |
 
 ---
+
+## 2026-09-27: DJ connects to the Pi AND the JBL at once — a workaround, not a fix
+
+**Mack's field change, reported 2026-09-27.** Instead of the relay (phone →
+Pi → JBL, see "THE RELAY IS BUILT AND RUNNING"), the DJ's phone is paired to
+the Pi and to the JBL at the same time. It works quickly. It is NOT exclusive,
+and it was adopted knowing it breaks things. Nothing in the code was changed
+for it; this entry is so nobody mistakes it for the designed setup.
+
+What is and is not known:
+
+- **Song info still reaches the Pi.** Title, artist and album display on Now
+  Playing for every song, so AVRCP metadata is still arriving and plays are
+  still being logged.
+- **Which device the SOUND goes to is not established.** An iPhone plays
+  A2DP audio to ONE Bluetooth output at a time (Audio Sharing to two is
+  AirPods/Beats only); some Samsung phones have "Dual Audio". If the JBL is
+  the sounding device, the Pi is logging metadata for audio it is not
+  playing. Which phone the DJ used was not recorded.
+
+What it breaks, by design of the rest of the system:
+
+- **Aux ownership / exclusivity.** The relay made the Pi hold the JBL's slot
+  and reconnect if displaced. A phone paired straight to the JBL bypasses
+  that, and so does anyone else who pairs with the JBL.
+- **Anti-bypass** (verified on the relay path 2026-08-31) does not hold: the
+  JBL will play a phone that never touched the Pi, and that play is never
+  logged or voted on.
+- **Speaker output / relay status in Admin** describes the relay, not this.
+  With a `[relay]` target configured the Pi will also try to connect to the
+  JBL itself and compete with the phone for it.
+- **`audio-check.sh --tone`** tests the Pi's output path, which is not where
+  the music is coming from.
+
+To go back: unpair the JBL from the DJ's phone and let the Pi relay.
+
+## 2026-09-27: EVERY song shows a colour block instead of its cover
+
+Reported 2026-09-27: every song, title/artist/album all displayed correctly,
+cover never appears. Case "a" — the UI's colour-block fallback, not a layout
+bug — so the server lookup returned nothing for every track.
+
+**Probably NOT caused by the dual-connection above:** the lookup is
+server-side from title + artist + album, and all three are arriving. The
+lookup code had not changed since 2026-08-05, when covers were verified in
+production. So something outside the code changed — most likely Deezer and
+iTunes both refusing or rate-limiting Cloudflare's shared egress IPs. **Not
+confirmed**: the dev container cannot reach the Worker, Deezer or iTunes.
+
+The real defect was that it was undiagnosable. Every failure — HTTP error,
+refusal, thrown fetch, matcher rejection — collapsed into the same `null`, and
+the retry endpoint had no button. Fixed on branch
+`claude/artwork-dj-pi-connection-8ykysq`, **NOT YET DEPLOYED**:
+
+| change | why |
+|---|---|
+| `lookupArtwork` returns `{ url, why[] }` and `console.warn`s the reasons | `wrangler tail` shows the cause on the next play |
+| Deezer's `{"error": …}` body is read as a refusal | Deezer reports quota errors as **HTTP 200**, which read as "0 results" |
+| `cf: { cacheEverything, cacheTtl: 86400 }` removed from both fetches | a 200 refusal was cached for a day per query, so a retry replayed it |
+| Retry also picks up `artwork_state = 'pending'` | a lookup that died inside `waitUntil` left the row pending forever, invisible to a `'none'`-only retry |
+| Retry is batched (12 tracks, `offset` cursor, `remaining`, `next_offset`) | ~3 fetches per track; the free plan's 50-subrequest cap would make every fetch past it throw and masquerade as an outage |
+| Retry returns `failures[]` with reasons for up to 5 songs | the count alone could not say what is wrong |
+| **Admin → Album covers → Find missing covers** | the endpoint had no button since 2026-08-05 |
+
+**Next step after deploying:** press *Find missing covers* and read the
+reasons. `deezer: Quota limit exceeded` / `HTTP 403` / `HTTP 429` on both
+providers means egress blocking and the fix is a different source or a proxy;
+`N results, none matched artist` means the matcher; `0 results` on both means
+the queries themselves are wrong.
 
 ## The remote escape hatch (2026-09-21) — BUILT AND MERGED, NOT YET DEPLOYED
 

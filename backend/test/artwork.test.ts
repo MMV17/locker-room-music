@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { pick } from "../src/artwork";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { lookupArtwork, pick } from "../src/artwork";
+import type { Env } from "../src/types";
 
 /**
  * These are drawn from real catalogue data, not invented. The artist filter
@@ -98,5 +99,78 @@ describe("pick", () => {
   it("is case and punctuation insensitive", () => {
     const candidates = [{ artist: "AC/DC", album: "Back in Black", art: ART }];
     expect(pick(candidates, "acdc", "back in black")).toBe(ART);
+  });
+});
+
+/**
+ * Every miss has to say why. On 2026-09-27 every song was a colour block and
+ * nothing could tell a provider refusal from a matcher rejection.
+ */
+describe("lookupArtwork reasons", () => {
+  const writes: unknown[][] = [];
+  const env = {
+    DB: {
+      prepare: () => ({
+        bind: (...args: unknown[]) => ({
+          run: async () => {
+            writes.push(args);
+          },
+        }),
+      }),
+    },
+  } as unknown as Env;
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    writes.length = 0;
+  });
+
+  it("reads Deezer's HTTP-200 error body as a refusal, not as no results", async () => {
+    vi.stubGlobal("fetch", async (url: string) =>
+      url.includes("deezer")
+        ? json({ error: { type: "Exception", message: "Quota limit exceeded", code: 4 } })
+        : json({}, 403),
+    );
+    const r = await lookupArtwork(env, "t1", "Decode", "Paramore", null);
+    expect(r.url).toBeNull();
+    expect(r.why).toContain("deezer: Quota limit exceeded (code 4)");
+    expect(r.why).toContain("itunes: HTTP 403");
+    expect(writes[0]).toEqual([null, "none", "t1"]);
+  });
+
+  it("reports a thrown fetch with its message", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("Too many subrequests.");
+    });
+    const r = await lookupArtwork(env, "t1", "Decode", "Paramore", null);
+    expect(r.why).toEqual([
+      "deezer: Too many subrequests.",
+      "itunes: Too many subrequests.",
+    ]);
+  });
+
+  it("names the artists it rejected", async () => {
+    vi.stubGlobal("fetch", async (url: string) =>
+      url.includes("deezer")
+        ? json({ data: [{ artist: { name: "Lullaby Versions of Paramore" }, album: { title: "X", cover_big: ART } }] })
+        : json({ results: [] }),
+    );
+    const r = await lookupArtwork(env, "t1", "Decode", "Paramore", null);
+    expect(r.why).toEqual([
+      'deezer: 1 results, none matched artist "Paramore" (got Lullaby Versions of Paramore)',
+      "itunes: 0 results",
+    ]);
+  });
+
+  it("returns the cover and records it as found", async () => {
+    vi.stubGlobal("fetch", async () =>
+      json({ data: [{ artist: { name: "Paramore" }, album: { title: "Decode", cover_big: ART } }] }),
+    );
+    const r = await lookupArtwork(env, "t1", "Decode", "Paramore", "Decode");
+    expect(r).toEqual({ url: ART, why: [] });
+    expect(writes[0]).toEqual([ART, "found", "t1"]);
   });
 });

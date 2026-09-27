@@ -28,33 +28,55 @@ const nowIso = () => new Date().toISOString();
  * matcher could not see past a leading "The"; without this, fixing the matcher
  * would not have healed the row it broke.
  *
- * Only retries `artwork_state = 'none'`. A track that already has a cover is
+ * Retries `artwork_state = 'none'` AND 'pending'. A lookup runs in
+ * waitUntil after /api/plays has answered; if it dies there (an exception in
+ * the D1 write, the isolate evicted) the row stays 'pending' forever and an
+ * 'none'-only retry would never see it. A track that already has a cover is
  * left alone, so this can never churn a good result into a worse one.
+ *
+ * BATCHED. Each lookup is up to three outbound fetches, and a Worker on the
+ * free plan gets 50 per request — past that every fetch throws, which would
+ * read as "Deezer and iTunes are both down" and hide the real answer. Press
+ * again with `offset: next_offset` for the next batch; `remaining` says how
+ * many are left. Without the cursor, songs neither catalogue has would fill
+ * every batch and the rest would never be reached.
+ *
+ * Returns WHY for the first few that still failed, so the Admin screen can
+ * show the cause instead of a count.
  */
+const RETRY_BATCH = 12;
+
 admin.post("/api/admin/artwork/retry", async (c) => {
   // `all` redoes tracks that already have a cover too. Needed after the
   // matcher itself improves: "Imma Be" was state='found' pointing at a
   // compilation, which no amount of retrying the failures would have fixed.
   const body = await c.req
-    .json<{ all?: boolean }>()
-    .catch((): { all?: boolean } => ({}));
+    .json<{ all?: boolean; offset?: number }>()
+    .catch((): { all?: boolean; offset?: number } => ({}));
+  const offset = Math.max(0, Math.floor(Number(body.offset) || 0));
+  const where = body.all ? "" : "WHERE artwork_state IN ('none', 'pending')";
+
+  const total = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM tracks ${where}`)
+    .first<{ n: number }>();
   const { results } = await c.env.DB.prepare(
-    body.all
-      ? `SELECT id, title, artist, album FROM tracks`
-      : `SELECT id, title, artist, album FROM tracks WHERE artwork_state = 'none'`,
-  ).all<{ id: string; title: string; artist: string | null; album: string | null }>();
+    `SELECT id, title, artist, album FROM tracks ${where} ORDER BY id LIMIT ? OFFSET ?`,
+  )
+    .bind(RETRY_BATCH, offset)
+    .all<{ id: string; title: string; artist: string | null; album: string | null }>();
 
   let found = 0;
+  const failures: { title: string; artist: string | null; why: string[] }[] = [];
   for (const t of results) {
-    await lookupArtwork(c.env, t.id, t.title, t.artist ?? "", t.album);
-    const after = await c.env.DB.prepare(
-      "SELECT artwork_state FROM tracks WHERE id = ?",
-    )
-      .bind(t.id)
-      .first<{ artwork_state: string }>();
-    if (after?.artwork_state === "found") found++;
+    const r = await lookupArtwork(c.env, t.id, t.title, t.artist ?? "", t.album);
+    if (r.url) found++;
+    else if (failures.length < 5) failures.push({ title: t.title, artist: t.artist, why: r.why });
   }
-  return c.json({ retried: results.length, found });
+  // In the default mode a fixed track leaves the set, which shifts every row
+  // after it up by one — so the cursor advances only past the ones that
+  // stayed. With `all` nothing leaves, and it advances by the whole batch.
+  const nextOffset = offset + results.length - (body.all ? 0 : found);
+  const remaining = Math.max(0, (total?.n ?? 0) - offset - results.length);
+  return c.json({ retried: results.length, found, remaining, next_offset: nextOffset, failures });
 });
 
 /* Roster CRUD */
