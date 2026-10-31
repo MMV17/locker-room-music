@@ -7,8 +7,8 @@
 # ONE-TIME SETUP (GitHub -> repo Settings -> Secrets and variables -> Actions):
 #   CLOUDFLARE_API_TOKEN   required. Cloudflare dashboard -> My Profile ->
 #                          API Tokens -> "Edit Cloudflare Workers" template.
-#   CLOUDFLARE_ACCOUNT_ID  optional; only needed if the token can see more
-#                          than one account. Workers & Pages overview, right side.
+#   CLOUDFLARE_ACCOUNT_ID  optional; overrides the account id below (the one
+#                          in docs/STATE.md). Workers & Pages overview, right side.
 #
 # WHAT THIS DOES NOT DO:
 #   - D1 migrations. Run those deliberately, with a backup first, BEFORE the
@@ -84,7 +84,12 @@ jobs:
         working-directory: backend
         env:
           RAW_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Falls back to the account in docs/STATE.md ("Cloudflare account").
+          # Not a secret - it names the account and grants nothing. It has to
+          # be passed: without it wrangler looks the account up via
+          # /memberships, which an account-owned API token is not allowed to
+          # call, and that fails as code 9106 (the 2026-10-31 runs 2 and 3).
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || '7db3c13ee0073570030cac33d8c9f0dc' }}
         run: |
           # The secret is pasted by hand, usually from a phone, and the first
           # real run (2026-10-31) failed with Cloudflare code 9106 - a header it
