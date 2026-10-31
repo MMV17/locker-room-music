@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Check the Cloudflare token is set
         env:
@@ -83,11 +83,33 @@ jobs:
       - name: Deploy
         working-directory: backend
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RAW_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          # The secret is pasted by hand, usually from a phone, and the first
+          # real run (2026-10-31) failed with Cloudflare code 9106 - a header it
+          # could not parse. A stray space, newline or quote does exactly that.
+          # A real API token has none of those, so strip them, and a "Bearer "
+          # prefix copied from Cloudflare's own curl example.
+          TOKEN="$(printf '%s' "$RAW_TOKEN" | tr -d "[:space:]\"'")"
+          TOKEN="${TOKEN#Bearer}"
+          echo "::add-mask::$TOKEN"
+          # API tokens are ~40 characters of letters, digits, - and _. Anything
+          # else is a different credential (the Global API Key is 37 hex
+          # characters and needs an email too; a token ID is not the token).
+          # Say which, without printing it.
+          if printf '%s' "$TOKEN" | grep -Eq '^[0-9a-f]{37}$'; then
+            echo "::error::CLOUDFLARE_API_TOKEN holds the Global API Key, not an API token. In Cloudflare: My Profile -> API Tokens -> Create Token -> 'Edit Cloudflare Workers', and paste that instead."
+            exit 1
+          fi
+          if ! printf '%s' "$TOKEN" | grep -Eq '^[A-Za-z0-9_-]{35,60}$'; then
+            echo "::error::CLOUDFLARE_API_TOKEN does not look like an API token (length ${#TOKEN} after trimming). Create one from the 'Edit Cloudflare Workers' template and paste only the token."
+            exit 1
+          fi
+          export CLOUDFLARE_API_TOKEN="$TOKEN"
           # Only pass the account id when one was given; an empty value is not
           # the same as unset to wrangler.
+          ACCOUNT_ID="$(printf '%s' "$ACCOUNT_ID" | tr -d '[:space:]')"
           if [ -n "$ACCOUNT_ID" ]; then export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"; fi
           find public -name '.DS_Store' -delete 2>/dev/null || true
           npx wrangler deploy
