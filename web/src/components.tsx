@@ -9,6 +9,25 @@ import { useNavigate, useRoute } from "./router";
  * design element rather than a failure state — the reference's artwork is
  * abstract colour anyway, so it sits in the design rather than apologising.
  */
+/**
+ * Where to load a stored cover from: through our own origin, not straight from
+ * Deezer or Apple. Phones on the campus network could not load the music CDNs
+ * (2026-09-27: every song a colour block), and the app's own hostname is the
+ * one thing we know gets through. The server only proxies those two hosts;
+ * anything else is passed through untouched.
+ */
+export function artworkSrc(url: string): string {
+  try {
+    const host = new URL(url).hostname;
+    if (/(^|\.)(dzcdn\.net|mzstatic\.com)$/i.test(host)) {
+      return "/api/art?u=" + encodeURIComponent(url);
+    }
+  } catch {
+    /* not an absolute URL - leave it alone */
+  }
+  return url;
+}
+
 export function Artwork({
   src,
   fallback,
@@ -39,7 +58,7 @@ export function Artwork({
     return (
       <img
         className={className}
-        src={src}
+        src={artworkSrc(src)}
         alt={alt}
         loading="lazy"
         decoding="async"

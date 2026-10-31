@@ -33,6 +33,7 @@ import { runBackup } from "./backup";
 import { parseScan, replaceDevices, getSelection, getForgetTarget } from "./speakers";
 import { parseReport, storeReport } from "./piReports";
 import { speakerRoutes } from "./speakerRoutes";
+import { serveArt } from "./artProxy";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -779,6 +780,14 @@ async function auxState(
     you_are_waiting: youAreWaiting,
   };
 }
+
+/**
+ * Album covers through our own origin, so a network that blocks the music
+ * CDNs still shows them. See artProxy.ts. Not behind requireSession: the
+ * coach's cover test in Admin runs without a player session, and the proxy
+ * only fetches from the two image hosts the artwork lookup stores.
+ */
+app.get("/api/art", (c) => serveArt(c));
 
 app.get("/api/now", requireSession, async (c) => {
   const userId = c.get("userId");

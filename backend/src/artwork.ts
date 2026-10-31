@@ -28,15 +28,27 @@ export async function lookupArtwork(
   title: string,
   artist: string,
   album?: string | null,
-): Promise<void> {
+): Promise<LookupResult> {
   if (!normalize(title) && !normalize(artist)) {
     await setState(env, trackId, null, "none");
-    return;
+    return { url: null, why: ["no title or artist to search with"] };
   }
 
-  const url = (await fromDeezer(title, artist, album)) ?? (await fromItunes(title, artist, album));
+  // Every step that comes back empty says WHY. On 2026-09-27 every song was a
+  // colour block while the title and artist displayed fine, and nothing
+  // anywhere could say whether Deezer refused, iTunes refused, or both
+  // answered and the matcher rejected them — the lookup swallowed all three
+  // into the same null.
+  const why: string[] = [];
+  const url =
+    (await fromDeezer(title, artist, album, why)) ??
+    (await fromItunes(title, artist, album, why));
+  if (!url) console.warn(`artwork: none for "${artist} - ${title}": ${why.join("; ")}`);
   await setState(env, trackId, url, url ? "found" : "none");
+  return { url, why };
 }
+
+export type LookupResult = { url: string | null; why: string[] };
 
 /** A candidate release from either provider, flattened to what we compare on. */
 type Candidate = { artist: string; album: string; art: string | null };
@@ -115,30 +127,56 @@ export function pick(
 /** Quotes delimit fields in Deezer's query language — a stray one widens the search. */
 const field = (name: string, value: string) => `${name}:"${value.replace(/"/g, "")}"`;
 
+/**
+ * Why a provider's answer produced no cover, or null if it produced one.
+ * Names what was rejected, so a matcher problem reads differently from an outage.
+ */
+function explainMiss(
+  source: string,
+  candidates: Candidate[],
+  artist: string,
+): string {
+  if (!candidates.length) return `${source}: 0 results`;
+  const seen = [...new Set(candidates.map((c) => c.artist))].slice(0, 3).join(", ");
+  return `${source}: ${candidates.length} results, none matched artist "${artist}" (got ${seen})`;
+}
+
 async function deezerSearch(
   q: string,
   artist: string,
-  album?: string | null,
+  album: string | null | undefined,
+  why: string[],
 ): Promise<string | null> {
   try {
-    const res = await fetch(
-      "https://api.deezer.com/search?limit=10&q=" + encodeURIComponent(q),
-      { cf: { cacheTtl: 86400, cacheEverything: true } },
-    );
-    if (!res.ok) return null;
+    // No `cf` cache options. Deezer's refusals arrive as HTTP 200 (see below),
+    // so cacheEverything + a day's cacheTtl stored a refusal as if it were an
+    // answer and replayed it to every retry of that exact query for 24 hours.
+    // Each track is looked up once anyway, so the cache was saving nothing.
+    const res = await fetch("https://api.deezer.com/search?limit=10&q=" + encodeURIComponent(q));
+    if (!res.ok) {
+      why.push(`deezer: HTTP ${res.status}`);
+      return null;
+    }
     const data = await res.json<{
       data?: { artist?: { name?: string }; album?: { title?: string; cover_big?: string } }[];
+      error?: { type?: string; message?: string; code?: number };
     }>();
-    return pick(
-      (data.data ?? []).map((t) => ({
-        artist: t.artist?.name ?? "",
-        album: t.album?.title ?? "",
-        art: t.album?.cover_big ?? null,
-      })),
-      artist,
-      album,
-    );
-  } catch {
+    // Deezer reports quota and other refusals as HTTP 200 with an `error`
+    // object, so `res.ok` alone reads a refusal as "no results".
+    if (data.error) {
+      why.push(`deezer: ${data.error.message ?? data.error.type ?? "error"} (code ${data.error.code ?? "?"})`);
+      return null;
+    }
+    const candidates = (data.data ?? []).map((t) => ({
+      artist: t.artist?.name ?? "",
+      album: t.album?.title ?? "",
+      art: t.album?.cover_big ?? null,
+    }));
+    const art = pick(candidates, artist, album);
+    if (!art) why.push(explainMiss("deezer", candidates, artist));
+    return art;
+  } catch (e) {
+    why.push(`deezer: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
 }
@@ -146,7 +184,8 @@ async function deezerSearch(
 async function fromDeezer(
   title: string,
   artist: string,
-  album?: string | null,
+  album: string | null | undefined,
+  why: string[],
 ): Promise<string | null> {
   const artistQ = artist ? field("artist", artist) : "";
   const titleQ = title ? field("track", title) : "";
@@ -165,43 +204,47 @@ async function fromDeezer(
   // AVRCP gives us the album the DJ is actually playing from, which is the
   // whole reason it is worth passing down here.
   if (album) {
-    const scoped = await deezerSearch(`${base} ${field("album", album)}`, artist, album);
+    const scoped = await deezerSearch(`${base} ${field("album", album)}`, artist, album, why);
     if (scoped) return scoped;
   }
 
   // No album, or the catalogue spells it differently. Fall back to the wider
   // search rather than giving up — a compilation cover beats a colour block.
-  return deezerSearch(base, artist, album);
+  return deezerSearch(base, artist, album, why);
 }
 
 async function fromItunes(
   title: string,
   artist: string,
-  album?: string | null,
+  album: string | null | undefined,
+  why: string[],
 ): Promise<string | null> {
   const term = [artist, title].filter(Boolean).join(" ").trim();
   if (!term) return null;
 
   try {
+    // No `cf` cache options, for the same reason as deezerSearch.
     const res = await fetch(
       "https://itunes.apple.com/search?entity=song&limit=10&term=" + encodeURIComponent(term),
-      { cf: { cacheTtl: 86400, cacheEverything: true } },
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      why.push(`itunes: HTTP ${res.status}`);
+      return null;
+    }
     const data = await res.json<{
       results?: { artistName?: string; collectionName?: string; artworkUrl100?: string }[];
     }>();
-    return pick(
-      (data.results ?? []).map((t) => ({
-        artist: t.artistName ?? "",
-        album: t.collectionName ?? "",
-        // Swap the dimensions in the URL for something usable on a phone.
-        art: t.artworkUrl100?.replace("100x100bb", "600x600bb") ?? null,
-      })),
-      artist,
-      album,
-    );
-  } catch {
+    const candidates = (data.results ?? []).map((t) => ({
+      artist: t.artistName ?? "",
+      album: t.collectionName ?? "",
+      // Swap the dimensions in the URL for something usable on a phone.
+      art: t.artworkUrl100?.replace("100x100bb", "600x600bb") ?? null,
+    }));
+    const art = pick(candidates, artist, album);
+    if (!art) why.push(explainMiss("itunes", candidates, artist));
+    return art;
+  } catch (e) {
+    why.push(`itunes: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
 }
