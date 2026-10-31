@@ -765,6 +765,9 @@ function SpeakerOutput({ call }: { call: Call }) {
   // Without this, a bare `confirm` silently resolves to window.confirm — the
   // typechecker caught it, but only because the signatures differ.
   const [scanState, setScanState] = useState<"idle" | "queued" | "scanning" | "done">("idle");
+  // What the Pi said when a scan did not work. "Scan finished." over an empty
+  // list hid a refusal (a song was playing) the same way the team screen did.
+  const [scanFailure, setScanFailure] = useState<string | null>(null);
 
   const load = useCallback(
     () =>
@@ -790,6 +793,7 @@ function SpeakerOutput({ call }: { call: Call }) {
         if (!scan) return;
         if (scan.completed_at) {
           setScanState("done");
+          setScanFailure(scan.ok === 0 ? scan.result || "the scan failed" : null);
           load();
         } else if (scan.dispatched_at) {
           setScanState("scanning");
@@ -810,6 +814,7 @@ function SpeakerOutput({ call }: { call: Call }) {
         body: JSON.stringify({ command: "scan-speakers" }),
       });
       setScanState("queued");
+      setScanFailure(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not start a scan");
     } finally {
@@ -850,7 +855,7 @@ function SpeakerOutput({ call }: { call: Call }) {
     idle: "",
     queued: "Waiting for the speaker to check in — this can take up to a minute.",
     scanning: "Scanning now. Put your speaker in pairing mode.",
-    done: "Scan finished.",
+    done: scanFailure ? `Scan didn't run: ${scanFailure}` : "Scan finished.",
   }[scanState];
 
   return (

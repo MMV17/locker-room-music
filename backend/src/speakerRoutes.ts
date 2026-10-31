@@ -17,7 +17,7 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { isMacAddress, normaliseMac } from "./piControl";
 import { listDevices, getSelection, getSelectionName, setSelection } from "./speakers";
-import { mayChangeSpeaker, isScanFresh } from "./speakerAccess";
+import { mayChangeSpeaker, isScanFresh, scanProblem, isAudiblyPlaying } from "./speakerAccess";
 
 export const speakerRoutes = new Hono<{
   Bindings: Env;
@@ -64,10 +64,21 @@ speakerRoutes.get("/api/speakers", async (c) => {
   // picker, not a record of every device name that has been near the room.
   const fresh = isScanFresh(scannedAt?.at);
 
+  // The last scan's outcome, so a refused or failed one says why instead of
+  // looking like a button that did nothing. Only while nothing newer is running.
+  const lastScan = running
+    ? null
+    : await c.env.DB.prepare(
+        `SELECT ok, result, completed_at FROM pi_commands
+          WHERE command = 'scan-speakers' AND completed_at IS NOT NULL
+          ORDER BY completed_at DESC LIMIT 1`,
+      ).first<{ ok: number | null; result: string | null; completed_at: string | null }>();
+
   return c.json({
     devices: fresh ? devices : [],
     scanned_at: fresh ? scannedAt?.at : null,
     scanning: running ? (running.dispatched_at ? "scanning" : "queued") : null,
+    scan_problem: scanProblem(lastScan),
     selected,
     selected_name: selectedName || null,
     output: hb?.output_kind ? { kind: hb.output_kind, card: hb.output_card } : null,
@@ -94,6 +105,20 @@ speakerRoutes.post("/api/speakers/scan", async (c) => {
     .bind(staleCutoff)
     .first<{ id: string }>();
   if (outstanding) return c.json({ error: "The AuxGoat is already busy" }, 409);
+
+  // The Pi refuses to scan under a playing song (it would stutter the room).
+  // Say so now, rather than after a minute of "Waiting for the AuxGoat…" that
+  // ends in an empty list. Paused is fine - nothing is streaming.
+  const playing = await c.env.DB.prepare(
+    `SELECT play_status, keepalive_at FROM plays
+      WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+  ).first<{ play_status: string | null; keepalive_at: string | null }>();
+  if (isAudiblyPlaying(playing)) {
+    return c.json(
+      { error: "Pause the music first. The AuxGoat can't look for speakers while a song is playing." },
+      409,
+    );
+  }
 
   const id = crypto.randomUUID();
   await c.env.DB.prepare(

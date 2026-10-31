@@ -213,12 +213,24 @@ def may_run(name: str, sessions) -> tuple[bool, str]:
     """
     if name not in MID_SONG_REFUSED:
         return True, ""
-    allowed, why = may_scan(sessions)
-    if allowed:
-        return True, ""
     if name == REPAIR_COMMAND:
-        return False, "refused: a song is playing - a repair restarts bluetooth and would cut it off"
-    return False, why
+        # Stricter than a scan: a repair restarts bluetooth, which drops the
+        # phone even when its song is only paused.
+        if _open_play(sessions) is not None:
+            return False, "refused: a song is playing - a repair restarts bluetooth and would cut it off"
+        return True, ""
+    return may_scan(sessions)
+
+
+def _open_play(sessions) -> dict | None:
+    """The open play, or None - including when it cannot be read (fail open)."""
+    if sessions is None:
+        return None
+    try:
+        return sessions.open_play_state()
+    except Exception:
+        log.exception("could not read play state before a radio command; allowing it")
+        return None
 
 
 def may_scan(sessions) -> tuple[bool, str]:
@@ -231,16 +243,19 @@ def may_scan(sessions) -> tuple[bool, str]:
     Fails OPEN when the state cannot be read: the cost of scanning during a
     song is a stutter, and the cost of never scanning is a feature that does
     not work. A broken read should not be the thing that decides.
+
+    A PAUSED song does not refuse. Nothing is streaming, so there is nothing
+    to stutter - and refusing it broke "Find speakers" for exactly the person
+    allowed to press it. The team screen only lets you scan when your phone is
+    connected, the server allows it during your OWN song, and an open play
+    stays open through a pause. So a DJ who paused to change speaker was
+    refused here, and the refusal never reached their screen: the button just
+    reset to "Find speakers" over an empty list. Pause is now the documented
+    way to scan mid-session.
     """
-    if sessions is None:
-        return True, ""
-    try:
-        state = sessions.open_play_state()
-    except Exception:
-        log.exception("could not read play state before scanning; allowing the scan")
-        return True, ""
-    if state:
-        return False, "refused: a song is playing — scanning would stutter it"
+    state = _open_play(sessions)
+    if state and state.get("status", "playing") != "paused":
+        return False, "refused: a song is playing — pause it, then scan again"
     return True, ""
 
 

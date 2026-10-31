@@ -142,3 +142,50 @@ export function isScanFresh(scannedAt: string | null | undefined, now = Date.now
   const t = Date.parse(scannedAt);
   return Number.isFinite(t) && now - t < SCAN_VISIBLE_MS;
 }
+
+/**
+ * Why the last "Find speakers" came back empty, in words a player can act on.
+ *
+ * The Pi can refuse a scan (a song is playing) or the scan can fail outright,
+ * and either way it reports through `pi_commands.result` with no devices. The
+ * team screen used to read only the device list, so a refused scan looked
+ * exactly like a button that did nothing: it reset to "Find speakers" over an
+ * empty list. This is what puts the reason on screen instead.
+ *
+ * Returns null for a scan that worked, or one too old to be about what the
+ * player is looking at now.
+ */
+export function scanProblem(
+  last: { ok: number | null; result: string | null; completed_at: string | null } | null,
+  now = Date.now(),
+): string | null {
+  if (!last || last.ok !== 0 || !isScanFresh(last.completed_at, now)) return null;
+  const result = (last.result ?? "").trim();
+  if (/^refused:.*(song|playing)/i.test(result)) {
+    return "The AuxGoat won't scan while a song is playing. Pause the music, then tap Find speakers again.";
+  }
+  if (/timed out/i.test(result)) {
+    return "The scan timed out on the AuxGoat. Try again; if it keeps happening, ask a coach to run a full report.";
+  }
+  return "The scan didn't work on the AuxGoat. Try again; if it keeps happening, ask a coach to run a full report.";
+}
+
+/**
+ * Is a song audibly playing right now, by the server's own records?
+ *
+ * Lets "Find speakers" refuse at once rather than a minute later, when the Pi
+ * would refuse it anyway. Only a PLAYING song with a recent keepalive counts:
+ * a paused song cannot stutter, and an open play the Pi stopped reporting is a
+ * leftover, not music. Refusing on a leftover would be a new lockout, which is
+ * worse than the slow refusal this replaces.
+ */
+export const PLAYING_KEEPALIVE_MS = 60_000;
+
+export function isAudiblyPlaying(
+  play: { play_status: string | null; keepalive_at: string | null } | null,
+  now = Date.now(),
+): boolean {
+  if (!play || play.play_status !== "playing" || !play.keepalive_at) return false;
+  const t = Date.parse(play.keepalive_at);
+  return Number.isFinite(t) && now - t < PLAYING_KEEPALIVE_MS;
+}
