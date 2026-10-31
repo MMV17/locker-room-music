@@ -406,12 +406,16 @@ app.post("/api/pi/beacon", requireDeviceKey, async (c) => {
   // A scan replaces the device list wholesale. An empty result still clears
   // it: "I looked and found nothing" is a real answer, and leaving last week's
   // devices on screen would misrepresent it.
+  //
+  // Stamped with the SERVER's clock, not body.scan.at. The Pi has no RTC and
+  // the locker room network allows outbound 443 and little else, so NTP may
+  // never reach it and its clock can sit hours or days behind. The team screen
+  // hides any scan older than ten minutes (isScanFresh), so a Pi-stamped scan
+  // from a slow clock arrived already "stale" and every device vanished. The
+  // scan is reported on the beacon straight after it runs, so arrival time is
+  // the scan time to within seconds.
   if (body.scan) {
-    await replaceDevices(
-      c.env,
-      parseScan(body.scan.devices),
-      typeof body.scan.at === "string" ? body.scan.at : nowIso(),
-    );
+    await replaceDevices(c.env, parseScan(body.scan.devices), nowIso());
   }
 
   // A full diagnostic dump or a repair log, stored whole. Replaced per kind, so

@@ -214,6 +214,17 @@ class TestScanRefusal:
     def test_allowed_when_nothing_is_playing(self):
         assert control.may_scan(FakeSessions(None))[0] is True
 
+    def test_allowed_while_the_song_is_paused(self):
+        """A paused song streams nothing, so a scan cannot stutter it. Refusing
+        here is what made "Find speakers" silently do nothing for a DJ who
+        paused to change speaker - the only player the server lets press it
+        during a song."""
+        assert control.may_scan(FakeSessions({"id": "p1", "status": "paused"}))[0] is True
+
+    def test_the_refusal_says_what_to_do(self):
+        _, msg = control.may_scan(FakeSessions({"id": "p1", "status": "playing"}))
+        assert "pause" in msg.lower()
+
     def test_allowed_when_there_are_no_sessions_at_all(self):
         assert control.may_scan(None)[0] is True
 
@@ -496,6 +507,20 @@ class TestMayRun:
             "scan-speakers", FakeSessions({"id": "p1", "status": "playing"})
         )
         assert ok is False
+
+    def test_a_repair_is_still_refused_while_a_song_is_paused(self):
+        """A repair restarts bluetooth, which drops the phone whether or not
+        its song is paused. Only the scan was relaxed."""
+        ok, _ = control.may_run(
+            "run-repair", FakeSessions({"id": "p1", "status": "paused"})
+        )
+        assert ok is False
+
+    def test_a_scan_is_allowed_while_a_song_is_paused(self):
+        ok, _ = control.may_run(
+            "scan-speakers", FakeSessions({"id": "p1", "status": "paused"})
+        )
+        assert ok is True
 
     def test_a_read_only_report_is_allowed_mid_song(self):
         """report-full writes nothing and restarts nothing. The moment you most

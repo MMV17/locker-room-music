@@ -57,6 +57,56 @@ Build order status (spec section 10):
 
 ---
 
+## "Find speakers" did nothing (2026-10-31) — FIXED IN CODE, NOT YET DEPLOYED
+
+**Symptom:** a player taps Find speakers, it says "Waiting for the AuxGoat…",
+then resets to "Find speakers" over "No speakers found yet". No error.
+
+**Diagnosed from the code, not on the box** (no hardware access this session).
+Two causes, both silent:
+
+1. **The Pi refused the scan and nobody was told.** The team gate
+   (`speakerAccess.ts`) only lets a player scan when their phone is connected,
+   and explicitly allows it during their OWN song. The Pi (`may_scan` in
+   `control.py`) refused any scan while a play was open, **including a paused
+   one**. The refusal came back as `ok=0` with no `scan` payload, and
+   `SpeakerSection.tsx` never read the command result. The Admin screen said
+   "Scan finished." over the same empty list.
+2. **Scans were stamped with the Pi's clock.** The team screen hides scans older
+   than ten minutes (`isScanFresh`). The Pi has no RTC and the campus network
+   allows 443 and little else, so if NTP is not reaching it, its clock lags and
+   every scan arrived already "stale". Admin does not apply that filter, which
+   is why the 2026-08-31 hardware test (via Admin) passed.
+
+**Fixes:**
+- Pi: a **paused** song no longer refuses a scan (nothing is streaming, so
+  nothing stutters). A repair still refuses under any open play.
+- Server: `scanned_at` is stamped with `nowIso()` on arrival, not `scan.at`.
+- Server: `POST /api/speakers/scan` refuses at once (409, "Pause the music
+  first") when a song is audibly playing — `play_status='playing'` with a
+  keepalive under 60s, so a leftover open play cannot lock anyone out.
+- Server: `GET /api/speakers` returns `scan_problem`, the last scan's failure in
+  words a player can act on; both screens now show it.
+
+**How it ships — two halves, two routes.**
+- **Worker + web (most of the fix):** merge to `main`. **GitHub Actions now
+  deploys the Worker on every merge to main** (`.github/workflows/deploy-worker.yml`:
+  web build, backend tests + typecheck, `wrangler deploy`). Needs the
+  `CLOUDFLARE_API_TOKEN` repo secret once. It does NOT run D1 migrations; do
+  those first, by hand, when a change needs one. No migration for this fix.
+- **Pi (`control.py`, paused songs may scan):** **cannot go over the run-repair
+  button.** That pipeline is barred from touching `/opt/lockerroom/lockerroom`
+  and restores it if anything does. It needs `deploy.sh` (home wifi / USB-C
+  cable) or `serial-deploy.py`. **It is not needed for the fix to work.** On
+  the old Pi a paused play closes itself after `PAUSE_GRACE` (60s), and then
+  the scan runs, so the team screen says "pause, wait a minute, try again".
+  The Pi change only removes that minute. No Tier 2 (listener self-update)
+  required.
+
+**To confirm on the box after deploying:** `date -u` on the Pi against real
+time. If it is off, cause 2 was live; worth a separate fix (an HTTPS time sync
+on boot), because other Pi-stamped values will be off too.
+
 ## The remote escape hatch (2026-09-21) — BUILT AND MERGED, NOT YET DEPLOYED
 
 **On 2026-09-20 the speaker stopped accepting Bluetooth pairings and it could

@@ -33,6 +33,8 @@ interface SpeakerState {
   devices: BtDevice[];
   scanned_at: string | null;
   scanning: "queued" | "scanning" | null;
+  /** Why the last scan came back empty, when it was refused or failed. */
+  scan_problem?: string | null;
   selected: string | null;
   selected_name: string | null;
   output: { kind: string; card: string | null } | null;
@@ -172,9 +174,16 @@ export function SpeakerSection() {
         ) : (
           <>
             <p className="t-sub" style={{ marginBottom: 10 }}>
-              Tap <strong>Find speakers</strong>, wait for it to start looking,
-              and <em>then</em> put your speaker into pairing mode.
+              Pause any music, tap <strong>Find speakers</strong>, wait for it
+              to start looking, and <em>then</em> put your speaker into pairing
+              mode.
             </p>
+
+            {/* A refused or failed scan used to look exactly like a button that
+                did nothing. Say why, and what to do. */}
+            {!state.scanning && state.scan_problem && (
+              <div className="banner is-bad">{state.scan_problem}</div>
+            )}
 
             <button
               className="btn is-primary"

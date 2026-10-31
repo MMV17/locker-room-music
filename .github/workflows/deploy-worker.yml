@@ -1,0 +1,88 @@
+# Deploy the voting app (backend Worker + the web build it serves) on every
+# merge to main, so a fix can ship without a laptop.
+#
+# Added 2026-10-31. Until then the Worker was deployed by hand with
+# `npm run deploy` from the Mac, which meant nothing could go live from a phone.
+#
+# ONE-TIME SETUP (GitHub -> repo Settings -> Secrets and variables -> Actions):
+#   CLOUDFLARE_API_TOKEN   required. Cloudflare dashboard -> My Profile ->
+#                          API Tokens -> "Edit Cloudflare Workers" template.
+#   CLOUDFLARE_ACCOUNT_ID  optional; only needed if the token can see more
+#                          than one account. Workers & Pages overview, right side.
+#
+# WHAT THIS DOES NOT DO:
+#   - D1 migrations. Run those deliberately, with a backup first, BEFORE the
+#     Worker that needs them (see STATE.md, "ORDER MATTERS"). A deploy that
+#     needs a migration must not be merged until the migration is applied.
+#   - The Pi. The listener ships over deploy.sh / serial-deploy.py; scripts
+#     the box runs from the repo ship over the Admin "run repair" button.
+#   - apex/ (the landing page), which is its own Worker.
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "web/**"
+      - ".github/workflows/deploy-worker.yml"
+  workflow_dispatch:
+
+# Never two deploys racing each other; the later one wins.
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check the Cloudflare token is set
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Add the CLOUDFLARE_API_TOKEN repository secret (see the top of this file), then re-run this workflow."
+            exit 1
+          fi
+
+      - name: Install and typecheck the web app
+        working-directory: web
+        run: npm ci
+
+      - name: Build the web app into backend/public
+        working-directory: web
+        run: npm run build
+
+      - name: Install the backend
+        working-directory: backend
+        run: npm ci
+
+      # Tests and typecheck gate the deploy. A red run here means nothing
+      # shipped, which is the point.
+      - name: Test the backend
+        working-directory: backend
+        run: npx vitest run
+
+      - name: Typecheck the backend
+        working-directory: backend
+        run: npx tsc --noEmit -p .
+
+      - name: Deploy
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Only pass the account id when one was given; an empty value is not
+          # the same as unset to wrangler.
+          if [ -n "$ACCOUNT_ID" ]; then export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"; fi
+          find public -name '.DS_Store' -delete 2>/dev/null || true
+          npx wrangler deploy
