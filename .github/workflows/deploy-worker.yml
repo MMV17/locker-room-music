@@ -28,6 +28,11 @@ on:
       - ".github/workflows/deploy-worker.yml"
   workflow_dispatch:
 
+# Read-only access to the repo. The deploy credential is the Cloudflare token;
+# the workflow's own GitHub token needs nothing beyond checking the code out.
+permissions:
+  contents: read
+
 # Never two deploys racing each other; the later one wins.
 concurrency:
   group: deploy-worker
