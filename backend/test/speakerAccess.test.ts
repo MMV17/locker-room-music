@@ -95,12 +95,23 @@ describe("scanProblem", () => {
     expect(scanProblem(null, now)).toBeNull();
   });
 
-  it("tells the player to pause when the Pi refused mid-song", () => {
+  it("tells the player to pause when a current Pi refused mid-song", () => {
+    const msg = scanProblem(
+      { ok: 0, result: "refused: a song is playing — pause it, then scan again", completed_at: recent },
+      now,
+    );
+    expect(msg).toMatch(/pause the music/i);
+  });
+
+  it("does not say pause to a Pi that refuses paused songs too", () => {
+    // The listener half of the fix ships over a cable, so the Worker can be
+    // ahead of the box. Its refusal must not send the player round in a loop.
     const msg = scanProblem(
       { ok: 0, result: "refused: a song is playing — scanning would stutter it", completed_at: recent },
       now,
     );
-    expect(msg).toMatch(/pause/i);
+    expect(msg).toMatch(/even paused/i);
+    expect(msg).not.toMatch(/pause the music/i);
   });
 
   it("explains a timeout", () => {

@@ -174,9 +174,9 @@ export function SpeakerSection() {
         ) : (
           <>
             <p className="t-sub" style={{ marginBottom: 10 }}>
-              Pause any music, tap <strong>Find speakers</strong>, wait for it
-              to start looking, and <em>then</em> put your speaker into pairing
-              mode.
+              With no music playing, tap <strong>Find speakers</strong>, wait
+              for it to start looking, and <em>then</em> put your speaker into
+              pairing mode.
             </p>
 
             {/* A refused or failed scan used to look exactly like a button that

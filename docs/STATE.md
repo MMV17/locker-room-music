@@ -88,6 +88,16 @@ Two causes, both silent:
 - Server: `GET /api/speakers` returns `scan_problem`, the last scan's failure in
   words a player can act on; both screens now show it.
 
+**How it ships — two halves, two routes.**
+- **Worker + web (most of the fix):** merge to `main`, then from the laptop
+  `cd web && npm run build` (writes into `backend/public`) and
+  `cd backend && npm run deploy`. No migration: no schema change.
+- **Pi (`control.py`, paused songs may scan):** **cannot go over the run-repair
+  button.** That pipeline is barred from touching `/opt/lockerroom/lockerroom`
+  and restores it if anything does. It needs `deploy.sh` (home wifi / USB-C
+  cable) or `serial-deploy.py`. Until then a paused song still blocks a scan,
+  and the team screen says exactly that ("even paused") rather than "pause".
+
 **To confirm on the box after deploying:** `date -u` on the Pi against real
 time. If it is off, cause 2 was live; worth a separate fix (an HTTPS time sync
 on boot), because other Pi-stamped values will be off too.

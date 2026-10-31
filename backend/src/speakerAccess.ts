@@ -161,8 +161,17 @@ export function scanProblem(
 ): string | null {
   if (!last || last.ok !== 0 || !isScanFresh(last.completed_at, now)) return null;
   const result = (last.result ?? "").trim();
-  if (/^refused:.*(song|playing)/i.test(result)) {
+  // Two wordings, because the Pi and the Worker deploy separately and the
+  // Pi's half can only ship over a cable (run-repair cannot touch the
+  // listener). A Pi from before 2026-10-31 refuses under ANY open song, paused
+  // included, and says "scanning would stutter it"; a current one only refuses
+  // a playing song and says "pause it". Telling someone on the old Pi to pause
+  // would send them round the same loop that made this look broken.
+  if (/^refused:.*pause it/i.test(result)) {
     return "The AuxGoat won't scan while a song is playing. Pause the music, then tap Find speakers again.";
+  }
+  if (/^refused:.*(song|playing)/i.test(result)) {
+    return "The AuxGoat won't scan while a song is on it, even paused. Let the song finish or stop the music, then tap Find speakers again.";
   }
   if (/timed out/i.test(result)) {
     return "The scan timed out on the AuxGoat. Try again; if it keeps happening, ask a coach to run a full report.";
