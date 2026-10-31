@@ -89,9 +89,11 @@ Two causes, both silent:
   words a player can act on; both screens now show it.
 
 **How it ships — two halves, two routes.**
-- **Worker + web (most of the fix):** merge to `main`, then from the laptop
-  `cd web && npm run build` (writes into `backend/public`) and
-  `cd backend && npm run deploy`. No migration: no schema change.
+- **Worker + web (most of the fix):** merge to `main`. **GitHub Actions now
+  deploys the Worker on every merge to main** (`.github/workflows/deploy-worker.yml`:
+  web build, backend tests + typecheck, `wrangler deploy`). Needs the
+  `CLOUDFLARE_API_TOKEN` repo secret once. It does NOT run D1 migrations; do
+  those first, by hand, when a change needs one. No migration for this fix.
 - **Pi (`control.py`, paused songs may scan):** **cannot go over the run-repair
   button.** That pipeline is barred from touching `/opt/lockerroom/lockerroom`
   and restores it if anything does. It needs `deploy.sh` (home wifi / USB-C
