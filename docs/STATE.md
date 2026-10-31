@@ -57,6 +57,46 @@ Build order status (spec section 10):
 
 ---
 
+## TO DO: make the Pi answer in seconds, not up to a minute (noted 2026-10-31)
+
+**The complaint:** pressing Find speakers (or any speaker/connection action)
+waits up to 60s before the box even hears it. It works; it is just slow.
+
+**Why:** the Pi is unreachable from outside (campus allows 443 out only), so it
+POLLS: `beacon_loop` in `pi/lockerroom/control.py` checks in every
+`IDLE_INTERVAL_S = 60.0` when idle. Once it picks a command up it goes
+attentive (5s for 3 min), so only the FIRST tap is slow - but that is the
+one everyone feels.
+
+**The change:** `IDLE_INTERVAL_S` 60 -> 10 (same as `ACTIVE_INTERVAL_S`).
+Worst-case first response 60s -> 10s, ~5s on average. One line plus its test
+in `pi/tests/test_beacon_cadence.py`.
+
+**Cost, checked:** each idle beacon is 1 request and 3 D1 writes
+(`touchHeartbeat`, `recordAux`, `recordOutput`). At 10s that is 8,640
+requests and ~26k writes a day, up from ~1,440 and ~4.3k. Inside D1's free
+100k writes/day, with room. Do not go below ~5s without re-checking this.
+
+**The catch - how it ships.** The interval is hard-coded in the LISTENER, and
+`run repair` is barred from changing the listener (see "The remote escape
+hatch" below). Two ways, undecided:
+
+1. **Next cable/serial deploy.** Zero risk. Nothing changes until someone is
+   at the box with a laptop (`deploy.sh` or `serial-deploy.py`). Ship the
+   2026-10-31 `may_scan` change (paused songs may scan) in the same deploy.
+2. **Tier 2: an over-the-air listener updater with automatic rollback.** Gets
+   this and every later listener fix out with no laptop. Sketch:
+   `remote-repair.sh` installs `/usr/local/bin/listener-update.sh` and starts
+   it detached a little after the repair ends (`systemd-run --on-active=30`),
+   so run-repair's own package check still passes. The updater keeps the
+   current package as `.prev`, refuses mid-song, import-checks the new code
+   (`python -c 'import lockerroom.main'`), swaps it in, restarts the listener,
+   and restores `.prev` if the listener crashes or has not written a fresh
+   "last good beacon" marker in /run within ~2 min (the new code must write
+   that marker; the old code does not). Risk: if BOTH the new code and the
+   rollback fail, the box needs a cable. ~150-200 lines plus tests. This
+   reverses a deliberate rule, so it needs a yes before it is built.
+
 ## "Find speakers" did nothing (2026-10-31) — WORKER DEPLOYED, Pi half pending
 
 **Worker deployed 2026-10-31 23:47 UTC by GitHub Actions** (run 4 of
