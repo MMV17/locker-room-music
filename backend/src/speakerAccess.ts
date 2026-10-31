@@ -171,7 +171,10 @@ export function scanProblem(
     return "The AuxGoat won't scan while a song is playing. Pause the music, then tap Find speakers again.";
   }
   if (/^refused:.*(song|playing)/i.test(result)) {
-    return "The AuxGoat won't scan while a song is on it, even paused. Let the song finish or stop the music, then tap Find speakers again.";
+    // The old Pi still lets this work: a paused play closes itself after
+    // PAUSE_GRACE (60s, lifecycle.py), and then the scan is allowed. So the
+    // instruction is "pause and wait a minute", which is true on both Pis.
+    return "The AuxGoat won't scan right after a song. Pause the music, wait a minute, then tap Find speakers again.";
   }
   if (/timed out/i.test(result)) {
     return "The scan timed out on the AuxGoat. Try again; if it keeps happening, ask a coach to run a full report.";

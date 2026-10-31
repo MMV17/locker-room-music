@@ -95,8 +95,11 @@ Two causes, both silent:
 - **Pi (`control.py`, paused songs may scan):** **cannot go over the run-repair
   button.** That pipeline is barred from touching `/opt/lockerroom/lockerroom`
   and restores it if anything does. It needs `deploy.sh` (home wifi / USB-C
-  cable) or `serial-deploy.py`. Until then a paused song still blocks a scan,
-  and the team screen says exactly that ("even paused") rather than "pause".
+  cable) or `serial-deploy.py`. **It is not needed for the fix to work.** On
+  the old Pi a paused play closes itself after `PAUSE_GRACE` (60s), and then
+  the scan runs, so the team screen says "pause, wait a minute, try again".
+  The Pi change only removes that minute. No Tier 2 (listener self-update)
+  required.
 
 **To confirm on the box after deploying:** `date -u` on the Pi against real
 time. If it is off, cause 2 was live; worth a separate fix (an HTTPS time sync

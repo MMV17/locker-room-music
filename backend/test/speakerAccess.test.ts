@@ -110,8 +110,9 @@ describe("scanProblem", () => {
       { ok: 0, result: "refused: a song is playing — scanning would stutter it", completed_at: recent },
       now,
     );
-    expect(msg).toMatch(/even paused/i);
-    expect(msg).not.toMatch(/pause the music/i);
+    // A paused play closes itself after 60s on that Pi, so "wait a minute"
+    // is what makes the second tap work.
+    expect(msg).toMatch(/wait a minute/i);
   });
 
   it("explains a timeout", () => {
