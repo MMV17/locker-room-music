@@ -57,7 +57,14 @@ Build order status (spec section 10):
 
 ---
 
-## "Find speakers" did nothing (2026-10-31) — FIXED IN CODE, NOT YET DEPLOYED
+## "Find speakers" did nothing (2026-10-31) — WORKER DEPLOYED, Pi half pending
+
+**Worker deployed 2026-10-31 23:47 UTC by GitHub Actions** (run 4 of
+`deploy-worker.yml`), version `25cad960-476d-46f0-96c9-741b6e386405`, bundle
+`index-CWdQkmBZ.js`, to workers.dev, `hc.auxgoat.com` and
+`lockerroom.finestkindfarms.com`. First deploy ever made without the Mac.
+Runs 2-3 failed with Cloudflare 9106 at `/memberships`: an account-owned API
+token cannot call it, so the workflow now passes the account id (below).
 
 **Symptom:** a player taps Find speakers, it says "Waiting for the AuxGoat…",
 then resets to "Find speakers" over "No speakers found yet". No error.
