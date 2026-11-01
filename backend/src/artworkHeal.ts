@@ -24,10 +24,11 @@ import { lookupArtwork } from "./artwork";
 import type { Env } from "./types";
 
 /**
- * Same as the Admin retry. A lookup is ~3 fetches, and the free plan allows 50
- * per invocation: past that every fetch throws and looks like an outage.
+ * Same as the Admin retry. A lookup is up to 5 fetches (2 Deezer, iTunes,
+ * MusicBrainz, a cover check) and the free plan allows 50 per invocation:
+ * past that every fetch throws and looks like an outage. 8 x 5 = 40.
  */
-export const HEAL_BATCH = 12;
+export const HEAL_BATCH = 8;
 const CURSOR_KEY = "artwork_heal_offset";
 const REST_KEY = "artwork_heal_rest_until";
 /** After a full pass, how long before the next one starts. */

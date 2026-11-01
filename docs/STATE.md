@@ -190,6 +190,22 @@ To go back: unpair the JBL from the DJ's phone and let the Pi relay.
 
 ## 2026-09-27: EVERY song shows a colour block instead of its cover
 
+**ROOT CAUSE FOUND 2026-11-01: Deezer killed its field-scoped search.**
+`artist:"Kings of Leon" track:"Sex on Fire"` returns `{"data":[],"total":0}`
+(HTTP 200, no error) from every network, a GitHub runner included, while the
+same words as plain text return the song. The lookup only ever sent the field
+syntax, so every Deezer lookup found nothing; iTunes, the fallback, answers
+Cloudflare's shared egress with HTTP 429. Found with the GitHub workflows
+`diagnose-covers.yml` (tails the live Worker) and `probe-cover-sources.yml`
+(raw answers from each source). It was never the campus filter.
+
+Fixed: plain-text Deezer queries (album words first, then artist + title,
+25 results, `pick()` still filters by artist), plus MusicBrainz + Cover Art
+Archive as a third source, with the cover's existence checked before it is
+stored. Batches dropped 12 -> 8 to fit 5 fetches per track under the free
+plan's 50. The /api/art proxy (below) stays: it is harmless and keeps phones
+off third-party hosts.
+
 **UPDATE 2026-10-31: still broken a month later, so this branch was merged and
 deployed, AND candidate 2 is now fixed pre-emptively.** Covers load through
 `GET /api/art?u=` (`backend/src/artProxy.ts`): the Worker fetches the stored

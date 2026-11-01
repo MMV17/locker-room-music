@@ -3,24 +3,31 @@ import { normalize } from "./trackKey";
 
 /**
  * Artwork lookup (spec 6.4). Looked up once per track, cached on the track
- * row, never repeated.
+ * row, never repeated (the hourly heal in artworkHeal.ts retries misses).
  *
- * Two sources, in order:
+ * Three sources, in order:
  *
- *   1. Deezer  — free, no key. Supports *field-scoped* queries
- *                (artist:"X" track:"Y"), which is why it goes first: a
- *                free-text search for a song is full of karaoke records,
- *                lullaby-version covers, tribute albums, and unrelated
- *                songs that happen to share a title. Scoping the fields
- *                is what keeps "Decode" from resolving to "Lullaby
- *                Versions of Paramore".
- *   2. iTunes   — free, no key, free-text only. Kept as a fallback so a
- *                Deezer outage or an edge-IP rate limit degrades to a
- *                second source rather than straight to a colour block.
+ *   1. Deezer      — free, no key, plain free-text search.
+ *   2. iTunes      — free, no key, free-text. Answers Cloudflare's shared
+ *                    egress with HTTP 429 more often than not (measured
+ *                    2026-11-01), so it is a fallback, not a plan.
+ *   3. MusicBrainz — free, no key, with covers from the Cover Art Archive.
+ *                    Added 2026-11-01 so a Deezer miss plus an iTunes 429 is
+ *                    not automatically a colour block.
  *
- * Both are filtered by artist and, when the phone told us one, preferred by
- * album. AVRCP reports the album the DJ is actually playing from; using it
- * is what picks the right *release* out of the several a popular song has.
+ * DEEZER'S FIELD SYNTAX IS DEAD. This used to send artist:"X" track:"Y",
+ * which kept karaoke and lullaby records out of the results. Some time around
+ * September 2026 Deezer started answering every field-scoped query with
+ * {"data":[],"total":0} - HTTP 200, no error, from any network - while the
+ * same words as plain text return the song. That, not the campus filter, is
+ * why every cover in the app went blank with no code change. pick() still
+ * filters candidates by artist, which is what keeps "Lullaby Versions of
+ * Paramore" out; the query only has to get the right song into the results.
+ *
+ * All sources are filtered by artist and, when the phone told us one,
+ * preferred by album. AVRCP reports the album the DJ is actually playing
+ * from; using it is what picks the right *release* out of the several a
+ * popular song has.
  */
 export async function lookupArtwork(
   env: Env,
@@ -42,7 +49,8 @@ export async function lookupArtwork(
   const why: string[] = [];
   const url =
     (await fromDeezer(title, artist, album, why)) ??
-    (await fromItunes(title, artist, album, why));
+    (await fromItunes(title, artist, album, why)) ??
+    (await fromMusicBrainz(title, artist, album, why));
   if (!url) console.warn(`artwork: none for "${artist} - ${title}": ${why.join("; ")}`);
   await setState(env, trackId, url, url ? "found" : "none");
   return { url, why };
@@ -124,8 +132,17 @@ export function pick(
   return byArtist.find((c) => c.art)?.art ?? null;
 }
 
-/** Quotes delimit fields in Deezer's query language — a stray one widens the search. */
-const field = (name: string, value: string) => `${name}:"${value.replace(/"/g, "")}"`;
+/**
+ * A free-text query from the words we have. Quotes and colons are dropped:
+ * Deezer still parses them as its (now broken) field syntax, and one stray
+ * `artist:` in a title would turn a working query back into zero results.
+ */
+export const plainQuery = (...parts: (string | null | undefined)[]) =>
+  parts
+    .map((p) => String(p ?? "").replace(/["':]/g, " "))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 /**
  * Why a provider's answer produced no cover, or null if it produced one.
@@ -152,7 +169,7 @@ async function deezerSearch(
     // so cacheEverything + a day's cacheTtl stored a refusal as if it were an
     // answer and replayed it to every retry of that exact query for 24 hours.
     // Each track is looked up once anyway, so the cache was saving nothing.
-    const res = await fetch("https://api.deezer.com/search?limit=10&q=" + encodeURIComponent(q));
+    const res = await fetch("https://api.deezer.com/search?limit=25&q=" + encodeURIComponent(q));
     if (!res.ok) {
       why.push(`deezer: HTTP ${res.status}`);
       return null;
@@ -187,29 +204,21 @@ async function fromDeezer(
   album: string | null | undefined,
   why: string[],
 ): Promise<string | null> {
-  const artistQ = artist ? field("artist", artist) : "";
-  const titleQ = title ? field("track", title) : "";
-  const base = [artistQ, titleQ].filter(Boolean).join(" ");
+  const base = plainQuery(artist, title);
   if (!base) return null;
 
-  // Ask for the album the phone reported, FIRST and as part of the query.
-  //
-  // Filtering by album after the fact is not enough: a popular song's top
-  // results are compilations and remix EPs, and the original release may not
-  // be in them at all. "Imma Be" searched by artist+track returns four rows —
-  // a best-of and three remixes — and none of them is THE E.N.D., so ranking
-  // could only ever pick the least wrong one. Scoping the query by album
-  // returns exactly the right release.
-  //
-  // AVRCP gives us the album the DJ is actually playing from, which is the
-  // whole reason it is worth passing down here.
+  // With the album in the words first, when the phone told us one. A popular
+  // song's top results are compilations and remix EPs, and the original
+  // release may not be among them at all - "Imma Be" by artist+track returned
+  // a best-of and three remixes and no THE E.N.D. Adding the album's words is
+  // the free-text version of the scoping the field syntax used to do.
   if (album) {
-    const scoped = await deezerSearch(`${base} ${field("album", album)}`, artist, album, why);
+    const scoped = await deezerSearch(plainQuery(artist, title, album), artist, album, why);
     if (scoped) return scoped;
   }
 
-  // No album, or the catalogue spells it differently. Fall back to the wider
-  // search rather than giving up — a compilation cover beats a colour block.
+  // No album, or the album's words matched nothing. The wider search, rather
+  // than giving up - a compilation cover beats a colour block.
   return deezerSearch(base, artist, album, why);
 }
 
@@ -260,4 +269,105 @@ async function setState(
   await env.DB.prepare("UPDATE tracks SET artwork_url = ?, artwork_state = ? WHERE id = ?")
     .bind(url, state, trackId)
     .run();
+}
+
+/**
+ * MusicBrainz identifies the release; the Cover Art Archive holds its cover.
+ *
+ * MusicBrainz asks every client to identify itself, and rate-limits clients
+ * that do not. One search plus one existence check per track.
+ */
+const MB_HEADERS = {
+  "user-agent": "AuxGoat/1.0 ( https://hc.auxgoat.com )",
+  accept: "application/json",
+};
+
+type MbRelease = {
+  title?: string;
+  status?: string;
+  "release-group"?: { id?: string; "primary-type"?: string; "secondary-types"?: string[] };
+};
+type MbRecording = {
+  score?: number;
+  "artist-credit"?: { name?: string; joinphrase?: string }[];
+  releases?: MbRelease[];
+};
+
+/**
+ * The release groups worth trying, best first: official studio albums, then
+ * singles and EPs, then anything else. A recording search for a hit returns
+ * live albums and compilations alongside the record, and their covers are the
+ * wrong picture of the right song.
+ */
+export function mbCandidates(recordings: MbRecording[]): Candidate[] {
+  const rank = (r: MbRelease) => {
+    const g = r["release-group"] ?? {};
+    const secondary = g["secondary-types"] ?? [];
+    let n = secondary.length ? 2 : g["primary-type"] === "Album" ? 0 : 1;
+    if (r.status && r.status !== "Official") n += 3;
+    return n;
+  };
+  const rows: { c: Candidate; rank: number; order: number }[] = [];
+  const seen = new Set<string>();
+  let order = 0;
+  for (const rec of recordings) {
+    if ((rec.score ?? 0) < 80) continue;
+    const artist = (rec["artist-credit"] ?? [])
+      .map((a) => `${a.name ?? ""}${a.joinphrase ?? ""}`)
+      .join("")
+      .trim();
+    for (const rel of rec.releases ?? []) {
+      const id = rel["release-group"]?.id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      rows.push({
+        c: { artist, album: rel.title ?? "", art: id },
+        rank: rank(rel),
+        order: order++,
+      });
+    }
+  }
+  return rows.sort((a, b) => a.rank - b.rank || a.order - b.order).map((r) => r.c);
+}
+
+async function fromMusicBrainz(
+  title: string,
+  artist: string,
+  album: string | null | undefined,
+  why: string[],
+): Promise<string | null> {
+  const t = plainQuery(title);
+  const a = plainQuery(artist);
+  if (!t || !a) return null;
+  try {
+    const q = `recording:"${t}" AND artist:"${a}"`;
+    const res = await fetch(
+      "https://musicbrainz.org/ws/2/recording?fmt=json&limit=10&query=" + encodeURIComponent(q),
+      { headers: MB_HEADERS },
+    );
+    if (!res.ok) {
+      why.push(`musicbrainz: HTTP ${res.status}`);
+      return null;
+    }
+    const data = await res.json<{ recordings?: MbRecording[] }>();
+    const candidates = mbCandidates(data.recordings ?? []);
+    const groupId = pick(candidates, artist, album);
+    if (!groupId) {
+      why.push(explainMiss("musicbrainz", candidates, artist));
+      return null;
+    }
+    // Not every release group has a cover. Check before storing, without
+    // following the redirect: a 307 to archive.org means it exists, and a
+    // stored URL that 404s would be a colour block the heal never retries.
+    const cover = `https://coverartarchive.org/release-group/${groupId}/front-500`;
+    const head = await fetch(cover, { method: "HEAD", redirect: "manual", headers: MB_HEADERS });
+    if (head.status >= 400) {
+      why.push(`coverartarchive: HTTP ${head.status}`);
+      return null;
+    }
+    return cover;
+  } catch (e) {
+    why.push(`musicbrainz: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
 }

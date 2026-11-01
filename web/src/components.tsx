@@ -19,7 +19,7 @@ import { useNavigate, useRoute } from "./router";
 export function artworkSrc(url: string): string {
   try {
     const host = new URL(url).hostname;
-    if (/(^|\.)(dzcdn\.net|mzstatic\.com)$/i.test(host)) {
+    if (/(^|\.)(dzcdn\.net|mzstatic\.com|coverartarchive\.org)$/i.test(host)) {
       return "/api/art?u=" + encodeURIComponent(url);
     }
   } catch {

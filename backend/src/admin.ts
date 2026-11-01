@@ -74,7 +74,8 @@ admin.get("/api/admin/artwork/status", async (c) => {
  * Returns WHY for the first few that still failed, so the Admin screen can
  * show the cause instead of a count.
  */
-const RETRY_BATCH = 12;
+// Up to 5 fetches per track against the free plan's 50; see artworkHeal.ts.
+const RETRY_BATCH = 8;
 
 admin.post("/api/admin/artwork/retry", async (c) => {
   // `all` redoes tracks that already have a cover too. Needed after the

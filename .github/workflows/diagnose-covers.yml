@@ -78,8 +78,10 @@ jobs:
         continue-on-error: true
         working-directory: .
         run: |
-          COVER="$(curl -s 'https://api.deezer.com/search?limit=1&q=artist:%22Drake%22%20track:%22Gods%20Plan%22' \
-            | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["data"][0]["album"]["cover_xl"])' 2>/dev/null)"
+          # Plain text: Deezer's artist:"X" track:"Y" field syntax returns 0
+          # results from everywhere since ~2026-09 (see artwork.ts).
+          COVER="$(curl -s 'https://api.deezer.com/search?limit=1&q=Drake%20Gods%20Plan' \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["data"][0]["album"]["cover_xl"])' 2>/dev/null || true)"
           echo "Deezer cover from the runner: ${COVER:-<none: Deezer refused the runner too>}"
           if [ -n "$COVER" ]; then
             U="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$COVER")"
