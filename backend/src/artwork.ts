@@ -75,7 +75,22 @@ type Candidate = { artist: string; album: string; art: string | null };
  * is the exact failure the artist filter was added to prevent.
  */
 function artistKey(value: string | null | undefined): string {
-  return normalize(value).replace(/^the\s+/, "");
+  return matchKey(value).replace(/^the\s+/, "");
+}
+
+/**
+ * normalize() with accents folded, for comparing names across catalogues.
+ *
+ * The phone said "Uché", Deezer files him as "Uche", and the song stayed a
+ * colour block (2026-11-01). Catalogues disagree about accents all the time -
+ * Beyoncé, Céline Dion, Sigur Rós, Mötley Crüe.
+ *
+ * Deliberately NOT in normalize() itself: that also builds track_key, the
+ * identity of a song in play history, and changing it would split one song's
+ * history in two.
+ */
+function matchKey(value: string | null | undefined): string {
+  return normalize(String(value ?? "").normalize("NFD").replace(/\p{M}/gu, ""));
 }
 
 /**
@@ -109,7 +124,7 @@ export function pick(
   album?: string | null,
 ): string | null {
   const wantArtist = artistKey(artist);
-  const wantAlbum = normalize(album);
+  const wantAlbum = matchKey(album);
 
   // Exact first, so precision is never traded away when it was available.
   // Only when nothing matches do we fall back to the lead artist — that keeps
@@ -126,7 +141,7 @@ export function pick(
   if (!byArtist.length) return null;
 
   if (wantAlbum) {
-    const exact = byArtist.find((c) => normalize(c.album) === wantAlbum);
+    const exact = byArtist.find((c) => matchKey(c.album) === wantAlbum);
     if (exact?.art) return exact.art;
   }
   return byArtist.find((c) => c.art)?.art ?? null;

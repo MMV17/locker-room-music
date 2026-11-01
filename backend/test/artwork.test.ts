@@ -96,6 +96,12 @@ describe("pick", () => {
     expect(pick(candidates, "Paramore", "Decode")).toBeNull();
   });
 
+  it("ignores accents the catalogue drops (Uché / Uche)", () => {
+    const c = [{ artist: "Uche", album: "Thong Song (Choir Version)", art: ART }];
+    expect(pick(c, "Uché")).toBe(ART);
+    expect(pick([{ artist: "Beyonce", album: "Lemonade", art: ART }], "Beyoncé", "Lemonade")).toBe(ART);
+  });
+
   it("is case and punctuation insensitive", () => {
     const candidates = [{ artist: "AC/DC", album: "Back in Black", art: ART }];
     expect(pick(candidates, "acdc", "back in black")).toBe(ART);
