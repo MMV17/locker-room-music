@@ -29,7 +29,11 @@ import type { Env } from "./types";
  * past that every fetch throws and looks like an outage. 8 x 5 = 40.
  */
 export const HEAL_BATCH = 8;
-const CURSOR_KEY = "artwork_heal_offset";
+// "_v2": the runs before the Deezer fix found nothing and walked the old
+// cursor to 24, so the first fixed pass started past the 24 most recently
+// played songs - the top of History. A new key starts the pass at 0. The old
+// row is left behind, unused.
+const CURSOR_KEY = "artwork_heal_offset_v2";
 const REST_KEY = "artwork_heal_rest_until";
 /** After a full pass, how long before the next one starts. */
 export const HEAL_REST_MS = 60 * 60_000;

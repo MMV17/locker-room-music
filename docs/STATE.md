@@ -206,6 +206,13 @@ stored. Batches dropped 12 -> 8 to fit 5 fetches per track under the free
 plan's 50. The /api/art proxy (below) stays: it is harmless and keeps phones
 off third-party hosts.
 
+**Verified live 00:25 UTC:** first heal run on the fixed code `tried=8
+found=5`. Misses: an ad and a "Listening on MacBook Pro" notification that
+AVRCP reported as songs (correctly left blank), and "Uché" vs Deezer's
+"Uche" - matching now folds accents (`matchKey`, NOT `normalize`, which
+builds track_key). The heal cursor moved to `artwork_heal_offset_v2`: the
+failed runs had walked the old one to 24, past the top of History.
+
 **UPDATE 2026-10-31: still broken a month later, so this branch was merged and
 deployed, AND candidate 2 is now fixed pre-emptively.** Covers load through
 `GET /api/art?u=` (`backend/src/artProxy.ts`): the Worker fetches the stored
