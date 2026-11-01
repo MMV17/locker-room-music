@@ -1,0 +1,46 @@
+# Quick read-only probe of the album cover sources, from a GitHub runner.
+#
+# Added 2026-11-01 after the live Worker's logs showed every lookup failing:
+# Deezer "0 results" for songs it certainly has, iTunes "HTTP 429". Prints the
+# raw start of each answer so the next fix is chosen from evidence. Changes
+# nothing; takes about a minute.
+name: Probe cover sources
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/probe-cover-sources.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe
+        run: |
+          probe() {
+            echo "=== $1"
+            curl -s -m 20 -A 'AuxGoat/1.0 ( https://hc.auxgoat.com )' -o body.txt \
+              -w 'HTTP %{http_code} %{content_type}\n' "$2" || echo "curl failed"
+            head -c 400 body.txt; echo; echo
+          }
+          probe "Deezer advanced syntax (what the Worker sends)" \
+            'https://api.deezer.com/search?limit=10&q=artist:%22Kings%20of%20Leon%22%20track:%22Sex%20on%20Fire%22'
+          probe "Deezer plain query" \
+            'https://api.deezer.com/search?limit=10&q=Kings%20of%20Leon%20Sex%20on%20Fire'
+          probe "iTunes" \
+            'https://itunes.apple.com/search?entity=song&limit=3&term=Kings%20of%20Leon%20Sex%20on%20Fire'
+          probe "MusicBrainz recording search" \
+            'https://musicbrainz.org/ws/2/recording?fmt=json&limit=3&query=recording:%22Sex%20on%20Fire%22%20AND%20artist:%22Kings%20of%20Leon%22'
+          RG="$(python3 -c 'import json; d=json.load(open("body.txt")); print(d["recordings"][0]["releases"][0]["release-group"]["id"])' 2>/dev/null || true)"
+          echo "release group: ${RG:-<none>}"
+          if [ -n "$RG" ]; then
+            echo "=== Cover Art Archive front cover (follows redirect)"
+            curl -s -L -m 20 -o /dev/null -w 'HTTP %{http_code} %{content_type} %{size_download} bytes, final %{url_effective}\n' \
+              "https://coverartarchive.org/release-group/$RG/front-500"
+          fi
