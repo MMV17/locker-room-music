@@ -1,0 +1,94 @@
+# Read-only look at why album covers are missing, from outside the box.
+#
+# Added 2026-11-01. Covers were colour blocks in History even after the cover
+# proxy and the 5-minute heal shipped, and nobody had a laptop to run
+# `wrangler tail`. This does it on a GitHub runner with the deploy token.
+#
+# CHANGES NOTHING. It watches logs, reads counts, and fetches one image.
+#   1. Counts tracks by artwork_state in D1 (if the token can read D1).
+#   2. Tails the live Worker through one heal run: the "artwork heal" line
+#      and every "artwork: none for ... : <reasons>" line say why lookups fail.
+#   3. Fetches a real Deezer cover through /api/art, to prove the proxy path.
+#
+# Pretty format on purpose: JSON tail output includes request headers, which
+# would put players' session cookies into the Actions log.
+name: Diagnose covers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/diagnose-covers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP: https://locker-room-music.mmvinton17.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+
+      - name: Prepare credentials
+        env:
+          RAW_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || '7db3c13ee0073570030cac33d8c9f0dc' }}
+        run: |
+          TOKEN="$(printf '%s' "$RAW_TOKEN" | tr -d "[:space:]\"'")"
+          TOKEN="${TOKEN#Bearer}"
+          echo "::add-mask::$TOKEN"
+          echo "CLOUDFLARE_API_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "CLOUDFLARE_ACCOUNT_ID=$(printf '%s' "$ACCOUNT_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: 1. Cover counts in the database
+        continue-on-error: true
+        run: |
+          npx wrangler d1 execute lockerroom --remote --command \
+            "SELECT artwork_state, COUNT(*) AS n FROM tracks GROUP BY artwork_state; \
+             SELECT key, value, updated_at FROM settings WHERE key LIKE 'artwork_heal%';" \
+            || echo "!! Could not read D1 with this token (it may lack D1 permission). Skipping counts."
+
+      - name: 2. Watch the live Worker through one heal run (6 minutes)
+        continue-on-error: true
+        run: |
+          timeout 370 npx wrangler tail locker-room-music --format pretty > tail.log 2>&1 || true
+          echo "===== heal runs ====="
+          grep -i "artwork heal" tail.log || echo "(no heal line seen in 6 minutes)"
+          echo "===== why lookups failed (first 40) ====="
+          grep -i "artwork: none for" tail.log | head -40 || true
+          echo "===== cover proxy requests ====="
+          grep -i "/api/art" tail.log | head -20 || echo "(no /api/art requests seen)"
+          echo "===== errors ====="
+          grep -iE "error|exception|threw" tail.log | head -20 || true
+          echo "===== raw tail, first 60 lines ====="
+          head -60 tail.log
+
+      - name: 3. Load a real Deezer cover through /api/art
+        continue-on-error: true
+        working-directory: .
+        run: |
+          COVER="$(curl -s 'https://api.deezer.com/search?limit=1&q=artist:%22Drake%22%20track:%22Gods%20Plan%22' \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["data"][0]["album"]["cover_xl"])' 2>/dev/null)"
+          echo "Deezer cover from the runner: ${COVER:-<none: Deezer refused the runner too>}"
+          if [ -n "$COVER" ]; then
+            U="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$COVER")"
+            echo "--- direct from the CDN:"
+            curl -s -o /dev/null -w 'HTTP %{http_code}, %{content_type}, %{size_download} bytes\n' "$COVER"
+            echo "--- through AuxGoat (/api/art):"
+            curl -s -o /dev/null -w 'HTTP %{http_code}, %{content_type}, %{size_download} bytes\n' "$APP/api/art?u=$U"
+            curl -s "$APP/api/art?u=$U" | head -c 200 | grep -a -v $'\xff\xd8' || true
+            echo
+          fi
+          echo "--- a foreign host must be refused (expect 400):"
+          curl -s -w ' HTTP %{http_code}\n' "$APP/api/art?u=https%3A%2F%2Fexample.com%2Fx.jpg"
