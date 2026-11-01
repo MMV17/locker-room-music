@@ -20,7 +20,9 @@
 import type { Context } from "hono";
 
 /** Hosts artwork.ts stores covers from. Suffix match, on a dot boundary. */
-const ALLOWED_HOST_SUFFIXES = ["dzcdn.net", "mzstatic.com"];
+// coverartarchive.org answers with a redirect to an archive.org mirror, which
+// fetch follows; the URL we validate and store is always coverartarchive.org.
+const ALLOWED_HOST_SUFFIXES = ["dzcdn.net", "mzstatic.com", "coverartarchive.org"];
 
 const ONE_WEEK_S = 7 * 24 * 60 * 60;
 /** A cover is ~50-150 KB. Anything far bigger is not a cover. */
