@@ -80,8 +80,9 @@ not_found_handling = "none"
 # rather than write. See the comment block there for the arithmetic.
 [triggers]
 # "0 8 * * *" is the daily backup (BACKUP_CRON in src/index.ts must match).
-# "23 * * * *" retries missing album covers, one batch an hour (artworkHeal.ts).
-crons = ["0 8 * * *", "23 * * * *"]
+# "*/5 * * * *" retries missing album covers: a batch every 5 minutes until a
+# pass is complete, then it rests an hour (artworkHeal.ts).
+crons = ["0 8 * * *", "*/5 * * * *"]
 
 [[r2_buckets]]
 binding = "BACKUPS"

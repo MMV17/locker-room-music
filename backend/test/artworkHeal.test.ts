@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { HEAL_BATCH, nextHealOffset } from "../src/artworkHeal";
+import { HEAL_BATCH, HEAL_REST_MS, isResting, nextHealOffset } from "../src/artworkHeal";
 
 /**
  * The hourly cover retry walks the missing covers with a cursor. Get this
@@ -23,5 +23,31 @@ describe("nextHealOffset", () => {
   it("starts over after a short batch, which means the end", () => {
     expect(nextHealOffset(36, 4, 1)).toBe(0);
     expect(nextHealOffset(36, 0, 0)).toBe(0);
+  });
+});
+
+/**
+ * Every 5 minutes through a backlog, then an hour's rest: fast when there is
+ * work, and never a stream of retries against Deezer and Apple for songs that
+ * genuinely have no cover.
+ */
+describe("isResting", () => {
+  const now = Date.parse("2026-11-01T00:30:00.000Z");
+
+  it("works when no pass has finished yet", () => {
+    expect(isResting(null, now)).toBe(false);
+    expect(isResting("garbage", now)).toBe(false);
+  });
+
+  it("rests for the hour after a full pass", () => {
+    expect(isResting(new Date(now + 10 * 60_000).toISOString(), now)).toBe(true);
+  });
+
+  it("works again once the hour is up", () => {
+    expect(isResting(new Date(now - 1).toISOString(), now)).toBe(false);
+  });
+
+  it("rests for an hour, not five minutes", () => {
+    expect(HEAL_REST_MS).toBe(60 * 60_000);
   });
 });
