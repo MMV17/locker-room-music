@@ -34,7 +34,9 @@ export const HEAL_BATCH = 8;
 // played songs - the top of History. A new key starts the pass at 0. The old
 // row is left behind, unused.
 const CURSOR_KEY = "artwork_heal_offset_v2";
-const REST_KEY = "artwork_heal_rest_until";
+// "_v2" with the cursor: a run on the old code could have finished its pass
+// and started an hour's rest just before the deploy, idling the fixed pass.
+const REST_KEY = "artwork_heal_rest_until_v2";
 /** After a full pass, how long before the next one starts. */
 export const HEAL_REST_MS = 60 * 60_000;
 
