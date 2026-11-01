@@ -79,7 +79,9 @@ not_found_handling = "none"
 # count, and per-dump and per-bucket size ceilings that make the job REFUSE
 # rather than write. See the comment block there for the arithmetic.
 [triggers]
-crons = ["0 8 * * *"]
+# "0 8 * * *" is the daily backup (BACKUP_CRON in src/index.ts must match).
+# "23 * * * *" retries missing album covers, one batch an hour (artworkHeal.ts).
+crons = ["0 8 * * *", "23 * * * *"]
 
 [[r2_buckets]]
 binding = "BACKUPS"

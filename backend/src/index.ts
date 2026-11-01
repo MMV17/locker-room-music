@@ -34,6 +34,7 @@ import { parseScan, replaceDevices, getSelection, getForgetTarget } from "./spea
 import { parseReport, storeReport } from "./piReports";
 import { speakerRoutes } from "./speakerRoutes";
 import { serveArt } from "./artProxy";
+import { healArtwork } from "./artworkHeal";
 
 const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
@@ -1163,13 +1164,27 @@ app.get("*", async (c) => {
   return c.env.ASSETS.fetch(new Request(url, { headers: c.req.raw.headers }));
 });
 
+/** Must match the daily entry in wrangler.toml's [triggers] crons. */
+const BACKUP_CRON = "0 8 * * *";
+
 /**
  * Hono handles fetch; the cron trigger needs its own entry point, so the
  * default export becomes an object rather than the app itself.
  */
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    // Two crons (wrangler.toml). The hourly one heals missing album covers;
+    // the daily one is the backup, and only the backup.
+    if (event.cron !== BACKUP_CRON) {
+      ctx.waitUntil(
+        healArtwork(env).then(
+          (r) => console.log(`artwork heal: tried=${r.tried} found=${r.found} offset=${r.offset} next=${r.next}`),
+          (e) => console.error(`artwork heal FAILED: ${String(e)}`),
+        ),
+      );
+      return;
+    }
     ctx.waitUntil(
       runBackup(env, new Date()).then((r) => {
         // Logged either way: a backup that quietly stopped running is worse
