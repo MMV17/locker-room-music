@@ -201,6 +201,15 @@ twice: direct from the CDN, and "Through AuxGoat". If the second loads, the
 players see covers. If covers are still missing, it is candidate 1 - press
 *Find missing covers* and read the reasons.
 
+**And History heals itself now.** Songs whose lookup failed while covers were
+broken stayed colour blocks in History, because a cover is looked up once and
+only *Find missing covers* retried it. An hourly cron (`23 * * * *`,
+`backend/src/artworkHeal.ts`) now retries 12 missing covers per run, most
+recently played first, with a cursor in `settings.artwork_heal_offset` so
+songs that truly have no cover cannot block the rest. The 08:00 cron is still
+the backup and only the backup (`BACKUP_CRON` must match wrangler.toml).
+Watch it with `wrangler tail`: `artwork heal: tried=… found=…`.
+
 Reported 2026-09-27: every song, title/artist/album all displayed correctly,
 cover never appears. Case "a" — the UI's colour-block fallback, not a layout
 bug — so the server lookup returned nothing for every track.
