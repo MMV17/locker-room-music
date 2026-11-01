@@ -203,9 +203,10 @@ players see covers. If covers are still missing, it is candidate 1 - press
 
 **And History heals itself now.** Songs whose lookup failed while covers were
 broken stayed colour blocks in History, because a cover is looked up once and
-only *Find missing covers* retried it. An hourly cron (`23 * * * *`,
-`backend/src/artworkHeal.ts`) now retries 12 missing covers per run, most
-recently played first, with a cursor in `settings.artwork_heal_offset` so
+only *Find missing covers* retried it. A cron every 5 minutes (`*/5 * * * *`,
+`backend/src/artworkHeal.ts`) now retries 12 missing covers per run until a
+full pass is done, then rests an hour (`settings.artwork_heal_rest_until`),
+most recently played first, with a cursor in `settings.artwork_heal_offset` so
 songs that truly have no cover cannot block the rest. The 08:00 cron is still
 the backup and only the backup (`BACKUP_CRON` must match wrangler.toml).
 Watch it with `wrangler tail`: `artwork heal: tried=… found=…`.
