@@ -14,40 +14,50 @@ const accepts = (typed: string) =>
   safeEqual(normalizeTeamCode(typed), normalizeTeamCode(SECRET));
 
 describe("team code matching", () => {
-  it("accepts the code exactly as configured", () => {
-    expect(accepts("CRUSADERS")).toBe(true);
+  it("accepts the code exactly as configured", async () => {
+    expect(await accepts("CRUSADERS")).toBe(true);
   });
 
-  it("accepts any casing", () => {
+  it("accepts any casing", async () => {
     // autoCapitalize="characters" is an iOS keyboard hint. It does nothing on
     // desktop, nothing on paste, and nothing on many third-party keyboards.
-    expect(accepts("crusaders")).toBe(true);
-    expect(accepts("Crusaders")).toBe(true);
-    expect(accepts("CrUsAdErS")).toBe(true);
+    expect(await accepts("crusaders")).toBe(true);
+    expect(await accepts("Crusaders")).toBe(true);
+    expect(await accepts("CrUsAdErS")).toBe(true);
   });
 
-  it("accepts surrounding whitespace", () => {
+  it("accepts surrounding whitespace", async () => {
     // iOS appends a space after autocomplete; copy/paste drags one along.
-    expect(accepts("CRUSADERS ")).toBe(true);
-    expect(accepts(" CRUSADERS")).toBe(true);
-    expect(accepts("  crusaders  ")).toBe(true);
+    expect(await accepts("CRUSADERS ")).toBe(true);
+    expect(await accepts(" CRUSADERS")).toBe(true);
+    expect(await accepts("  crusaders  ")).toBe(true);
   });
 
-  it("accepts a trailing newline", () => {
+  it("accepts a trailing newline", async () => {
     // `wrangler secret put` via a piped echo is a classic way to store one.
-    expect(accepts("CRUSADERS\n")).toBe(true);
+    expect(await accepts("CRUSADERS\n")).toBe(true);
   });
 
-  it("still rejects a genuinely wrong code", () => {
-    expect(accepts("CRUSADER")).toBe(false);
-    expect(accepts("CRUSADERSS")).toBe(false);
-    expect(accepts("KNIGHTS")).toBe(false);
-    expect(accepts("")).toBe(false);
+  it("still rejects a genuinely wrong code", async () => {
+    expect(await accepts("CRUSADER")).toBe(false);
+    expect(await accepts("CRUSADERSS")).toBe(false);
+    expect(await accepts("KNIGHTS")).toBe(false);
+    expect(await accepts("")).toBe(false);
   });
 
-  it("does not treat internal whitespace as equivalent", () => {
+  it("does not treat internal whitespace as equivalent", async () => {
     // "CRUS ADERS" is a typo, not a formatting artifact. Keep it a failure so
     // the error message stays honest.
-    expect(accepts("CRUS ADERS")).toBe(false);
+    expect(await accepts("CRUS ADERS")).toBe(false);
+  });
+});
+
+describe("safeEqual", () => {
+  it("compares digests, so a length mismatch is just a mismatch", async () => {
+    // The old version returned early on length, leaking the secret's length.
+    expect(await safeEqual("a", "a")).toBe(true);
+    expect(await safeEqual("a", "ab")).toBe(false);
+    expect(await safeEqual("", "")).toBe(true);
+    expect(await safeEqual("x".repeat(5000), "x".repeat(5000))).toBe(true);
   });
 });

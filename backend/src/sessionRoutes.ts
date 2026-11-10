@@ -5,10 +5,19 @@ import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { AppEnv, Env } from "./types";
 import { hashToken, newToken, safeEqual, normalizeTeamCode } from "./crypto";
-import { clientAddress, throttleCheck, throttleNoteFailure, throttleClear, TEAM_CODE_POLICY } from "./throttle";
-import { identityKey as rosterIdentityKey } from "./roster";
-import { SESSION_COOKIE, requireSession, tooManyAttempts } from "./middleware";
+import {
+  clientAddress,
+  throttleReserve,
+  REFUND_SQL,
+  TEAM_CODE_POLICY,
+  TEAM_CODE_GLOBAL_POLICY,
+  TEAM_CODE_GLOBAL_BUCKET,
+} from "./throttle";
+import { identityKey as rosterIdentityKey, identityProblem, textField } from "./roster";
+import { SESSION_COOKIE, tooManyAttempts } from "./middleware";
 import { nowIso, uuid } from "./util";
+import { readJson, badJson } from "./http";
+import type { Context } from "hono";
 
 /** check-code, signup and signout. Mounted before the player routes. */
 export const sessionRoutes = new Hono<AppEnv>();
@@ -33,8 +42,45 @@ function cookieOpts(maxAge: number) {
 }
 
 /** Matched case-insensitively and whitespace-trimmed — see normalizeTeamCode. */
-export function teamCodeMatches(env: Env, code: string | undefined): boolean {
-  return safeEqual(normalizeTeamCode(code ?? ""), normalizeTeamCode(env.TEAM_CODE));
+export async function teamCodeMatches(env: Env, code: unknown): Promise<boolean> {
+  return safeEqual(
+    normalizeTeamCode(typeof code === "string" ? code : ""),
+    normalizeTeamCode(env.TEAM_CODE),
+  );
+}
+
+/**
+ * The team-code gate both routes share. Null means the code was right.
+ *
+ * Two buckets, both RESERVED before the code is compared (see throttle.ts):
+ * this address, and every address together. A wrong code keeps both
+ * reservations - they are the failure, counted. A right one clears this
+ * address's failures and gives back its one global slot, so typing the code
+ * correctly is never a step toward anyone's lockout.
+ *
+ * `code` matters as much as the status. Signup returns 403 for two completely
+ * different reasons, and the client used to show "wrong team code" for both -
+ * so a player an admin had removed was told, repeatedly, that a correct code
+ * was wrong. Anything reading this must branch on `code`, never the status.
+ */
+async function teamCodeGate(c: Context<AppEnv>, code: unknown): Promise<Response | null> {
+  const db: D1Database = c.env.DB;
+  const bucket = `code:${clientAddress(c.req)}`;
+  const mine = await throttleReserve(db, bucket, TEAM_CODE_POLICY);
+  if (mine.blocked) return tooManyAttempts(c, mine);
+  const all = await throttleReserve(db, TEAM_CODE_GLOBAL_BUCKET, TEAM_CODE_GLOBAL_POLICY);
+  if (all.blocked) return tooManyAttempts(c, all);
+
+  if (!(await teamCodeMatches(c.env, code))) {
+    return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
+  }
+  // Only a WRONG code counts. Everything past this point - a missing name, a
+  // deactivated player - is a legitimate visitor who got the code right.
+  await db.batch([
+    db.prepare("DELETE FROM auth_attempts WHERE bucket = ?").bind(bucket),
+    db.prepare(REFUND_SQL).bind(TEAM_CODE_GLOBAL_BUCKET, all.windowStart),
+  ]);
+  return null;
 }
 
 /**
@@ -49,21 +95,9 @@ export function teamCodeMatches(env: Env, code: string | undefined): boolean {
  * be used to enumerate players.
  */
 sessionRoutes.post("/api/session/check-code", async (c) => {
-  const db: D1Database = c.env.DB;
-  const bucket = `code:${clientAddress(c.req)}`;
-  const gate = await throttleCheck(db, bucket, TEAM_CODE_POLICY);
-  if (gate.blocked) return tooManyAttempts(c, gate);
-
-  const body = await c.req
-    .json<{ team_code?: string }>()
-    .catch((): { team_code?: string } => ({}));
-  if (!teamCodeMatches(c.env, body.team_code)) {
-    await throttleNoteFailure(db, bucket, TEAM_CODE_POLICY);
-    return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
-  }
-  // The right code clears the slate, so a squad sharing one NAT never
-  // accumulates its way into a lockout.
-  await throttleClear(db, bucket);
+  const body = (await readJson<{ team_code?: unknown }>(c)) ?? {};
+  const refused = await teamCodeGate(c, body.team_code);
+  if (refused) return refused;
   return c.body(null, 204);
 });
 
@@ -82,39 +116,23 @@ sessionRoutes.post("/api/session/check-code", async (c) => {
  * and quietly halve their DJ score.
  */
 sessionRoutes.post("/api/session", async (c) => {
-  const db: D1Database = c.env.DB;
-  const codeBucket = `code:${clientAddress(c.req)}`;
-  const gate = await throttleCheck(db, codeBucket, TEAM_CODE_POLICY);
-  if (gate.blocked) return tooManyAttempts(c, gate);
+  const body = await readJson<{
+    team_code?: unknown;
+    first_name?: unknown;
+    last_name?: unknown;
+    jersey_number?: unknown;
+  }>(c);
+  if (!body) return badJson(c);
 
-  const body = await c.req.json<{
-    team_code: string;
-    first_name: string;
-    last_name: string;
-    jersey_number?: string;
-  }>();
-  // Matched case-insensitively and whitespace-trimmed — see normalizeTeamCode.
-  //
-  // `code` matters as much as the status here. This route returns 403 for two
-  // completely different reasons, and the client used to show "wrong team
-  // code" for both — so a player an admin had removed was told, repeatedly,
-  // that a correct code was wrong. Anything reading this must branch on
-  // `code`, never on the status alone.
-  if (!teamCodeMatches(c.env, body.team_code)) {
-    await throttleNoteFailure(db, codeBucket, TEAM_CODE_POLICY);
-    return c.json({ error: "Wrong team code", code: "wrong_team_code" }, 403);
-  }
-  // Only a WRONG code counts. Everything past this point - a missing name, a
-  // deactivated player - is a legitimate visitor who got the code right, and
-  // must not be counted toward a lockout.
-  await throttleClear(db, codeBucket);
+  const refused = await teamCodeGate(c, body.team_code);
+  if (refused) return refused;
 
-  const first = (body.first_name ?? "").trim();
-  const last = (body.last_name ?? "").trim();
-  const jersey = (body.jersey_number ?? "").trim();
-  if (!first || !last) {
-    return c.json({ error: "First and last name are required" }, 400);
-  }
+  const first = textField(body.first_name);
+  const last = textField(body.last_name);
+  const jersey = textField(body.jersey_number);
+  // The same rule PATCH /api/me and the admin screen apply (roster.ts).
+  const problem = identityProblem(first, last, jersey || null);
+  if (problem) return c.json({ error: problem }, 400);
 
   // The shared helper in roster.ts, not a second copy: signup, the admin
   // rename and PATCH /api/me must build exactly the same key.
@@ -187,22 +205,6 @@ sessionRoutes.post("/api/session/signout", async (c) => {
   return c.json({ ok: true });
 });
 
-/**
- * Composed server-side so `name` stays the shape every consumer already
- * expects — leaderboards, now-playing, and the claim list all read it.
- *
- * Session-gated: nothing on the join path needs it any more now that players
- * type their own name, so there is no reason to let an unauthenticated caller
- * enumerate the team.
- */
-sessionRoutes.get("/api/roster", requireSession, async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT id, TRIM(first_name || ' ' || last_name) AS name, first_name, last_name, jersey_number
-       FROM users WHERE active = 1 ORDER BY last_name, first_name`,
-  ).all();
-  return c.json({ users: results });
-});
-
 /* ------------------------------------------------------------------ *
  * Your own profile
  *
@@ -211,7 +213,9 @@ sessionRoutes.get("/api/roster", requireSession, async (c) => {
  * yourself, and it carries the same trap.
  * ------------------------------------------------------------------ */
 
-meRoutes.get("/api/me", requireSession, async (c) => {
+// Gated by the `/api/me/*` prefix in index.ts, which also matches `/api/me`.
+// A second requireSession here ran the session lookup twice per request.
+meRoutes.get("/api/me", async (c) => {
   const row = await c.env.DB.prepare(
     "SELECT id, first_name, last_name, jersey_number FROM users WHERE id = ?",
   )
@@ -240,9 +244,10 @@ meRoutes.get("/api/me", requireSession, async (c) => {
  * is for — so it is caught and explained. The admin endpoint lets that throw
  * and 500s; this one should not, since the person typing it can fix it.
  */
-meRoutes.patch("/api/me", requireSession, async (c) => {
-  type Body = { first_name?: string; last_name?: string; jersey_number?: string };
-  const b: Body = await c.req.json<Body>().catch(() => ({}) as Body);
+meRoutes.patch("/api/me", async (c) => {
+  type Body = { first_name?: unknown; last_name?: unknown; jersey_number?: unknown };
+  const b = await readJson<Body>(c);
+  if (!b) return badJson(c);
   const id = c.get("userId");
 
   const current = await c.env.DB.prepare(
@@ -252,19 +257,14 @@ meRoutes.patch("/api/me", requireSession, async (c) => {
     .first<{ first_name: string; last_name: string; jersey_number: string | null }>();
   if (!current) return c.json({ error: "Unknown player" }, 404);
 
-  const first = b.first_name?.trim() || current.first_name;
-  const last = b.last_name?.trim() || current.last_name;
+  const first = textField(b.first_name) || current.first_name;
+  const last = textField(b.last_name) || current.last_name;
   const jersey =
-    b.jersey_number === undefined ? current.jersey_number : b.jersey_number.trim() || null;
+    b.jersey_number === undefined ? current.jersey_number : textField(b.jersey_number) || null;
 
-  if (!first || !last) return c.json({ error: "Both names are required" }, 400);
   // Bounded because these are rendered on every screen and on the boards.
-  if (first.length > 40 || last.length > 40) {
-    return c.json({ error: "That name is too long" }, 400);
-  }
-  if (jersey && !/^[0-9]{1,3}$/.test(jersey)) {
-    return c.json({ error: "A jersey number is up to three digits" }, 400);
-  }
+  const problem = identityProblem(first, last, jersey);
+  if (problem) return c.json({ error: problem }, 400);
 
   const key = rosterIdentityKey(first, last, jersey);
 

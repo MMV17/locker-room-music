@@ -12,6 +12,7 @@ import { piRoutes } from "./piRoutes";
 import { sessionRoutes, meRoutes } from "./sessionRoutes";
 import { playRoutes } from "./playRoutes";
 import { isHourlyTick, prune, sweepOrphanPlays } from "./maintenance";
+import { originAllowed, withSecurityHeaders, SECURITY_HEADERS, HEADER_CSP } from "./security";
 
 export const app = new Hono<AppEnv>();
 
@@ -33,6 +34,27 @@ export const app = new Hono<AppEnv>();
  * (`app.use`) only runs for routes registered after it. test/routes.test.ts
  * snapshots the resulting table.
  * ------------------------------------------------------------------ */
+
+/**
+ * First in line, so it wraps every response - handlers, onError and notFound
+ * alike: refuse cross-origin writes, then stamp the security headers
+ * (security.ts).
+ */
+app.use("*", async function securityHeaders(c, next) {
+  if (!originAllowed(c.req.method, c.req.header("Origin"), c.req.url)) {
+    return c.json({ error: "Cross-origin request refused" }, 403, {
+      ...SECURITY_HEADERS,
+      "Content-Security-Policy": HEADER_CSP,
+      "Cache-Control": "private, no-store",
+    });
+  }
+  await next();
+  const res = withSecurityHeaders(c.res, c.req.path);
+  // Cleared first: Hono's setter otherwise merges the old response's headers
+  // into the new one, which is harmless here but not what this means.
+  c.res = undefined as unknown as Response;
+  c.res = res;
+});
 
 // Pi -> server. Each route carries requireDeviceKey itself.
 app.route("/", piRoutes);
@@ -56,7 +78,8 @@ app.use("/api/devices/*", requireSession);
 // Speaker selection for the team. Gated by presence rather than by the admin
 // password: choosing the output speaker is a DJ's job, and handing every DJ the
 // coach's password to do it is not a plan. See speakerAccess.ts.
-app.use("/api/speakers", requireSession);
+// "/api/speakers/*" also matches "/api/speakers" itself; a second gate on the
+// bare path ran the session lookup twice per request.
 app.use("/api/speakers/*", requireSession);
 app.route("/", speakerRoutes);
 app.route("/", devices);
@@ -70,9 +93,21 @@ app.route("/", admin);
 app.route("/", theme);
 
 app.onError((err, c) => {
-  console.error("unhandled", err);
+  // Enough to find the request in the Cloudflare dashboard: method, path, the
+  // cf-ray id the client also saw, and the stack rather than a bare message.
+  const ray = c.req.header("cf-ray") ?? "-";
+  console.error(
+    `unhandled ${c.req.method} ${c.req.path} cf-ray=${ray}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+  );
   return c.json({ error: "Something went wrong" }, 500);
 });
+
+/**
+ * No route matched. A non-GET to an unknown path never reaches the app-shell
+ * fallback below (that is GET-only), and Hono's default answer is a text/plain
+ * "404 Not Found" - so a mistyped POST from the Pi read as an HTML-ish page.
+ */
+app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 /* ------------------------------------------------------------------ *
  * Static site

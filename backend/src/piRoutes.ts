@@ -13,6 +13,8 @@ import { lookupArtwork } from "./artwork";
 import { parseScan, replaceDevices, getSelection, getForgetTarget } from "./speakers";
 import { parseReport, storeReport } from "./piReports";
 import { requireDeviceKey } from "./middleware";
+import { DISPATCH_SQL, REBOOT_COMPLETE_SQL } from "./piCommands";
+import { readJson, badJson } from "./http";
 import { nowIso, uuid } from "./util";
 import {
   HEARTBEAT_UPSERT_SQL,
@@ -21,6 +23,12 @@ import {
   heartbeatParams,
   heartbeatTouchParams,
   keepaliveParams,
+  cleanText,
+  intOrNull,
+  speakerNameFrom,
+  MAX_ALIAS,
+  MAX_SHORT_FIELD,
+  MAX_ERROR_TEXT,
 } from "./beacon";
 import type { AuxWrite, OutputWrite } from "./beacon";
 
@@ -31,7 +39,7 @@ export const piRoutes = new Hono<AppEnv>();
  * Pi retries after ambiguous timeouts and must be able to do so safely.
  */
 piRoutes.post("/api/plays", requireDeviceKey, async (c) => {
-  const body = await c.req.json<{
+  const body = await readJson<{
     play_id: string;
     device_mac: string;
     device_alias?: string;
@@ -41,7 +49,8 @@ piRoutes.post("/api/plays", requireDeviceKey, async (c) => {
     duration_ms?: number | null;
     started_at: string;
     incomplete?: boolean;
-  }>();
+  }>(c);
+  if (!body) return badJson(c);
 
   if (!body.play_id || !body.started_at) {
     return c.json({ error: "play_id and started_at are required" }, 400);
@@ -138,11 +147,12 @@ export const PLAY_PATCH_SQL = `UPDATE plays SET
 
 piRoutes.patch("/api/plays/:id", requireDeviceKey, async (c) => {
   const id = c.req.param("id");
-  const body = await c.req.json<{
+  const body = await readJson<{
     ended_at?: string;
     played_ms?: number;
     counted?: boolean;
-  }>();
+  }>(c);
+  if (!body) return badJson(c);
 
   const result = await c.env.DB.prepare(PLAY_PATCH_SQL)
     .bind(
@@ -185,14 +195,15 @@ async function auxColumns(env: Env, aux: AuxReport | undefined): Promise<AuxWrit
   const waiting = [];
   for (const w of Array.isArray(aux.waiting) ? aux.waiting : []) {
     if (typeof w?.mac !== "string" || !w.mac) continue;
-    waiting.push({ hash: await hashMac(w.mac, env.MAC_SALT), alias: w.alias ?? null });
+    waiting.push({ hash: await hashMac(w.mac, env.MAC_SALT), alias: cleanText(w.alias, MAX_ALIAS) });
+    if (waiting.length >= 16) break;
   }
   // `?? null` rather than `|| null`: 0 is the meaningful "the aux is free
   // right now" reading, and `||` would turn it back into "no countdown".
   const free = aux.holder?.free_in_ms;
   return {
     holderHash,
-    holderAlias: aux.holder?.alias ?? null,
+    holderAlias: cleanText(aux.holder?.alias, MAX_ALIAS),
     waitingJson: JSON.stringify(waiting),
     freeInMs: typeof free === "number" && Number.isFinite(free) ? Math.trunc(free) : null,
   };
@@ -213,10 +224,10 @@ function outputColumns(
 ): OutputWrite | undefined {
   if (!output && !relay) return undefined;
   return {
-    kind: output?.kind ?? null,
-    card: output?.card ?? null,
+    kind: cleanText(output?.kind, MAX_SHORT_FIELD),
+    card: cleanText(output?.card, MAX_ALIAS),
     relayConnected: relay ? (relay.connected ? 1 : 0) : null,
-    relayError: relay?.last_error ?? null,
+    relayError: cleanText(relay?.last_error, MAX_ERROR_TEXT),
   };
 }
 
@@ -226,10 +237,10 @@ function outputColumns(
  * a 404 as non-retryable, backs off hard, and keeps the row forever.
  */
 piRoutes.post("/api/heartbeat", requireDeviceKey, async (c) => {
-  const body = await c.req.json<{ speaker_name?: string }>().catch(() => ({}) as any);
+  const body = (await readJson<{ speaker_name?: unknown }>(c)) ?? {};
   const now = nowIso();
   await c.env.DB.prepare(HEARTBEAT_TOUCH_SQL)
-    .bind(...heartbeatTouchParams(body?.speaker_name ?? "AuxGoat", now))
+    .bind(...heartbeatTouchParams(speakerNameFrom(body?.speaker_name), now))
     .run();
   return c.json({ ok: true });
 });
@@ -242,8 +253,8 @@ piRoutes.post("/api/heartbeat", requireDeviceKey, async (c) => {
  * fails, the next one is 60 seconds away and the stale one was worthless.
  */
 piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
-  const body = await c.req
-    .json<{
+  const body =
+    (await readJson<{
       speaker_name?: string;
       result?: { id: string; ok: boolean; output?: string };
       current_play?: { id: string; status?: string; played_ms?: number };
@@ -262,10 +273,11 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       relay?: { mac?: string | null; connected?: boolean; last_error?: string | null };
       // What audio-route.sh actually selected: usb, jack or relay.
       output?: { kind?: string; card?: string };
-    }>()
-    .catch(() => ({}) as any);
+    }>(c)) ?? {};
 
-  const speakerName = body.speaker_name ?? "AuxGoat";
+  // Bounded and cleaned, never rejected (beacon.ts): old listeners must keep
+  // working, and unknown keys are simply ignored.
+  const speakerName = speakerNameFrom(body.speaker_name);
   const now = nowIso();
   // Liveness, the aux and the output in ONE conditional upsert that writes
   // nothing when nothing changed. See beacon.ts for what forces a write.
@@ -287,14 +299,14 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
   //
   // Throttled in SQL (beacon.ts): a write only on a status flip, a seek, or a
   // keepalive older than 30s.
-  if (body.current_play?.id) {
-    const pm = body.current_play.played_ms;
+  const playId = cleanText(body.current_play?.id, 64);
+  if (playId) {
     await c.env.DB.prepare(KEEPALIVE_SQL)
       .bind(
         ...keepaliveParams(
-          String(body.current_play.id),
-          body.current_play.status ?? "playing",
-          typeof pm === "number" && Number.isFinite(pm) ? Math.trunc(pm) : null,
+          playId,
+          cleanText(body.current_play?.status, MAX_SHORT_FIELD) ?? "playing",
+          intOrNull(body.current_play?.played_ms),
           now,
         ),
       )
@@ -325,7 +337,7 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
   }
 
   // Report on whatever we handed out last time, before taking anything new.
-  if (body.result?.id) {
+  if (typeof body.result?.id === "string" && body.result.id) {
     await c.env.DB.prepare(
       `UPDATE pi_commands SET completed_at = ?, ok = ?, result = ?
        WHERE id = ? AND completed_at IS NULL`,
@@ -333,19 +345,18 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       .bind(
         nowIso(),
         body.result.ok ? 1 : 0,
-        (body.result.output ?? "").slice(0, 2000),
+        (typeof body.result.output === "string" ? body.result.output : "").slice(0, 2000),
         body.result.id,
       )
       .run();
   }
 
-  // One at a time, oldest first. Claimed by stamping dispatched_at, so a
+  // One at a time, oldest first, claimed atomically (piCommands.ts), so a
   // command is handed out once even if the Pi beacons twice in quick
   // succession — "reboot" running twice is not what anyone asked for.
-  const pending = await c.env.DB.prepare(
-    `SELECT id, command FROM pi_commands
-     WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 1`,
-  ).first<{ id: string; command: string }>();
+  const pending = await c.env.DB.prepare(DISPATCH_SQL)
+    .bind(now)
+    .first<{ id: string; command: string }>();
 
   // The chosen speaker rides every response, pending command or not. It is
   // STATE, not a command: the Pi reconciles what it is connected to against
@@ -371,16 +382,9 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
 
   // reboot is fire-and-forget: the Pi is killed before it can report, so
   // record the outcome now rather than leaving a row that never completes.
-  const isReboot = pending.command === "reboot";
-  await c.env.DB.prepare(
-    isReboot
-      ? `UPDATE pi_commands SET dispatched_at = ?, completed_at = ?, ok = 1,
-           result = 'reboot issued - the Pi cannot report back, watch for the speaker coming online'
-         WHERE id = ?`
-      : "UPDATE pi_commands SET dispatched_at = ? WHERE id = ?",
-  )
-    .bind(...(isReboot ? [nowIso(), nowIso(), pending.id] : [nowIso(), pending.id]))
-    .run();
+  if (pending.command === "reboot") {
+    await c.env.DB.prepare(REBOOT_COMPLETE_SQL).bind(now, pending.id).run();
+  }
 
   return c.json({
     ok: true,

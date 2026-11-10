@@ -48,3 +48,21 @@ export async function queueCommand(env: Env, name: string): Promise<string> {
     .run();
   return id;
 }
+
+/**
+ * Hand out the oldest undispatched command, atomically.
+ *
+ * It used to be SELECT, then UPDATE by id: two beacons landing together (a
+ * retry racing the original) could both read the same row and both dispatch
+ * it - "reboot" twice. The claim and the read are one statement now, and the
+ * `AND dispatched_at IS NULL` means only one caller can ever win the row.
+ */
+export const DISPATCH_SQL = `UPDATE pi_commands SET dispatched_at = ?1
+  WHERE id = (SELECT id FROM pi_commands WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 1)
+    AND dispatched_at IS NULL
+  RETURNING id, command`;
+
+/** reboot never reports back (the Pi is gone first), so it completes on dispatch. */
+export const REBOOT_COMPLETE_SQL = `UPDATE pi_commands SET completed_at = ?1, ok = 1,
+    result = 'reboot issued - the Pi cannot report back, watch for the speaker coming online'
+  WHERE id = ?2`;

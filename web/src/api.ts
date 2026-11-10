@@ -166,15 +166,6 @@ export interface Results {
   counted: boolean;
 }
 
-export interface RosterUser {
-  id: string;
-  /** Composed server-side from first_name + last_name. */
-  name: string;
-  first_name: string;
-  last_name: string;
-  jersey_number: string | null;
-}
-
 export interface TrackEntry {
   id: string;
   title: string;

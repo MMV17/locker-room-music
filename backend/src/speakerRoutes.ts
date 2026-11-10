@@ -15,8 +15,18 @@
  */
 import { Hono } from "hono";
 import type { AppEnv, Env } from "./types";
-import { isMacAddress, normaliseMac } from "./piControl";
-import { listDevices, getSelection, getSelectionName, setSelection } from "./speakers";
+import {
+  listDevices,
+  getSelection,
+  getSelectionName,
+  setSelection,
+  playerDevices,
+  playerOutput,
+  resolveSpeakerId,
+  scrubMacs,
+  speakerId,
+} from "./speakers";
+import { readJson } from "./http";
 import { hasOutstandingCommand, queueCommand, staleCutoff } from "./piCommands";
 import { putSetting } from "./settings";
 import {
@@ -76,16 +86,21 @@ speakerRoutes.get("/api/speakers", async (c) => {
           ORDER BY completed_at DESC LIMIT 1`,
       ).first<{ ok: number | null; result: string | null; completed_at: string | null }>();
 
+  // NO RAW MAC leaves this handler (speakers.ts explains why): devices are
+  // audio-class only and carry an opaque id, the selection is that same id,
+  // and the relay's "card" (a MAC) and any MAC inside an error are withheld.
+  const salt = c.env.MAC_SALT;
   return c.json({
-    devices: fresh ? devices : [],
+    devices: fresh ? await playerDevices(devices, salt) : [],
     scanned_at: fresh ? scannedAt?.at : null,
     scanning: running ? (running.dispatched_at ? "scanning" : "queued") : null,
     scan_problem: scanProblem(lastScan),
-    selected,
+    // null = never chosen, "" = wired output, otherwise the speaker's id.
+    selected: selected ? await speakerId(selected, salt) : selected,
     selected_name: selectedName || null,
-    output: hb?.output_kind ? { kind: hb.output_kind, card: hb.output_card } : null,
+    output: playerOutput(hb?.output_kind, hb?.output_card),
     relay_connected: hb?.relay_connected == null ? null : hb.relay_connected === 1,
-    relay_error: hb?.relay_error ?? null,
+    relay_error: scrubMacs(hb?.relay_error),
     can_change: permission.allowed,
     reason: permission.reason,
   });
@@ -122,32 +137,35 @@ speakerRoutes.put("/api/speakers", async (c) => {
   const permission = await mayChangeSpeaker(c.env, userId);
   if (!permission.allowed) return c.json({ error: permission.reason }, 403);
 
-  type Body = { mac?: string | null; name?: string | null };
-  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+  // `id` is the opaque speaker id GET /api/speakers hands out. A `null` id -
+  // or a null `mac`, which is what a page loaded before this change sends for
+  // "Use the cable instead" - selects wired output. A body naming neither is
+  // refused rather than read as "clear": a stale page tapping "Use this" sends
+  // `{}` (its devices no longer carry a MAC), and that must not silently
+  // switch the room to the cable.
+  type Body = { id?: unknown; mac?: unknown };
+  const b: Body = (await readJson<Body>(c)) ?? {};
 
-  if (b.mac === null || b.mac === undefined) {
+  if (b.id === null || (b.id === undefined && b.mac === null)) {
     await setSelection(c.env, null, null);
     await recordWhoChangedIt(c.env, userId);
     return c.json({ ok: true, selected: "" });
   }
 
-  if (!isMacAddress(b.mac)) return c.json({ error: "That is not a MAC address" }, 400);
+  if (typeof b.id !== "string" || !b.id) {
+    return c.json({ error: "Pick a speaker from the list. If this keeps happening, reload the page." }, 400);
+  }
 
-  // Only a device the box actually reported seeing. This is not about
-  // injection — the MAC is validated and passed as an argv element either way —
-  // it is about not pointing the speaker at something nobody scanned, which
-  // would be a selection that can never connect and cannot be explained.
-  const mac = normaliseMac(b.mac)!;
-  const known = await c.env.DB.prepare("SELECT name FROM bt_devices WHERE mac = ?")
-    .bind(mac)
-    .first<{ name: string | null }>();
+  // Only a device the box actually reported seeing, and only one a player may
+  // see at all (audio class). Resolved to its MAC here, never by the client.
+  const known = await resolveSpeakerId(await listDevices(c.env), b.id, c.env.MAC_SALT);
   if (!known) {
     return c.json({ error: "That speaker isn't in the last scan. Scan again." }, 400);
   }
 
-  await setSelection(c.env, mac, known.name);
+  await setSelection(c.env, known.mac, known.name);
   await recordWhoChangedIt(c.env, userId);
-  return c.json({ ok: true, selected: mac, selected_name: known.name });
+  return c.json({ ok: true, selected: b.id, selected_name: known.name });
 });
 
 /**

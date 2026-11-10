@@ -146,3 +146,47 @@ export function keepaliveParams(
     SEEK_TOLERANCE_MS,
   ];
 }
+
+/* ------------------------------------------------------------------ *
+ * Bounding what the Pi sends
+ *
+ * Everything here is stored and later rendered (the Admin screen, the aux
+ * banner), and the device key that authorises it lives on a box in a locker
+ * room. So fields are bounded and stripped of control characters - but never
+ * REJECTED: the speaker in the field runs older listener code, and a beacon it
+ * sends today must keep working. A field that cannot be cleaned is dropped to
+ * its default, not turned into a 400.
+ * ------------------------------------------------------------------ */
+
+export const DEFAULT_SPEAKER_NAME = "AuxGoat";
+export const MAX_SPEAKER_NAME = 64;
+export const MAX_ALIAS = 64;
+export const MAX_SHORT_FIELD = 32;
+export const MAX_ERROR_TEXT = 300;
+
+// C0 controls, DEL and C1 controls. Built from code points so the source file
+// carries no literal control characters.
+const CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f]", "g");
+
+/** A trimmed, bounded, control-free string, or null for anything else/empty. */
+export function cleanText(v: unknown, max: number): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.replace(CONTROL, " ").trim().slice(0, max).trim();
+  return s === "" ? null : s;
+}
+
+export function speakerNameFrom(v: unknown): string {
+  return cleanText(v, MAX_SPEAKER_NAME) ?? DEFAULT_SPEAKER_NAME;
+}
+
+/** Epoch ms for a Pi-supplied ISO timestamp, or null if it does not parse. */
+export function parseTimestamp(v: unknown): number | null {
+  if (typeof v !== "string" || v.length > 64) return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+}
+
+/** A finite integer, or null. */
+export function intOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
+}

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isAllowedArtUrl, proxiedArtPath } from "../src/artProxy";
+import {
+  isAllowedArtUrl,
+  isAllowedArtRedirect,
+  artContentType,
+  artCacheKey,
+} from "../src/artProxy";
 
 /**
  * The cover proxy must never become a general-purpose fetcher. These are the
@@ -35,10 +40,40 @@ describe("isAllowedArtUrl", () => {
   });
 });
 
-describe("proxiedArtPath", () => {
-  it("round-trips through the query string", () => {
-    const raw = "https://is1-ssl.mzstatic.com/image/thumb/a b&c/600x600bb.jpg";
-    const path = proxiedArtPath(raw);
-    expect(new URL(path, "https://x.test").searchParams.get("u")).toBe(raw);
+describe("redirect hops (2e)", () => {
+  it("follow Cover Art Archive onto archive.org mirrors, and nowhere else", () => {
+    expect(isAllowedArtRedirect("https://coverartarchive.org/release/abc/123-500.jpg")).toBe(true);
+    expect(isAllowedArtRedirect("https://archive.org/download/mbid-abc/mbid-abc-123_thumb500.jpg")).toBe(true);
+    expect(isAllowedArtRedirect("https://ia800505.us.archive.org/9/items/mbid-abc/x.jpg")).toBe(true);
+    expect(isAllowedArtRedirect("https://evil.example/x.jpg")).toBe(false);
+    expect(isAllowedArtRedirect("http://archive.org/x.jpg")).toBe(false);
+    expect(isAllowedArtRedirect("https://169.254.169.254/latest")).toBe(false);
+  });
+
+  it("but archive.org is not a cover URL in its own right", () => {
+    expect(isAllowedArtUrl("https://archive.org/download/x.jpg")).toBe(false);
+  });
+});
+
+describe("served types (2e)", () => {
+  it("are raster images only", () => {
+    expect(artContentType("image/jpeg")).toBe("image/jpeg");
+    expect(artContentType("IMAGE/PNG; charset=binary")).toBe("image/png");
+    expect(artContentType("image/webp")).toBe("image/webp");
+    expect(artContentType("image/gif")).toBe("image/gif");
+    expect(artContentType("image/svg+xml")).toBeNull();
+    expect(artContentType("text/html")).toBeNull();
+    expect(artContentType(null)).toBeNull();
+  });
+});
+
+describe("cache key (2e)", () => {
+  it("is built from u alone", () => {
+    const u = "https://is1-ssl.mzstatic.com/image/thumb/a b&c/600x600bb.jpg";
+    const a = artCacheKey("https://hc.example/api/art?u=" + encodeURIComponent(u) + "&x=1", u);
+    const b = artCacheKey("https://hc.example/api/art?x=2&u=" + encodeURIComponent(u), u);
+    expect(a).toBe(b);
+    expect(new URL(a).searchParams.get("u")).toBe(u);
+    expect([...new URL(a).searchParams.keys()]).toEqual(["u"]);
   });
 });

@@ -2,6 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Must match PAGE_CSP in backend/src/security.ts (a test checks). The
+         Worker sends the same policy as a header, plus frame-ancestors, on
+         everything it renders; this tag covers the files the assets runtime
+         serves without invoking the Worker, `/` included. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    />
     <!-- viewport-fit=cover so the bottom nav can sit above the home indicator -->
     <meta
       name="viewport"

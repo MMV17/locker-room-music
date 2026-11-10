@@ -734,6 +734,70 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "CF-Connecting-IP: 203.0.113.25
   && ok "one address's lockout does not affect another" \
   || bad "throttle is not per-address" "got $code, want 200"
 
+echo "== speaker privacy =="
+# A scan sees every Bluetooth device in the room, teammates' phones included.
+# Players get audio-class devices only, and no raw MAC anywhere; the admin
+# screen keeps raw MACs (it needs them to forget a pairing).
+beacon '{"speaker_name":"AuxGoat","scan":{"devices":[{"mac":"AA:BB:CC:00:00:01","name":"E2E Speaker","cod":2360340},{"mac":"AA:BB:CC:00:00:02","name":"Someones iPhone","cod":5898764}]}}' > /dev/null
+SPK=$(curl -s -b "$JAR" "$BASE/api/speakers")
+echo "$SPK" | grep -q "E2E Speaker" && ok "players see the audio device" || bad "player speaker list" "$SPK"
+echo "$SPK" | grep -q "Someones iPhone" && bad "players see a phone" "$SPK" || ok "players do not see a phone from the scan"
+echo "$SPK" | grep -Eq '([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}' && bad "a MAC reaches players" "$SPK" || ok "no MAC-shaped string in the player response"
+ADM=$(curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/speakers")
+echo "$ADM" | grep -q "AA:BB:CC:00:00:02" && ok "the admin list keeps raw MACs and every device" || bad "admin speaker list" "$ADM"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X PUT "$BASE/api/speakers" \
+  -H 'content-type: application/json' -d '{}')
+# Refused either way: 403 without a connected phone, 400 for a body naming no
+# speaker. What must never happen is a 200 that switched the room to the cable.
+[ "$code" != "200" ] && ok "a speaker PUT naming nothing does not clear the selection" || bad "empty PUT" "got $code"
+
+echo "== hardening =="
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/roster")
+[ "$code" = "404" ] && ok "GET /api/roster is gone" || bad "roster" "got $code"
+
+LONG=$(printf 'x%.0s' $(seq 1 200))
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"$LONG\",\"last_name\":\"Long$SUFFIX\"}")
+[ "$code" = "400" ] && ok "signup refuses a name over 40 characters" || bad "long name" "got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Jersey\",\"last_name\":\"Bad$SUFFIX\",\"jersey_number\":\"abcdefgh\"}")
+[ "$code" = "400" ] && ok "signup refuses a jersey that is not 1-3 digits" || bad "bad jersey" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" -H 'content-type: application/json' -d '{not json')
+[ "$code" = "400" ] && ok "malformed JSON is a 400, not a 500" || bad "malformed json" "got $code"
+
+BODY=$(curl -s -w ' %{http_code}' -X POST "$BASE/api/definitely-not-a-route")
+echo "$BODY" | grep -q '"error":"Not found"} 404' && ok "an unknown /api POST is a JSON 404" || bad "api POST 404" "$BODY"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/votes" \
+  -H 'Origin: https://evil.example' -H 'content-type: application/json' -d '{"play_id":"x","value":1}')
+[ "$code" = "403" ] && ok "a cross-origin write is refused" || bad "origin check" "got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/votes" \
+  -H "Origin: $BASE" -H 'content-type: application/json' -d '{"play_id":"no-such-play","value":1}')
+[ "$code" = "404" ] && ok "a same-origin write passes the origin check" || bad "same origin" "got $code"
+
+HDRS=$(curl -s -D - -o /dev/null -b "$JAR" "$BASE/api/me" | tr -d '\r')
+echo "$HDRS" | grep -qi '^x-content-type-options: nosniff' && echo "$HDRS" | grep -qi '^x-frame-options: DENY' \
+  && echo "$HDRS" | grep -qi "^content-security-policy: default-src 'none'" \
+  && ok "security headers on a Worker response" || bad "security headers" "$HDRS"
+echo "$HDRS" | grep -qi '^cache-control: private, no-store' && ok "authenticated JSON is private, no-store" || bad "no-store" "$HDRS"
+
+# Renaming a player onto somebody else's name and number is a 409 the admin
+# can act on, not a 500 out of the UNIQUE constraint.
+A_ID=$(curl -s -X POST "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d "{\"first_name\":\"Clash\",\"last_name\":\"A$SUFFIX\"}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+B_ID=$(curl -s -X POST "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d "{\"first_name\":\"Clash\",\"last_name\":\"B$SUFFIX\"}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BASE/api/admin/users/$B_ID" -H "X-Admin-Password: $ADMIN_PW" \
+  -H 'content-type: application/json' -d "{\"last_name\":\"A$SUFFIX\"}")
+[ "$code" = "409" ] && ok "an admin rename onto an existing identity is a 409" || bad "admin rename clash" "got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW" \
+  -H 'content-type: application/json' -d "{\"first_name\":\"Num\",\"last_name\":\"C$SUFFIX\",\"jersey_number\":\"1234\"}")
+[ "$code" = "400" ] && ok "admin create applies the same validation" || bad "admin create validation" "got $code"
+for id in "$A_ID" "$B_ID"; do
+  curl -s -o /dev/null -X DELETE "$BASE/api/admin/users/$id" -H "X-Admin-Password: $ADMIN_PW"
+done
+
 rm -f "$JAR"
 echo
 echo "passed: $PASS   failed: $FAIL"

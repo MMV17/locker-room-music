@@ -22,8 +22,12 @@ import { Spinner } from "./../components";
  * than a control.
  */
 
+/**
+ * A nearby speaker. The server sends audio-class devices only, and never a raw
+ * MAC: `id` is an opaque server-side id, and it is what PUT /api/speakers takes.
+ */
 interface BtDevice {
-  mac: string;
+  id: string;
   name: string | null;
   cod: number | null;
   rssi: number | null;
@@ -35,6 +39,7 @@ interface SpeakerState {
   scanning: "queued" | "scanning" | null;
   /** Why the last scan came back empty, when it was refused or failed. */
   scan_problem?: string | null;
+  /** null = never chosen, "" = wired output, otherwise a device `id`. */
   selected: string | null;
   selected_name: string | null;
   output: { kind: string; card: string | null } | null;
@@ -42,11 +47,6 @@ interface SpeakerState {
   relay_error: string | null;
   can_change: boolean;
   reason: string;
-}
-
-/** Bluetooth major device class 0x04 is Audio/Video. */
-function isAudio(cod: number | null): boolean {
-  return cod !== null && ((cod >> 8) & 0x1f) === 0x04;
 }
 
 function outputLabel(s: SpeakerState): string {
@@ -63,7 +63,6 @@ export function SpeakerSection() {
   const [state, setState] = useState<SpeakerState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showOthers, setShowOthers] = useState(false);
 
   const load = useCallback(
     () =>
@@ -102,11 +101,11 @@ export function SpeakerSection() {
     }
   };
 
-  const choose = async (mac: string | null) => {
+  const choose = async (id: string | null) => {
     setBusy(true);
     setError(null);
     try {
-      await put("/api/speakers", { mac });
+      await put("/api/speakers", { id });
       await load();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't change the speaker");
@@ -115,33 +114,30 @@ export function SpeakerSection() {
     }
   };
 
-  // Audio gear first, then the strongest signal — the speaker in your hand is
-  // usually the nearest one.
+  // Strongest signal first — the speaker in your hand is usually the nearest
+  // one. Only audio gear arrives here: the server keeps everyone's phones out
+  // of this list.
   const byCloseness = (a: BtDevice, b: BtDevice) =>
-    (b.rssi ?? -999) - (a.rssi ?? -999) ||
-    (a.name ?? a.mac).localeCompare(b.name ?? b.mac);
+    (b.rssi ?? -999) - (a.rssi ?? -999) || (a.name ?? "").localeCompare(b.name ?? "");
 
-  const speakers = (state?.devices ?? []).filter((d) => isAudio(d.cod)).sort(byCloseness);
-  const others = (state?.devices ?? []).filter((d) => !isAudio(d.cod)).sort(byCloseness);
+  const speakers = [...(state?.devices ?? [])].sort(byCloseness);
 
   const row = (d: BtDevice) => {
-    const chosen = state?.selected === d.mac;
+    const chosen = state?.selected === d.id;
     return (
-      <div key={d.mac} className="row">
+      <div key={d.id} className="row">
         <span className="row-main">
-          <span className="row-title">{d.name ?? d.mac}</span>
+          <span className="row-title">{d.name ?? "Unnamed speaker"}</span>
           <span className="row-sub">
             {chosen
               ? state?.relay_connected
                 ? "Playing through this"
                 : "Chosen — connecting"
-              : d.name
-                ? d.mac
-                : "No name"}
+              : "Nearby speaker"}
           </span>
         </span>
         {state?.can_change && !chosen && (
-          <button className="btn" disabled={busy} onClick={() => choose(d.mac)}>
+          <button className="btn" disabled={busy} onClick={() => choose(d.id)}>
             Use this
           </button>
         )}
@@ -206,33 +202,7 @@ export function SpeakerSection() {
                   : "Tap Find speakers with your speaker switched on."}
               </div>
             ) : (
-              <>
-                <div className="rows">{speakers.map(row)}</div>
-                {speakers.length === 0 && (
-                  <p className="t-sub" style={{ marginBottom: 10 }}>
-                    Nothing nearby called itself a speaker. Some speakers don't,
-                    so check the other devices.
-                  </p>
-                )}
-
-                {others.length > 0 &&
-                  (showOthers ? (
-                    <>
-                      <p className="t-sub" style={{ margin: "12px 0 6px" }}>
-                        Everything else nearby
-                      </p>
-                      <div className="rows">{others.map(row)}</div>
-                    </>
-                  ) : (
-                    <button
-                      className="btn-quiet"
-                      style={{ marginTop: 10 }}
-                      onClick={() => setShowOthers(true)}
-                    >
-                      Show other devices ({others.length})
-                    </button>
-                  ))}
-              </>
+              <div className="rows">{speakers.map(row)}</div>
             )}
 
             {state.selected ? (

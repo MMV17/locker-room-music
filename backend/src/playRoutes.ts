@@ -2,6 +2,7 @@
  * What a player does: see what is on, load a cover, vote, see the result.
  */
 import { Hono } from "hono";
+import { readJson, badJson } from "./http";
 import type { AppEnv, Env, PlayRow } from "./types";
 import { fallbackColor } from "./crypto";
 import {
@@ -254,7 +255,9 @@ playRoutes.get("/api/now", requireSession, async (c) => {
 
 playRoutes.post("/api/votes", requireSession, async (c) => {
   const userId = c.get("userId");
-  const body = await c.req.json<{ play_id: string; value: number }>();
+  const body = await readJson<{ play_id?: unknown; value?: unknown }>(c);
+  if (!body) return badJson(c);
+  if (typeof body.play_id !== "string") return c.json({ error: "play_id is required" }, 400);
 
   if (body.value !== 1 && body.value !== -1) {
     return c.json({ error: "Vote must be 1 or -1" }, 400);

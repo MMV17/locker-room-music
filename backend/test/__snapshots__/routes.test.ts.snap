@@ -2,6 +2,7 @@
 
 exports[`route table > is unchanged 1`] = `
 [
+  "ALL /* securityHeaders",
   "POST /api/plays requireDeviceKey",
   "POST /api/plays ",
   "PATCH /api/plays/:id requireDeviceKey",
@@ -13,8 +14,6 @@ exports[`route table > is unchanged 1`] = `
   "POST /api/session/check-code ",
   "POST /api/session ",
   "POST /api/session/signout ",
-  "GET /api/roster requireSession",
-  "GET /api/roster ",
   "GET /api/art ",
   "GET /api/now requireSession",
   "GET /api/now ",
@@ -25,16 +24,13 @@ exports[`route table > is unchanged 1`] = `
   "ALL /api/leaderboard/* requireSession",
   "ALL /api/history requireSession",
   "ALL /api/me/* requireSession",
-  "GET /api/me requireSession",
   "GET /api/me ",
-  "PATCH /api/me requireSession",
   "PATCH /api/me ",
   "GET /api/leaderboard/tracks ",
   "GET /api/leaderboard/djs ",
   "GET /api/me/dj ",
   "GET /api/history ",
   "ALL /api/devices/* requireSession",
-  "ALL /api/speakers requireSession",
   "ALL /api/speakers/* requireSession",
   "GET /api/speakers ",
   "POST /api/speakers/scan ",

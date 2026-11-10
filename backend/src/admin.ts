@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { PI_COMMANDS, isPiCommand, normaliseMac, OFFLINE_AFTER_MS } from "./piControl";
 import { hasOutstandingCommand, queueCommand } from "./piCommands";
-import { identityKey } from "./roster";
+import { identityKey, identityProblem, isIdentityClash, textField } from "./roster";
+import { readJson, badJson } from "./http";
 import { nowIso } from "./util";
 import { listReports } from "./piReports";
 import {
@@ -81,9 +82,7 @@ admin.post("/api/admin/artwork/retry", async (c) => {
   // `all` redoes tracks that already have a cover too. Needed after the
   // matcher itself improves: "Imma Be" was state='found' pointing at a
   // compilation, which no amount of retrying the failures would have fixed.
-  const body = await c.req
-    .json<{ all?: boolean; offset?: number }>()
-    .catch((): { all?: boolean; offset?: number } => ({}));
+  const body = (await readJson<{ all?: boolean; offset?: number }>(c)) ?? {};
   const offset = Math.max(0, Math.floor(Number(body.offset) || 0));
   const where = body.all ? "" : "WHERE artwork_state IN ('none', 'pending')";
 
@@ -148,17 +147,14 @@ admin.get("/api/admin/users", async (c) => {
  * a broken phone, a name the team code holder needs to fix.
  */
 admin.post("/api/admin/users", async (c) => {
-  const b = await c.req.json<{
-    first_name: string;
-    last_name: string;
-    jersey_number?: string;
-  }>();
-  const first = (b.first_name ?? "").trim();
-  const last = (b.last_name ?? "").trim();
-  if (!first || !last) {
-    return c.json({ error: "first_name and last_name are required" }, 400);
-  }
-  const jersey = (b.jersey_number ?? "").trim() || null;
+  const b = await readJson<{ first_name?: unknown; last_name?: unknown; jersey_number?: unknown }>(c);
+  if (!b) return badJson(c);
+  const first = textField(b.first_name);
+  const last = textField(b.last_name);
+  const jersey = textField(b.jersey_number) || null;
+  // The same rule signup and PATCH /api/me apply (roster.ts).
+  const problem = identityProblem(first, last, jersey);
+  if (problem) return c.json({ error: problem }, 400);
 
   const id = crypto.randomUUID();
   const r = await c.env.DB.prepare(
@@ -173,12 +169,13 @@ admin.post("/api/admin/users", async (c) => {
 });
 
 admin.patch("/api/admin/users/:id", async (c) => {
-  const b = await c.req.json<{
-    first_name?: string;
-    last_name?: string;
-    jersey_number?: string;
-    active?: boolean;
-  }>();
+  const b = await readJson<{
+    first_name?: unknown;
+    last_name?: unknown;
+    jersey_number?: unknown;
+    active?: unknown;
+  }>(c);
+  if (!b) return badJson(c);
   const id = c.req.param("id");
 
   const current = await c.env.DB.prepare(
@@ -192,26 +189,44 @@ admin.patch("/api/admin/users/:id", async (c) => {
   // If an admin fixes a misspelled name and the key keeps the old spelling,
   // that player's next sign-in matches nothing, creates a second row, and
   // their play history silently splits in two.
-  const first = b.first_name?.trim() || current.first_name;
-  const last = b.last_name?.trim() || current.last_name;
+  const first = textField(b.first_name) || current.first_name;
+  const last = textField(b.last_name) || current.last_name;
   const jersey =
-    b.jersey_number === undefined ? current.jersey_number : b.jersey_number.trim() || null;
+    b.jersey_number === undefined ? current.jersey_number : textField(b.jersey_number) || null;
+  const problem = identityProblem(first, last, jersey);
+  if (problem) return c.json({ error: problem }, 400);
 
-  const r = await c.env.DB.prepare(
-    `UPDATE users SET
-       first_name = ?, last_name = ?, jersey_number = ?, identity_key = ?,
-       active = COALESCE(?, active)
-     WHERE id = ?`,
-  )
-    .bind(
-      first,
-      last,
-      jersey,
-      identityKey(first, last, jersey),
-      b.active === undefined ? null : b.active ? 1 : 0,
-      id,
+  // A rename onto somebody else's name+number is a real outcome, and used to
+  // throw out of the UNIQUE constraint as a 500. Checked first so the message
+  // can name it; the catch settles a race between two saves.
+  const key = identityKey(first, last, jersey);
+  const clash = await c.env.DB.prepare("SELECT id FROM users WHERE identity_key = ? AND id != ?")
+    .bind(key, id)
+    .first<{ id: string }>();
+  const CLASH = { error: "Somebody on the roster already has that name and number." };
+  if (clash) return c.json(CLASH, 409);
+
+  let r: D1Result;
+  try {
+    r = await c.env.DB.prepare(
+      `UPDATE users SET
+         first_name = ?, last_name = ?, jersey_number = ?, identity_key = ?,
+         active = COALESCE(?, active)
+       WHERE id = ?`,
     )
-    .run();
+      .bind(
+        first,
+        last,
+        jersey,
+        key,
+        b.active === undefined ? null : b.active ? 1 : 0,
+        id,
+      )
+      .run();
+  } catch (e) {
+    if (isIdentityClash(e)) return c.json(CLASH, 409);
+    throw e;
+  }
   if (!r.meta.changes) return c.json({ error: "Unknown player" }, 404);
   return c.json({ ok: true });
 });
@@ -432,7 +447,7 @@ admin.get("/api/admin/pi/reports", async (c) => {
 });
 
 admin.post("/api/admin/pi/commands", async (c) => {
-  const b = await c.req.json<{ command?: string }>().catch(() => ({}) as any);
+  const b = (await readJson<{ command?: unknown; name?: unknown }>(c)) ?? {};
   if (!isPiCommand(b.command)) {
     return c.json({ error: `Unknown command. Allowed: ${PI_COMMANDS.join(", ")}` }, 400);
   }
@@ -491,7 +506,7 @@ admin.get("/api/admin/pi/speakers", async (c) => {
 
 admin.put("/api/admin/pi/speakers", async (c) => {
   type Body = { mac?: string | null; name?: string | null };
-  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+  const b: Body = (await readJson<Body>(c)) ?? {};
 
   // null clears the selection: wired output. Stored as "" rather than by
   // deleting the row, because a deleted row means "never configured" and the
@@ -545,7 +560,7 @@ admin.put("/api/admin/pi/speakers", async (c) => {
  */
 admin.post("/api/admin/pi/forget", async (c) => {
   type Body = { mac?: string };
-  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+  const b: Body = (await readJson<Body>(c)) ?? {};
 
   const mac = normaliseMac(b.mac);
   if (!mac) {

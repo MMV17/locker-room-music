@@ -12,13 +12,7 @@ import type { AppEnv } from "./types";
 import { hashToken, safeEqual } from "./crypto";
 import { activeSessionUserId, touchCutoff, TOUCH_SESSION_SQL } from "./session";
 import type { SessionRow } from "./session";
-import {
-  clientAddress,
-  throttleCheck,
-  throttleNoteFailure,
-  throttleClear,
-  ADMIN_POLICY,
-} from "./throttle";
+import { clientAddress, throttleReserve, throttleClear, ADMIN_POLICY } from "./throttle";
 
 /** The cookie POST /api/session sets and every session-gated route reads. */
 export const SESSION_COOKIE = "lr_token";
@@ -33,7 +27,7 @@ export function tooManyAttempts(c: Context, gate: { retryAfter: number }) {
 /** Pi -> server. Shared secret in X-Device-Key. */
 export const requireDeviceKey: MiddlewareHandler<AppEnv> = async (c, next) => {
   const key = c.req.header("X-Device-Key") ?? "";
-  if (!c.env.DEVICE_KEY || !safeEqual(key, c.env.DEVICE_KEY)) {
+  if (!c.env.DEVICE_KEY || !(await safeEqual(key, c.env.DEVICE_KEY))) {
     return c.json({ error: "Unauthorized" }, 401);
   }
   await next();
@@ -83,15 +77,16 @@ export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
   const db: D1Database = c.env.DB;
   const bucket = `admin:${clientAddress(c.req)}`;
 
-  // Checked BEFORE the comparison, so a blocked address never learns whether
-  // its guess was right. This Worker previously took unlimited guesses at the
+  // Reserved BEFORE the comparison, atomically, so a blocked address never
+  // learns whether its guess was right and parallel guesses cannot all slip
+  // past a check. This Worker previously took unlimited guesses at the
   // password that gates roster deletion and the speaker; see src/throttle.ts.
-  const gate = await throttleCheck(db, bucket, ADMIN_POLICY);
+  const gate = await throttleReserve(db, bucket, ADMIN_POLICY);
   if (gate.blocked) return tooManyAttempts(c, gate);
 
   const pw = c.req.header("X-Admin-Password") ?? "";
-  if (!c.env.ADMIN_PASSWORD || !safeEqual(pw, c.env.ADMIN_PASSWORD)) {
-    await throttleNoteFailure(db, bucket, ADMIN_POLICY);
+  if (!c.env.ADMIN_PASSWORD || !(await safeEqual(pw, c.env.ADMIN_PASSWORD))) {
+    // The reservation stands: it is this failure, counted.
     return c.json({ error: "Unauthorized" }, 401);
   }
 
