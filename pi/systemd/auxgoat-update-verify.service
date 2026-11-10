@@ -1,0 +1,28 @@
+# Decide the fate of a release that is on trial: commit it or roll it back.
+#
+# Installs to /etc/systemd/system/auxgoat-update-verify.service
+#
+# Started by `auxgoat-update apply` right after it switches releases, and again
+# at every boot - a trial has to survive a power cut, and the transient unit
+# that began it does not. With nothing on trial it exits at once, so being
+# enabled costs nothing.
+#
+# It runs in its own cgroup, NOT the listener's. That is the point: restarting
+# the listener must not kill the thing that is deciding whether to put the old
+# listener back.
+[Unit]
+Description=AuxGoat update trial (commit or roll back the release on trial)
+After=auxgoat-update-recover.service lockerroom-listener.service
+ConditionPathExists=/usr/local/bin/auxgoat-update
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/auxgoat-update verify
+# A verifier that dies mid-trial would leave unconfirmed code live with nobody
+# watching it. It exits 0 when there is nothing left to decide.
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

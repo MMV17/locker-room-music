@@ -141,7 +141,7 @@ def log(msg: str) -> None:
 def login(s: Serial, user: str, password: str) -> None:
     log("  waking the console...")
     s.write("\r")
-    out = s.read_until("login:", 15)
+    s.read_until("login:", 15)
 
     # Already at a shell? Then somebody is logged in and we should not re-auth.
     s.write(user + "\r")

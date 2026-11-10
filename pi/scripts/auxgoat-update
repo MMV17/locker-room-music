@@ -1,0 +1,1408 @@
+#!/usr/bin/python3
+"""Over-the-air updates for the AuxGoat listener, with automatic rollback.
+
+    auxgoat-update request            # fetch, check, schedule a detached apply
+    auxgoat-update apply --commit SHA # stage, gate, flip, restart, hand to verify
+    auxgoat-update verify             # commit or roll back the release on trial
+    auxgoat-update recover            # boot: finish or revert an interrupted update
+    auxgoat-update status             # what is installed and what happened last
+    auxgoat-update adopt --commit SHA # a cable/serial deploy just replaced the code
+
+WHY THIS EXISTS. The box sits on a network that allows outbound 443 and nothing
+else, so the listener is the only way in - and until this script, changing the
+listener needed a cable. The listener IS the control channel, so an updater
+that can strand it is worse than no updater. Everything here is shaped by that:
+
+  * A release is an immutable directory, /opt/lockerroom/releases/<id>/. The
+    live package /opt/lockerroom/lockerroom is a SYMLINK into one of them, so
+    switching and switching back are each a single rename(2). There is no
+    moment when the package is half old and half new.
+  * New code is on TRIAL until it proves itself: the listener writes
+    /run/lockerroom/health.json (only new code does), and `verify` commits
+    only when that marker names this release, this boot and the unit's own
+    PID and shows two good beacons. A crash rolls back in seconds. A listener
+    that runs but cannot beacon while the network is demonstrably up rolls
+    back. A network outage is neither: the trial simply waits.
+  * The way back is created BEFORE the switch (lockerroom.rollback), so
+    rolling back needs no free disk space.
+  * State is journaled before every step and `recover` runs on every boot,
+    ahead of the listener, so a power cut at any point lands on a complete,
+    verified package.
+  * Scripts and units are synced only AFTER the listener trial commits. The
+    listener and the repair hatch that would rescue it never change in the
+    same step. lockerroom-listener.service itself and the bluealsa-aplay
+    drop-in are never touched from here.
+
+Standard library only, and run by the SYSTEM python3: it must keep working
+when the listener's venv or code is the thing that is broken.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import io
+import json
+import os
+import pwd
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+E = os.environ.get
+
+# Every path is overridable ONLY so the tests can drive this real script
+# against a throwaway directory. Nothing sets these in production: the
+# listener runs `sudo auxgoat-update request` as a fixed argv (sudo resets the
+# environment) and the systemd units carry no Environment=.
+ROOT = Path(E("AUXGOAT_ROOT", "/opt/lockerroom"))
+REPO = Path(E("AUXGOAT_REPO", str(ROOT / "repo")))
+RUN = Path(E("AUXGOAT_RUN", "/run/lockerroom"))
+ETC = Path(E("AUXGOAT_ETC", "/etc/lockerroom"))
+BIN_DIR = Path(E("AUXGOAT_BIN_DIR", "/usr/local/bin"))
+UNIT_DIR = Path(E("AUXGOAT_UNIT_DIR", "/etc/systemd/system"))
+UDEV_DIR = Path(E("AUXGOAT_UDEV_DIR", "/etc/udev/rules.d"))
+ASOUND = Path(E("AUXGOAT_ASOUND", "/proc/asound"))
+VENV_PY = E("AUXGOAT_VENV_PY", str(ROOT / "venv/bin/python"))
+SYS_PY = E("AUXGOAT_SYS_PY", "/usr/bin/python3")
+BOOT_ID_FILE = Path(E("AUXGOAT_BOOT_ID_FILE", "/proc/sys/kernel/random/boot_id"))
+SELF = E("AUXGOAT_SELF", "/usr/local/bin/auxgoat-update")
+
+PKG = ROOT / "lockerroom"
+RELEASES = ROOT / "releases"
+UPDATE = ROOT / "update"
+STATE = UPDATE / "state.json"
+RESULT = UPDATE / "last-result.json"
+LOGFILE = UPDATE / "update.log"
+ROLLBACK = ROOT / "lockerroom.rollback"
+LEGACY_DIR = ROOT / "lockerroom.legacy-dir"
+CABLE_RELEASE = ROOT / "RELEASE.json"
+LOCK = RUN / "update.lock"
+HEALTH = RUN / "health.json"
+RELAY_TARGET = RUN / "relay-target"
+
+LISTENER = "lockerroom-listener"
+APPLY_UNIT = "auxgoat-update-apply"
+VERIFY_UNIT = "auxgoat-update-verify.service"
+
+
+def _f(name: str, default: float) -> float:
+    try:
+        return float(E(name, "") or default)
+    except ValueError:
+        return default
+
+
+# Trial timing. Overridable so a test finishes in a second instead of minutes.
+POLL_S = _f("AUXGOAT_POLL_S", 5)
+STABLE_S = _f("AUXGOAT_STABLE_S", 90)          # one PID alive this long
+BEACON_GAP_S = _f("AUXGOAT_BEACON_GAP_S", 20)  # two good beacons this far apart
+NOBEACON_S = _f("AUXGOAT_NOBEACON_S", 150)     # network up this long, no beacon
+PROBE_EVERY_S = _f("AUXGOAT_PROBE_EVERY_S", 30)
+TRIAL_MAX_S = _f("AUXGOAT_TRIAL_MAX_S", 24 * 3600)
+TRIAL_MAX_BOOTS = int(_f("AUXGOAT_TRIAL_MAX_BOOTS", 3))
+SETTLE_S = _f("AUXGOAT_SETTLE_S", 20)
+REPAIR_WAIT_S = _f("AUXGOAT_REPAIR_WAIT_S", 300)
+IDLE_WAIT_S = _f("AUXGOAT_IDLE_WAIT_S", 900)
+IDLE_POLL_S = _f("AUXGOAT_IDLE_POLL_S", 30)
+LOCK_WAIT_S = _f("AUXGOAT_LOCK_WAIT_S", 300)
+MIN_FREE_MB = _f("AUXGOAT_MIN_FREE_MB", 50)
+ROLLBACK_CHECK_S = _f("AUXGOAT_ROLLBACK_CHECK_S", 30)
+APPLY_DELAY_S = int(_f("AUXGOAT_APPLY_DELAY_S", 20))
+# 0 = run until the trial ends. The tests bound it to observe "still on trial".
+VERIFY_MAX_LOOPS = int(_f("AUXGOAT_VERIFY_MAX_LOOPS", 0))
+KEEP_RELEASES = 3
+
+# The GitHub repo was renamed. The old URL keeps working by redirect, so this
+# is belt and braces - see maybe_switch_origin().
+ORIGIN_OLD_MARK = E("AUXGOAT_ORIGIN_OLD_MARK", "MMV17/locker-room-music")
+ORIGIN_NEW_URL = E("AUXGOAT_ORIGIN_NEW_URL", "ssh://git@ssh.github.com:443/MMV17/auxgoat.git")
+
+# What a release carries, as paths inside the repo.
+ARCHIVE_PATHS = ["pi/lockerroom", "pi/scripts", "pi/systemd", "pi/requirements.txt"]
+
+# Installed into /usr/local/bin after a release COMMITS. Deliberately a fixed
+# list: remote-repair.sh lives in the clone, and deploy/provision/serial-deploy
+# are laptop tools.
+SYNC_SCRIPTS = [
+    "keep-discoverable.sh", "btwatch.sh", "bt-scan.sh", "bt-forget.sh",
+    "report-full.sh", "audio-check.sh", "audio-route.sh", "run-repair.sh",
+    "auxgoat-clock.sh", "auxgoat-nightly-restart.sh", "auxgoat-update",
+]
+# Installed into /etc/systemd/system after a release COMMITS.
+#
+# NOT HERE, ON PURPOSE, AND A TEST HOLDS IT: lockerroom-listener.service (a bad
+# listener unit is a box nobody can reach, and it would take effect outside
+# any trial) and bluealsa-aplay-aux.conf (it is the audio path, and silence
+# cannot be detected from here).
+SYNC_UNITS = [
+    "bt-agent.service", "keep-discoverable.service",
+    "lockerroom-btwatch.service", "lockerroom-netwatch.service",
+    "lockerroom-audio-route.service",
+    "auxgoat-update-recover.service", "auxgoat-update-verify.service",
+    "auxgoat-clock.service",
+    "auxgoat-nightly-restart.service", "auxgoat-nightly-restart.timer",
+]
+# source name in the release -> path relative to the unit directory
+SYNC_DROPINS = {
+    "lockerroom-listener-auxgoat.conf": "lockerroom-listener.service.d/10-auxgoat.conf",
+}
+SYNC_UDEV = ["99-lockerroom-audio.rules"]
+ENABLE_UNITS = [
+    "auxgoat-update-recover.service", "auxgoat-update-verify.service",
+    "auxgoat-clock.service", "auxgoat-nightly-restart.timer",
+]
+# A changed file here means this unit has to be restarted to pick it up.
+RESTART_FOR = {
+    "keep-discoverable.sh": "keep-discoverable",
+    "keep-discoverable.service": "keep-discoverable",
+    "btwatch.sh": "lockerroom-btwatch",
+    "lockerroom-btwatch.service": "lockerroom-btwatch",
+    "bt-agent.service": "bt-agent",
+}
+
+HEX = re.compile(r"^[0-9a-f]{40}$")
+LOG: list[str] = []
+
+
+class Refuse(Exception):
+    """Preflight said no. Nothing on the box has been changed."""
+
+
+# --------------------------------------------------------------------------
+# small helpers
+# --------------------------------------------------------------------------
+
+def say(msg: str) -> None:
+    line = f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} {msg}"
+    LOG.append(line)
+    print(line, flush=True)
+    try:
+        UPDATE.mkdir(parents=True, exist_ok=True)
+        if LOGFILE.exists() and LOGFILE.stat().st_size > 512_000:
+            LOGFILE.write_bytes(LOGFILE.read_bytes()[-256_000:])
+        with open(LOGFILE, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass  # a full disk must not stop a rollback from being attempted
+
+
+def crash_point(name: str) -> None:
+    """Fault injection: die here, as a power cut would. Tests only."""
+    if E("AUXGOAT_UPDATE_CRASH_AT") == name:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+def boottime() -> float:
+    # CLOCK_BOOTTIME, never the wall clock: this box has no RTC and its date
+    # can be wrong by months or be stepped under us.
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+def boot_id() -> str:
+    try:
+        return BOOT_ID_FILE.read_text().strip()
+    except OSError:
+        return "unknown"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def run(argv: list[str], timeout: float, cwd: Path | None = None,
+        env: dict | None = None) -> tuple[int, str]:
+    """Run an argv list. Never a shell, never raises, always bounded."""
+    try:
+        p = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env,
+            check=False,
+        )
+        return p.returncode, (p.stdout + p.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout:.0f}s"
+    except OSError as exc:
+        return 127, f"{type(exc).__name__}: {exc}"
+
+
+def fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    fsync_dir(path.parent)
+
+
+def write_json(path: Path, obj: dict) -> None:
+    write_atomic(path, (json.dumps(obj, indent=1, sort_keys=True) + "\n").encode())
+
+
+def read_json(path: Path) -> dict:
+    try:
+        obj = json.loads(path.read_text())
+        return obj if isinstance(obj, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_state() -> dict:
+    s = read_json(STATE)
+    s.setdefault("state", "idle")
+    return s
+
+
+def save_state(s: dict) -> None:
+    write_json(STATE, s)
+
+
+class Lock:
+    """flock on /run/lockerroom/update.lock, shared with run-repair.sh.
+
+    run-repair.sh holds it SHARED for its whole run; anything here that
+    changes which code is live holds it EXCLUSIVE. That is what makes "the
+    repair's integrity guard and the updater never overlap" a property rather
+    than a matter of timing.
+    """
+
+    def __init__(self) -> None:
+        self.fd: int | None = None
+
+    def acquire(self, wait_s: float = 0.0) -> bool:
+        RUN.mkdir(parents=True, exist_ok=True)
+        fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.fd = fd
+                return True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    return False
+                time.sleep(0.2)
+
+    def release(self) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+# --------------------------------------------------------------------------
+# releases
+# --------------------------------------------------------------------------
+
+def manifest(release: Path) -> str:
+    """sha256 of every file a release carries, as sorted `hash  path` lines.
+
+    Content, not mtime, and never bytecode: __pycache__ is written by whoever
+    imports the package and says nothing about what was installed.
+    """
+    lines = []
+    for p in sorted(release.rglob("*")):
+        rel = p.relative_to(release).as_posix()
+        if "__pycache__" in rel or rel.endswith(".pyc"):
+            continue
+        if rel in ("MANIFEST.sha256", "RELEASE.json", "FAILED") or rel.startswith("."):
+            continue
+        if p.is_symlink() or not p.is_file():
+            continue
+        lines.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {rel}")
+    return "\n".join(lines) + "\n"
+
+
+def release_ok(rid: str | None) -> bool:
+    """A release directory that is complete and byte-for-byte what was staged."""
+    if not rid:
+        return False
+    d = RELEASES / rid
+    try:
+        if not (d / "lockerroom" / "__init__.py").is_file():
+            return False
+        return (d / "MANIFEST.sha256").read_text() == manifest(d)
+    except OSError:
+        return False
+
+
+def release_meta(rid: str | None) -> dict:
+    return read_json(RELEASES / rid / "RELEASE.json") if rid else {}
+
+
+def live_release() -> str | None:
+    """The release id the live symlink resolves to, or None.
+
+    None covers a real directory (a cable deploy, or a box that has never been
+    updated over the air), a missing path and a dangling link alike.
+    """
+    if not PKG.is_symlink():
+        return None
+    try:
+        real = PKG.resolve(strict=True)
+    except OSError:
+        return None
+    if real.name == "lockerroom" and real.parent.parent == RELEASES.resolve():
+        return real.parent.name
+    return None
+
+
+def point(link: Path, rid: str) -> None:
+    """Make `link` a symlink to a release, by a single atomic rename."""
+    tmp = link.with_name(link.name + ".new")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    os.symlink(f"releases/{rid}/lockerroom", tmp)
+    os.replace(tmp, link)
+    fsync_dir(link.parent)
+
+
+def current_commit() -> str:
+    rid = live_release()
+    meta = release_meta(rid) if rid else read_json(CABLE_RELEASE)
+    commit = str(meta.get("commit", "unknown"))
+    return commit if HEX.match(commit) else "unknown"
+
+
+def short(commit: str | None) -> str:
+    return commit[:7] if commit and HEX.match(commit) else "unknown"
+
+
+# --------------------------------------------------------------------------
+# git - always as the clone's owner, always bounded
+# --------------------------------------------------------------------------
+
+def _git_argv(args: list[str]) -> list[str]:
+    argv = ["git", "-C", str(REPO), *args]
+    try:
+        st = REPO.stat()
+        # Root in somebody else's clone trips git's "dubious ownership" check,
+        # and the owner's SSH key is the one that can reach GitHub.
+        if os.geteuid() == 0 and st.st_uid != 0:
+            return ["runuser", "-u", pwd.getpwuid(st.st_uid).pw_name, "--", *argv]
+    except (OSError, KeyError):
+        pass
+    return argv
+
+
+def git(*args: str, timeout: float = 30) -> tuple[int, str]:
+    return run(_git_argv(list(args)), timeout)
+
+
+def git_bytes(*args: str, timeout: float = 60) -> bytes | None:
+    try:
+        p = subprocess.run(
+            _git_argv(list(args)), capture_output=True, timeout=timeout, check=False
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return p.stdout if p.returncode == 0 else None
+
+
+def upstream() -> tuple[str, str]:
+    """(remote, 'remote/branch') of the clone's OWN configured upstream.
+
+    This is the only thing that ever chooses a ref. Nothing arriving from the
+    server - not the command, not the beacon - names a branch, a URL or a path.
+    """
+    if not (REPO / ".git").exists():
+        raise Refuse(f"no git clone at {REPO} - this box needs a cable once to create it")
+    rc, up = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if rc != 0 or "/" not in up:
+        raise Refuse("the clone has no upstream branch configured")
+    return up.split("/", 1)[0], up
+
+
+def maybe_switch_origin(remote: str) -> None:
+    """Follow the GitHub repo rename. Must never fail the run."""
+    try:
+        if remote != "origin" or not ORIGIN_OLD_MARK:
+            return
+        rc, url = git("remote", "get-url", "origin", timeout=10)
+        if rc != 0 or ORIGIN_OLD_MARK not in url or url == ORIGIN_NEW_URL:
+            return
+        rc, _ = git("ls-remote", "--exit-code", ORIGIN_NEW_URL, "HEAD", timeout=15)
+        if rc == 0:
+            rc, _ = git("remote", "set-url", "origin", ORIGIN_NEW_URL, timeout=10)
+            if rc == 0:
+                say(f"origin switched to {ORIGIN_NEW_URL}")
+    except Exception as exc:  # noqa: BLE001 - belt and braces must not hurt
+        say(f"(origin check skipped: {exc})")
+
+
+def content_id(commit: str) -> str:
+    """One hash for everything a release would carry at `commit`."""
+    rc, out = git("rev-parse", *[f"{commit}:{p}" for p in ARCHIVE_PATHS])
+    if rc != 0:
+        raise Refuse(f"{short(commit)} does not contain {' + '.join(ARCHIVE_PATHS)}")
+    return hashlib.sha256(out.encode()).hexdigest()
+
+
+def check_target(commit: str, up: str) -> dict:
+    """Everything that must hold before `commit` may be staged. Read-only."""
+    if not HEX.match(commit):
+        raise Refuse("the target is not a full commit id")
+    rc, _ = git("cat-file", "-e", f"{commit}^{{commit}}")
+    if rc != 0:
+        raise Refuse(f"commit {short(commit)} is not in the clone")
+    rc, _ = git("merge-base", "--is-ancestor", commit, up)
+    if rc != 0:
+        raise Refuse(f"commit {short(commit)} is not on {up}")
+
+    cur = current_commit()
+    cid = content_id(commit)
+    rid = live_release()
+    if rid and release_meta(rid).get("content") == cid:
+        raise Refuse(f"already up to date ({short(cur)})")
+
+    # ANTI-ROLLBACK. A force-pushed branch, or an older commit, must never
+    # install: the box only ever moves forward along its own history.
+    if cur != "unknown":
+        rc, _ = git("cat-file", "-e", f"{cur}^{{commit}}")
+        if rc != 0:
+            raise Refuse(
+                f"the installed commit {short(cur)} is not in the clone, so "
+                "history cannot be checked - refusing rather than guessing"
+            )
+        rc, _ = git("merge-base", "--is-ancestor", cur, commit)
+        if rc != 0:
+            raise Refuse(
+                f"{short(commit)} is not a descendant of the installed "
+                f"{short(cur)} - refusing to go backwards or sideways"
+            )
+
+    for d in RELEASES.glob("*/FAILED") if RELEASES.is_dir() else []:
+        if release_meta(d.parent.name).get("commit") == commit:
+            raise Refuse(
+                f"{short(commit)} was already tried and rolled back "
+                f"({d.read_text().strip()[:120]}) - push a new commit"
+            )
+
+    signers = ETC / "allowed_signers"
+    if signers.exists():
+        rc, out = git(
+            "-c", "gpg.format=ssh", "-c", f"gpg.ssh.allowedSignersFile={signers}",
+            "verify-commit", commit,
+        )
+        if rc != 0:
+            last = out.splitlines()[-1] if out else "no signature"
+            raise Refuse(f"commit {short(commit)} failed signature verification: {last[:160]}")
+        sig = "commit signature verified"
+    else:
+        sig = "commit signature not checked (no allowed_signers on this box)"
+    return {"from_commit": cur, "to_commit": commit, "content": cid, "signature": sig}
+
+
+# --------------------------------------------------------------------------
+# is anybody listening to music right now?
+# --------------------------------------------------------------------------
+
+def pcm_running() -> bool:
+    for status in ASOUND.glob("card*/pcm*p/sub*/status"):
+        try:
+            if "state: RUNNING" in status.read_text():
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def fresh_health() -> dict | None:
+    """The listener's own marker, if it is from this boot and still alive."""
+    h = read_json(HEALTH)
+    try:
+        if h.get("boot_id") != boot_id():
+            return None
+        if boottime() - float(h.get("loop_boottime", 0)) > 120:
+            return None
+        os.kill(int(h["pid"]), 0)
+    except (KeyError, TypeError, ValueError, OSError):
+        return None
+    return h
+
+
+def room_busy() -> str | None:
+    """Why now is a bad moment to restart the listener, or None."""
+    h = fresh_health()
+    if h is not None and h.get("open_play"):
+        return "a song is playing"
+    if pcm_running():
+        return "audio is playing"
+    if h is None and RELAY_TARGET.exists():
+        # The pre-update listener exposes nothing, and with the Bluetooth
+        # relay active the audio never touches an ALSA card. A connected
+        # phone is the best evidence left.
+        try:
+            relay = RELAY_TARGET.read_text().strip().upper()
+        except OSError:
+            relay = ""
+        rc, out = run(["timeout", "10", "bluetoothctl", "devices", "Connected"], 15)
+        if rc == 0:
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "Device" and parts[1].upper() != relay:
+                    return "a phone is connected while the relay speaker is in use"
+    return None
+
+
+# --------------------------------------------------------------------------
+# results
+# --------------------------------------------------------------------------
+
+def finish(outcome: str, reason: str, st: dict | None = None, ok: bool = False) -> None:
+    """Record how a run ended. The listener reports this on its next beacon."""
+    st = st or {}
+    log = (st.get("log", "") + "\n".join(LOG))[-48_000:]
+    result = {
+        "id": uuid.uuid4().hex,
+        "at": now_iso(),
+        "outcome": outcome,
+        "ok": ok,
+        "reason": reason,
+        "from_commit": st.get("from_commit", current_commit()),
+        "to_commit": st.get("to_commit"),
+        "from_release": st.get("from"),
+        "to_release": st.get("to"),
+        "signature": st.get("signature"),
+        "log": log,
+    }
+    try:
+        write_json(RESULT, result)
+    except OSError as exc:
+        print(f"could not write {RESULT}: {exc}", flush=True)
+    say(f"RESULT: {outcome} - {reason}")
+
+
+# --------------------------------------------------------------------------
+# consistency: used by apply, verify and recover alike
+# --------------------------------------------------------------------------
+
+def pkg_usable() -> bool:
+    try:
+        return (PKG / "__init__.py").is_file()
+    except OSError:
+        return False
+
+
+def ensure_consistent(st: dict) -> dict:
+    """Leave the live path pointing at a complete package, whatever happened.
+
+    Idempotent. Run under the lock at the start of every mutating command and
+    on every boot, so an interrupted run can never be built on.
+    """
+    if RELEASES.is_dir():
+        for junk in RELEASES.glob(".staging-*"):
+            shutil.rmtree(junk, ignore_errors=True)
+    for stray in (PKG.with_name(PKG.name + ".new"), ROLLBACK.with_name(ROLLBACK.name + ".new")):
+        if stray.is_symlink():
+            stray.unlink()
+
+    rid = live_release()
+    broken = (rid is not None and not release_ok(rid)) or (rid is None and not pkg_usable())
+    if broken:
+        say(f"the live package is missing or damaged (release {rid}) - repairing")
+        candidates = [st.get("from"), st.get("legacy"), st.get("current")]
+        try:
+            if ROLLBACK.is_symlink():
+                candidates.append(ROLLBACK.resolve().parent.name)
+        except OSError:
+            pass
+        if RELEASES.is_dir():
+            by_age = sorted(
+                (d for d in RELEASES.iterdir() if d.is_dir() and not d.name.startswith(".")),
+                key=lambda d: d.stat().st_mtime, reverse=True,
+            )
+            candidates += [d.name for d in by_age]
+        fixed = False
+        for cand in candidates:
+            if cand and cand != rid and release_ok(cand):
+                if PKG.is_dir() and not PKG.is_symlink():
+                    shutil.rmtree(PKG, ignore_errors=True)
+                point(PKG, cand)
+                say(f"live package now points at release {cand}")
+                fixed = True
+                break
+        if not fixed and LEGACY_DIR.is_dir() and not PKG.is_symlink() and not PKG.exists():
+            os.rename(LEGACY_DIR, PKG)
+            fsync_dir(ROOT)
+            say("live package restored from the pre-conversion directory")
+            fixed = True
+        if not fixed:
+            say("!! NO COMPLETE RELEASE TO FALL BACK TO. This box needs a cable.")
+        if st.get("state") in ("trial", "committing") and st.get("to") == rid:
+            finish("rolled-back", "the new release was damaged on disk", st)
+            st = {"state": "idle"}
+
+    state = st.get("state")
+    if state == "converting":
+        finish("failed", "interrupted before the switch - nothing was changed", st)
+        st = {"state": "idle"}
+    elif state == "trial" and live_release() != st.get("to"):
+        finish("rolled-back", "the live package no longer points at the release on trial "
+               "(restored by run-repair's guard, or replaced by a cable deploy)", st)
+        st = {"state": "idle"}
+    elif state == "committing":
+        st = commit_release(st)
+
+    if st.get("state") == "idle":
+        st["current"] = live_release()
+    save_state(st)
+    os.sync()
+    return st
+
+
+# --------------------------------------------------------------------------
+# request
+# --------------------------------------------------------------------------
+
+def cmd_request(args: argparse.Namespace) -> int:
+    lock = Lock()
+    try:
+        if not lock.acquire(0):
+            raise Refuse("an update is already being applied")
+        st = load_state()
+        if st.get("state") != "idle":
+            raise Refuse(f"an update is already in progress (state: {st.get('state')})")
+        remote, up = upstream()
+        maybe_switch_origin(remote)
+        rc, out = git("fetch", "--quiet", remote, timeout=20 if args.via_repair else 45)
+        if rc != 0:
+            raise Refuse(f"could not fetch from {remote}: {out.splitlines()[-1][:160] if out else rc}")
+        rc, commit = git("rev-parse", f"{up}^{{commit}}")
+        if rc != 0:
+            raise Refuse(f"could not resolve {up}")
+        info = check_target(commit, up)
+        lock.release()
+
+        run(["systemctl", "reset-failed", f"{APPLY_UNIT}.service", f"{APPLY_UNIT}.timer"], 15)
+        argv = [
+            "systemd-run", f"--unit={APPLY_UNIT}", "--collect",
+            f"--on-active={APPLY_DELAY_S}", "--timer-property=AccuracySec=1s",
+            SELF, "apply", "--commit", commit,
+        ]
+        if args.via_repair:
+            argv.append("--wait-for-repair")
+        rc, out = run(argv, 30)
+        if rc != 0:
+            raise Refuse(f"could not schedule the update: {out[:200]}")
+    except Refuse as exc:
+        lock.release()
+        msg = str(exc)
+        if msg.startswith("already up to date"):
+            print(msg)
+            return 0
+        print(f"refused: {msg}")
+        return 1
+    print(f"scheduled {short(info['from_commit'])} -> {short(info['to_commit'])} "
+          f"({info['signature']}). The speaker restarts its software in about "
+          "half a minute; the outcome appears here when it is back.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# apply
+# --------------------------------------------------------------------------
+
+def wait_for_repair() -> None:
+    """Let the run-repair that scheduled us finish and report.
+
+    The installed run-repair.sh on a box that has never been updated does not
+    take the lock, and its integrity guard restores the package if it sees it
+    change. So the first update waits for it by name, then a little longer so
+    the repair's own report reaches the server before the listener restarts.
+    """
+    deadline = time.monotonic() + REPAIR_WAIT_S
+    while time.monotonic() < deadline:
+        rc, _ = run(["pgrep", "-f", "run-repair.sh"], 10)
+        if rc != 0:
+            break
+        time.sleep(min(2.0, max(0.05, SETTLE_S / 10)))
+    time.sleep(SETTLE_S)
+
+
+def extract(tar_bytes: bytes, dest: Path) -> None:
+    """Unpack a `git archive` into `dest`, trusting nothing about it."""
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tar:
+        for m in tar.getmembers():
+            name = m.name
+            if not name.startswith("pi/"):
+                continue
+            rel = Path(name[3:])
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                raise Refuse(f"unsafe path in the archive: {name}")
+            out = dest / rel
+            if m.isdir():
+                out.mkdir(parents=True, exist_ok=True)
+                os.chmod(out, 0o755)
+            elif m.isreg():
+                out.parent.mkdir(parents=True, exist_ok=True)
+                src = tar.extractfile(m)
+                data = src.read() if src else b""
+                with open(out, "wb") as f:
+                    f.write(data)
+                os.chmod(out, 0o755 if m.mode & 0o111 else 0o644)
+            # symlinks, devices and anything else are simply not installed
+
+
+def gate(name: str, argv: list[str], staging: Path, timeout: float = 90) -> str:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(staging)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    rc, out = run(argv, timeout, cwd=staging, env=env)
+    if rc != 0:
+        tail = " | ".join(out.splitlines()[-4:])[:400]
+        raise Refuse(f"gate '{name}' failed: {tail or 'exit ' + str(rc)}")
+    say(f"gate ok: {name}")
+    return out
+
+
+IMPORT_ALL = (
+    "import importlib, pkgutil, lockerroom\n"
+    "for m in pkgutil.iter_modules(lockerroom.__path__):\n"
+    "    importlib.import_module('lockerroom.' + m.name)\n"
+)
+
+
+def run_gates(staging: Path) -> None:
+    """Prove the staged code can start, before it is anywhere near live."""
+    gate("every module imports under the listener's python", [VENV_PY, "-c", IMPORT_ALL], staging)
+    gate("netwatch imports under the system python",
+         [SYS_PY, "-c", "import lockerroom.netwatch, lockerroom.endpoints"], staging)
+    gate("selftest", [VENV_PY, "-m", "lockerroom.selftest"], staging)
+
+    req = staging / "requirements.txt"
+    rc, out = run([VENV_PY, "-m", "pip", "install", "--no-index", "--dry-run",
+                   "--quiet", "--disable-pip-version-check", "-r", str(req)], 120, cwd=staging)
+    if rc == 0:
+        say("gate ok: requirements are satisfied by what is installed")
+    elif "No module named pip" in out or "no such option" in out:
+        # Fail closed only when pip actually says a requirement is unmet. A
+        # venv whose pip cannot answer has still passed the import and
+        # selftest gates above, which is what the requirement gate protects.
+        say("gate skipped: this venv's pip cannot check requirements offline")
+    else:
+        tail = " | ".join(out.splitlines()[-3:])[:300]
+        raise Refuse(f"gate 'requirements' failed - the box's python packages do not "
+                     f"satisfy requirements.txt and it will not install over the air: {tail}")
+
+    for script in sorted((staging / "scripts").glob("*.sh")):
+        gate(f"bash -n {script.name}", ["bash", "-n", str(script)], staging, 20)
+    own = staging / "scripts" / "auxgoat-update"
+    if own.exists():
+        gate("the next updater compiles", [SYS_PY, "-c",
+             "import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')", str(own)],
+             staging, 20)
+    # Bytecode last, with the interpreter that will run it.
+    run([VENV_PY, "-m", "compileall", "-q", str(staging / "lockerroom")], 120, cwd=staging)
+
+
+def probe_urls(release: Path) -> list[str]:
+    """Which hosts `verify` asks when it needs to know if the network is up."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(release)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    code = ("import json; from lockerroom import endpoints; "
+            "print(json.dumps(endpoints.configured_urls()))")
+    rc, out = run([SYS_PY, "-c", code], 30, cwd=release, env=env)
+    try:
+        urls = json.loads(out.splitlines()[-1]) if rc == 0 else []
+    except (ValueError, IndexError):
+        urls = []
+    urls = [u for u in urls if isinstance(u, str) and u.startswith("https://")]
+    if not urls:
+        # A release that cannot say falls back to the one host the box is
+        # configured with, so "is the network up?" always has someone to ask.
+        try:
+            import tomllib
+            with open(ETC / "config.toml", "rb") as f:
+                base = str(tomllib.load(f).get("api_base_url", "")).rstrip("/")
+            if base.startswith("https://"):
+                urls = [base]
+        except (OSError, ValueError, ImportError):
+            pass
+    return urls
+
+
+def convert_legacy(st: dict) -> str:
+    """Turn the real package directory into a release, once.
+
+    The only step that is two renames rather than one. `recover` covers the
+    gap between them: the pre-conversion directory is moved back.
+    """
+    n = 0
+    while (RELEASES / f"legacy-{n}").exists():
+        n += 1
+    rid = f"legacy-{n}"
+    tmp = RELEASES / f".staging-{rid}"
+    shutil.copytree(PKG, tmp / "lockerroom", symlinks=True)
+    cable = read_json(CABLE_RELEASE)
+    commit = cable.get("commit") if HEX.match(str(cable.get("commit", ""))) else "unknown"
+    write_json(tmp / "RELEASE.json", {
+        "release_id": rid, "commit": commit, "content": None,
+        "installed_at": cable.get("installed_at"), "source": "pre-update",
+    })
+    (tmp / "MANIFEST.sha256").write_text(manifest(tmp))
+    os.sync()
+    os.rename(tmp, RELEASES / rid)
+    fsync_dir(RELEASES)
+    if not release_ok(rid):
+        raise Refuse("could not make a faithful copy of the installed code")
+
+    st.update(state="converting", legacy=rid)
+    save_state(st)
+    crash_point("converting-journaled")
+    if LEGACY_DIR.exists():
+        shutil.rmtree(LEGACY_DIR)
+    os.rename(PKG, LEGACY_DIR)
+    crash_point("legacy-moved")
+    point(PKG, rid)
+    os.sync()
+    crash_point("converted")
+    st.update(state="idle", legacy=None, current=rid)
+    save_state(st)
+    say(f"the installed code is now release {rid} (commit {short(commit)})")
+    return rid
+
+
+def listener_show() -> dict:
+    _, out = run(["systemctl", "show", LISTENER, "-p", "ActiveState",
+                  "-p", "NRestarts", "-p", "MainPID"], 20)
+    d = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    try:
+        d["NRestarts"] = int(d.get("NRestarts", 0))
+        d["MainPID"] = int(d.get("MainPID", 0))
+    except ValueError:
+        d["NRestarts"], d["MainPID"] = 0, 0
+    return d
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    if args.wait_for_repair:
+        wait_for_repair()
+    lock = Lock()
+    if not lock.acquire(LOCK_WAIT_S if args.wait_for_repair else 0):
+        print("refused: an update is already in progress")
+        return 1
+    st: dict = {}
+    staging: Path | None = None
+    try:
+        st = ensure_consistent(load_state())
+        if st.get("state") != "idle":
+            raise Refuse(f"an update is already in progress (state: {st.get('state')})")
+        say(f"apply {args.commit}")
+        _, up = upstream()
+        info = check_target(args.commit, up)
+        st.update(info)
+        say(info["signature"])
+
+        free = shutil.disk_usage(ROOT).free / 1e6
+        if free < MIN_FREE_MB:
+            raise Refuse(f"only {free:.0f} MB free under {ROOT} (need {MIN_FREE_MB:.0f})")
+
+        deadline = time.monotonic() + IDLE_WAIT_S
+        while (busy := room_busy()) is not None:
+            if time.monotonic() >= deadline:
+                finish("deferred", f"{busy} - not interrupting it. Press update again "
+                       "when the music has stopped.", st)
+                return 1
+            time.sleep(IDLE_POLL_S)
+        crash_point("after-preflight")
+
+        # ---- stage ----
+        RELEASES.mkdir(parents=True, exist_ok=True)
+        n = 0
+        while (RELEASES / f"{args.commit[:12]}-{n}").exists():
+            n += 1
+        rid = f"{args.commit[:12]}-{n}"
+        staging = RELEASES / f".staging-{rid}"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        tar_bytes = git_bytes("archive", "--format=tar", args.commit, *ARCHIVE_PATHS)
+        if tar_bytes is None:
+            raise Refuse("git archive failed")
+        extract(tar_bytes, staging)
+        crash_point("staged-files")
+        run_gates(staging)
+        crash_point("gates-passed")
+        urls = probe_urls(staging)
+        write_json(staging / "RELEASE.json", {
+            "release_id": rid, "commit": args.commit, "content": info["content"],
+            "installed_at": now_iso(), "source": "over-the-air",
+        })
+        (staging / "MANIFEST.sha256").write_text(manifest(staging))
+        os.sync()
+        os.rename(staging, RELEASES / rid)
+        fsync_dir(RELEASES)
+        staging = None
+        crash_point("release-renamed")
+        if not release_ok(rid):
+            raise Refuse("the staged release did not verify after it was written")
+
+        # ---- make sure there is a verified way back ----
+        frm = live_release()
+        if frm is None:
+            frm = convert_legacy(st)
+        if not release_ok(frm):
+            raise Refuse(f"the installed release {frm} does not verify - not building on it")
+        point(ROLLBACK, frm)
+        crash_point("rollback-link")
+
+        # ---- journal, then switch ----
+        st.update(
+            state="trial", to=rid, legacy=None, boot_id=boot_id(), trial_boots=0,
+            trial_uptime_s=0.0, probe_urls=urls, flip_boottime=boottime(),
+            baseline_restarts=None, log="\n".join(LOG) + "\n",
+        )
+        st["from"] = frm
+        save_state(st)
+        os.sync()
+        crash_point("trial-journaled")
+        point(PKG, rid)
+        os.sync()
+        crash_point("flipped")
+        say(f"switched {frm} -> {rid}; restarting the listener")
+        rc, out = run(["systemctl", "restart", LISTENER], 90)
+        if rc != 0:
+            say(f"restart returned {rc}: {out[:200]}")
+        st["baseline_restarts"] = listener_show()["NRestarts"]
+        st["log"] = "\n".join(LOG) + "\n"
+        save_state(st)
+        crash_point("listener-restarted")
+        run(["systemctl", "start", "--no-block", VERIFY_UNIT], 30)
+        return 0
+    except Refuse as exc:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+        if str(exc).startswith("already up to date"):
+            say(str(exc))
+            return 0
+        finish("refused", str(exc), st)
+        return 1
+    finally:
+        lock.release()
+
+
+# --------------------------------------------------------------------------
+# verify: commit or roll back
+# --------------------------------------------------------------------------
+
+def install_file(src: Path, dest: Path, mode: int, check: list[str] | None) -> str:
+    """Install one file by rename, keeping the old one as .prev.
+
+    Returns "same", "installed" or "skipped: why". Never overwrites in place:
+    bash reads a running script incrementally, so rewriting one that is
+    executing corrupts it mid-run. A rename gives the running copy its old
+    inode to finish on.
+    """
+    data = src.read_bytes()
+    try:
+        if dest.read_bytes() == data:
+            return "same"
+    except OSError:
+        pass
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if check:
+        rc, out = run([*check, str(src)], 60)
+        if rc != 0:
+            return f"skipped: {' '.join(check[:2])} rejected it ({out.splitlines()[-1][:120] if out else rc})"
+    if dest.exists():
+        shutil.copy2(dest, dest.with_name(dest.name + ".prev"))
+    write_atomic(dest, data, mode)
+    return "installed"
+
+
+def sync_scripts_and_units(release: Path) -> None:
+    """Bring /usr/local/bin and the units up to the committed release.
+
+    Only ever after the listener trial has committed, so the listener and the
+    scripts that would rescue it never change in the same step. Idempotent:
+    identical files are left alone, so re-running after a power cut is safe.
+    """
+    changed: list[str] = []
+    have_analyze = shutil.which("systemd-analyze") is not None
+    unit_check = (["systemd-analyze", "verify", "--recursive-errors=no"]
+                  if have_analyze else None)
+
+    def one(src: Path, dest: Path, mode: int, check: list[str] | None) -> None:
+        if not src.is_file():
+            return
+        try:
+            verdict = install_file(src, dest, mode, check)
+        except OSError as exc:
+            verdict = f"skipped: {exc}"
+        if verdict != "same":
+            say(f"  {dest}: {verdict}")
+        if verdict == "installed":
+            changed.append(src.name)
+
+    for name in SYNC_SCRIPTS:
+        check = ["bash", "-n"] if name.endswith(".sh") else None
+        one(release / "scripts" / name, BIN_DIR / name, 0o755, check)
+    for name in SYNC_UNITS:
+        one(release / "systemd" / name, UNIT_DIR / name, 0o644, unit_check)
+    for name, rel in SYNC_DROPINS.items():
+        one(release / "systemd" / name, UNIT_DIR / rel, 0o644, None)
+    for name in SYNC_UDEV:
+        one(release / "systemd" / name, UDEV_DIR / name, 0o644, None)
+
+    run(["systemctl", "daemon-reload"], 60)
+    if any(n in SYNC_UDEV for n in changed):
+        run(["udevadm", "control", "--reload-rules"], 30)
+    for unit in ENABLE_UNITS:
+        if (UNIT_DIR / unit).exists():
+            run(["systemctl", "enable", unit], 30)
+    if (UNIT_DIR / "auxgoat-nightly-restart.timer").exists():
+        run(["systemctl", "start", "--no-block", "auxgoat-nightly-restart.timer"], 30)
+    for unit in sorted({RESTART_FOR[n] for n in changed if n in RESTART_FOR}):
+        run(["systemctl", "try-restart", "--no-block", unit], 30)
+    # netwatch imports the package, so it is running the OLD code until now.
+    run(["systemctl", "try-restart", "--no-block", "lockerroom-netwatch"], 30)
+
+
+def prune(keep: set[str | None]) -> None:
+    """Drop old releases. Never the live one, never the way back."""
+    if LEGACY_DIR.exists():
+        shutil.rmtree(LEGACY_DIR, ignore_errors=True)
+    if not RELEASES.is_dir():
+        return
+    keep_ids = {k for k in keep if k}
+    spare = KEEP_RELEASES - len(keep_ids)
+    dirs = sorted(
+        (d for d in RELEASES.iterdir() if d.is_dir() and not d.name.startswith(".")),
+        key=lambda d: d.stat().st_mtime, reverse=True,
+    )
+    for d in dirs:
+        if d.name in keep_ids:
+            continue
+        if spare > 0:
+            spare -= 1
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def commit_release(st: dict) -> dict:
+    """The trial passed. Also re-entered by `recover` if a power cut split it."""
+    to = st.get("to")
+    st["state"] = "committing"
+    st["log"] = (st.get("log", "") + "\n".join(LOG) + "\n")[-32_000:]
+    LOG.clear()
+    save_state(st)
+    crash_point("commit-journaled")
+    say(f"release {to} is healthy - committing")
+    sync_scripts_and_units(RELEASES / str(to))
+    crash_point("synced")
+    prune({to, st.get("from")})
+    finish("committed", f"now running {short(st.get('to_commit'))}", st, ok=True)
+    new = {"state": "idle", "current": to}
+    save_state(new)
+    return new
+
+
+def roll_back(st: dict, reason: str, restart: bool = True) -> dict:
+    frm, to = st.get("from"), st.get("to")
+    say(f"ROLLING BACK {to} -> {frm}: {reason}")
+    crash_point("pre-rollback")
+    if live_release() == to:
+        if ROLLBACK.is_symlink() and release_ok(frm):
+            # One rename, and no allocation: this works on a full disk.
+            os.replace(ROLLBACK, PKG)
+            fsync_dir(ROOT)
+        elif release_ok(frm):
+            point(PKG, str(frm))
+        else:
+            say("!! the previous release does not verify - leaving the new one in place")
+    os.sync()
+    crash_point("rolled-back-link")
+    health = "not restarted"
+    if restart:
+        run(["systemctl", "restart", LISTENER], 90)
+        base = listener_show()["NRestarts"]
+        time.sleep(ROLLBACK_CHECK_S)
+        show = listener_show()
+        steady = show.get("ActiveState") == "active" and show["NRestarts"] == base
+        health = ("the previous version is running again" if steady else
+                  "!! THE PREVIOUS VERSION IS NOT RUNNING CLEANLY EITHER - this box needs a cable")
+        say(health)
+    try:
+        (RELEASES / str(to) / "FAILED").write_text(reason + "\n")
+    except OSError:
+        pass
+    finish("rolled-back", f"{reason}; {health}", st)
+    new = {"state": "idle", "current": live_release()}
+    save_state(new)
+    os.sync()
+    return new
+
+
+def network_up(urls: list[str]) -> bool:
+    """Can THIS process reach any of our hosts? Any HTTP answer at all counts.
+
+    This is the question that separates "the new code cannot beacon" from "the
+    campus wifi is down": if we can reach the Worker and the listener cannot,
+    the listener is what is broken.
+    """
+    for url in urls:
+        rc, _ = run(["curl", "-s", "-o", "/dev/null", "--max-time", "10", url + "/api/health"], 20)
+        if rc == 0:
+            return True
+    return False
+
+
+def marker_proves_health(st: dict, show: dict) -> bool:
+    h = read_json(HEALTH)
+    try:
+        if h.get("release_id") != st.get("to") or h.get("boot_id") != boot_id():
+            return False
+        if int(h.get("pid", -1)) != show["MainPID"] or show["MainPID"] <= 0:
+            return False
+        first, last = float(h["first_good_boottime"]), float(h["last_good_boottime"])
+        if st.get("boot_id") == boot_id() and first <= float(st.get("flip_boottime", 0)):
+            return False
+        if int(h.get("good_beacons", 0)) < 2 or last - first < BEACON_GAP_S:
+            return False
+        return boottime() - float(h.get("loop_boottime", 0)) < max(60.0, 4 * BEACON_GAP_S)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def with_lock(fn, st: dict, *a, **kw) -> dict:
+    lock = Lock()
+    got = lock.acquire(LOCK_WAIT_S)
+    if not got:
+        # A rollback must not wait forever on a hung repair holding the lock.
+        say("(could not take the update lock in time - proceeding)")
+    try:
+        return fn(st, *a, **kw)
+    finally:
+        lock.release()
+
+
+def cmd_verify(_args: argparse.Namespace) -> int:
+    st = load_state()
+    if st.get("state") != "trial":
+        return 0
+    say(f"verify: release {st.get('to')} is on trial")
+    urls = st.get("probe_urls") or []
+    seg_start = boottime()
+    pid, pid_since = 0, seg_start
+    net_since: float | None = None
+    last_probe = -1e9
+    last_checkpoint = seg_start
+    loops = 0
+
+    while True:
+        loops += 1
+        st = load_state()
+        if st.get("state") != "trial":
+            return 0
+        now = boottime()
+
+        if live_release() != st.get("to"):
+            with_lock(lambda s: ensure_consistent(s), st)
+            return 1
+
+        show = listener_show()
+        if st.get("baseline_restarts") is None:
+            st["baseline_restarts"] = show["NRestarts"]
+            save_state(st)
+        if show["MainPID"] != pid:
+            pid, pid_since = show["MainPID"], now
+
+        crashes = show["NRestarts"] - int(st["baseline_restarts"])
+        if show.get("ActiveState") == "failed" or crashes >= 2:
+            with_lock(roll_back, st, f"the new listener crashed {crashes} times on start")
+            return 1
+
+        if marker_proves_health(st, show) and now - pid_since >= STABLE_S:
+            with_lock(commit_release, st)
+            return 0
+
+        if now - last_probe >= PROBE_EVERY_S:
+            last_probe = now
+            if network_up(urls):
+                net_since = net_since if net_since is not None else now
+            else:
+                net_since = None
+        if net_since is not None and now - net_since >= NOBEACON_S and now - seg_start >= NOBEACON_S:
+            with_lock(roll_back, st, "the new listener ran but never reported in, "
+                      "while the network was up")
+            return 1
+
+        uptime = float(st.get("trial_uptime_s", 0.0)) + (now - last_checkpoint)
+        if uptime >= TRIAL_MAX_S:
+            with_lock(roll_back, st, "the new release could not be confirmed within the trial "
+                      "limit (no network for the whole of it)")
+            return 1
+        if now - last_checkpoint >= 300:
+            st["trial_uptime_s"] = uptime
+            last_checkpoint = now
+            save_state(st)
+
+        if VERIFY_MAX_LOOPS and loops >= VERIFY_MAX_LOOPS:
+            return 3
+        time.sleep(POLL_S)
+
+
+# --------------------------------------------------------------------------
+# recover (boot), status, adopt
+# --------------------------------------------------------------------------
+
+def cmd_recover(_args: argparse.Namespace) -> int:
+    """Runs on every boot, before the listener. Must never block or fail it."""
+    lock = Lock()
+    lock.acquire(5)
+    try:
+        st = ensure_consistent(load_state())
+        if st.get("state") == "trial" and st.get("boot_id") != boot_id():
+            st["trial_boots"] = int(st.get("trial_boots", 0)) + 1
+            st["boot_id"] = boot_id()
+            st["baseline_restarts"] = None
+            if st["trial_boots"] >= TRIAL_MAX_BOOTS:
+                # Rebooting this often during a trial is itself evidence. The
+                # listener has not started yet, so there is nothing to restart.
+                roll_back(st, f"the box rebooted {st['trial_boots']} times with the new "
+                          "release still unconfirmed", restart=False)
+            else:
+                say(f"boot {st['trial_boots']} of a trial - leaving the new release in place")
+                save_state(st)
+    except Exception as exc:  # noqa: BLE001 - the boot must go on regardless
+        print(f"recover: {type(exc).__name__}: {exc}", flush=True)
+    finally:
+        lock.release()
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    st = load_state()
+    rid = live_release()
+    meta = release_meta(rid) if rid else read_json(CABLE_RELEASE)
+    fields = {
+        "state": st.get("state", "idle"),
+        "release": rid or "(not a release - installed by cable)",
+        "commit": current_commit(),
+        "installed_at": meta.get("installed_at") or "unknown",
+    }
+    if args.field:
+        print(fields.get(args.field, ""))
+        return 0
+    for k, v in fields.items():
+        print(f"{k + ':':14}{v}")
+    try:
+        rb = ROLLBACK.resolve().parent.name if ROLLBACK.is_symlink() else "(none)"
+    except OSError:
+        rb = "(none)"
+    print(f"{'rollback to:':14}{rb}")
+    if st.get("state") == "trial":
+        print(f"{'on trial:':14}{st.get('to')} (boots: {st.get('trial_boots', 0)})")
+    if RELEASES.is_dir():
+        names = sorted(d.name for d in RELEASES.iterdir() if d.is_dir())
+        print(f"{'releases:':14}{' '.join(names) or '(none)'}")
+    last = read_json(RESULT)
+    if last:
+        print(f"{'last update:':14}{last.get('outcome')} at {last.get('at')} - "
+              f"{short(last.get('from_commit'))} -> {short(last.get('to_commit'))}")
+        print(f"{'':14}{last.get('reason')}")
+    else:
+        print(f"{'last update:':14}(none recorded)")
+    return 0
+
+
+def cmd_adopt(args: argparse.Namespace) -> int:
+    """A cable or serial deploy is replacing the code by hand.
+
+    --materialise (BEFORE writing files): if the live package is a release
+    symlink, turn it back into a plain directory, so files are not written
+    into an immutable release that `recover` would then judge damaged and
+    revert on the next boot.
+
+    Without it (AFTER): record what was installed, and stand down any trial.
+    """
+    lock = Lock()
+    if not lock.acquire(30):
+        print("an update is being applied - try again in a minute")
+        return 1
+    try:
+        st = load_state()
+        if args.materialise and PKG.is_symlink():
+            real = PKG.resolve(strict=True)
+            tmp = ROOT / "lockerroom.adopt"
+            if tmp.exists():
+                shutil.rmtree(tmp)
+            shutil.copytree(real, tmp, symlinks=True)
+            os.sync()
+            PKG.unlink()
+            os.rename(tmp, PKG)
+            fsync_dir(ROOT)
+            print("the live package is a plain directory again")
+        if st.get("state") != "idle":
+            print(f"standing down an update that was in state {st.get('state')}")
+        if ROLLBACK.is_symlink():
+            ROLLBACK.unlink()
+        if not args.materialise or args.commit:
+            commit = args.commit if args.commit and HEX.match(args.commit) else "unknown"
+            write_json(CABLE_RELEASE, {
+                "release_id": None, "commit": commit,
+                "installed_at": now_iso(), "source": "cable",
+            })
+            print(f"recorded a cable install of {short(commit)}")
+        save_state({"state": "idle", "current": live_release()})
+        os.sync()
+    finally:
+        lock.release()
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    os.umask(0o022)
+    ap = argparse.ArgumentParser(prog="auxgoat-update", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("request")
+    p.add_argument("--via-repair", action="store_true")
+    p.set_defaults(fn=cmd_request)
+    p = sub.add_parser("apply")
+    p.add_argument("--commit", required=True)
+    p.add_argument("--wait-for-repair", action="store_true")
+    p.set_defaults(fn=cmd_apply)
+    sub.add_parser("verify").set_defaults(fn=cmd_verify)
+    sub.add_parser("recover").set_defaults(fn=cmd_recover)
+    p = sub.add_parser("status")
+    p.add_argument("--field", choices=["state", "release", "commit", "installed_at"])
+    p.set_defaults(fn=cmd_status)
+    p = sub.add_parser("adopt")
+    p.add_argument("--commit")
+    p.add_argument("--materialise", action="store_true")
+    p.set_defaults(fn=cmd_adopt)
+    args = ap.parse_args(argv)
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

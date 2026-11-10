@@ -1,0 +1,22 @@
+# Tooling config for the speaker code. Not a package: nothing is built or
+# installed from here. The box runs pi/lockerroom straight off disk.
+
+[tool.pytest.ini_options]
+# So `import lockerroom` resolves when pytest is run from pi/, without every
+# test file editing sys.path for itself.
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# The updater has no .py extension (it installs as /usr/local/bin/auxgoat-update)
+# and CI's shellcheck glob is pi/scripts/*.sh, so without this nothing lints it.
+extend-include = ["scripts/auxgoat-update"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+# E501: the comments here are prose and are wrapped by hand.
+# E741: `l` for a line is used throughout the older tests.
+ignore = ["E501", "E741"]
