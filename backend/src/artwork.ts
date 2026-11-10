@@ -2,6 +2,13 @@ import type { Env } from "./types";
 import { normalize } from "./trackKey";
 
 /**
+ * Every provider fetch gives up after this long. A hung Deezer or MusicBrainz
+ * connection used to hold a whole cron invocation until it was killed, and the
+ * heal cursor (artworkHeal.ts) never moved past the batch.
+ */
+export const PROVIDER_TIMEOUT_MS = 5_000;
+
+/**
  * Artwork lookup (spec 6.4). Looked up once per track, cached on the track
  * row, never repeated (the hourly heal in artworkHeal.ts retries misses).
  *
@@ -184,7 +191,9 @@ async function deezerSearch(
     // so cacheEverything + a day's cacheTtl stored a refusal as if it were an
     // answer and replayed it to every retry of that exact query for 24 hours.
     // Each track is looked up once anyway, so the cache was saving nothing.
-    const res = await fetch("https://api.deezer.com/search?limit=25&q=" + encodeURIComponent(q));
+    const res = await fetch("https://api.deezer.com/search?limit=25&q=" + encodeURIComponent(q), {
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
     if (!res.ok) {
       why.push(`deezer: HTTP ${res.status}`);
       return null;
@@ -250,6 +259,7 @@ async function fromItunes(
     // No `cf` cache options, for the same reason as deezerSearch.
     const res = await fetch(
       "https://itunes.apple.com/search?entity=song&limit=10&term=" + encodeURIComponent(term),
+      { signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) },
     );
     if (!res.ok) {
       why.push(`itunes: HTTP ${res.status}`);
@@ -358,7 +368,7 @@ async function fromMusicBrainz(
     const q = `recording:"${t}" AND artist:"${a}"`;
     const res = await fetch(
       "https://musicbrainz.org/ws/2/recording?fmt=json&limit=10&query=" + encodeURIComponent(q),
-      { headers: MB_HEADERS },
+      { headers: MB_HEADERS, signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) },
     );
     if (!res.ok) {
       why.push(`musicbrainz: HTTP ${res.status}`);
@@ -375,7 +385,12 @@ async function fromMusicBrainz(
     // following the redirect: a 307 to archive.org means it exists, and a
     // stored URL that 404s would be a colour block the heal never retries.
     const cover = `https://coverartarchive.org/release-group/${groupId}/front-500`;
-    const head = await fetch(cover, { method: "HEAD", redirect: "manual", headers: MB_HEADERS });
+    const head = await fetch(cover, {
+      method: "HEAD",
+      redirect: "manual",
+      headers: MB_HEADERS,
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
     if (head.status >= 400) {
       why.push(`coverartarchive: HTTP ${head.status}`);
       return null;

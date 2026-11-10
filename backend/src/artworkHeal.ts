@@ -51,6 +51,14 @@ export function nextHealOffset(offset: number, batchLen: number, found: number):
   return Math.max(0, offset + batchLen - found);
 }
 
+/**
+ * The cursor after `done` tracks of a batch, `found` of which healed (and so
+ * left the set). The mid-batch counterpart of nextHealOffset.
+ */
+export function healCursorAfter(offset: number, done: number, found: number): number {
+  return Math.max(0, offset + done - found);
+}
+
 /** Whether this run should rest: a full pass finished less than an hour ago. */
 export function isResting(restUntil: string | null | undefined, now = Date.now()): boolean {
   const t = restUntil ? Date.parse(restUntil) : NaN;
@@ -75,14 +83,23 @@ export async function healArtwork(
     .bind(HEAL_BATCH, offset)
     .all<{ id: string; title: string; artist: string | null; album: string | null }>();
 
+  // The cursor advances after EVERY track, not once at the end. It used to be
+  // written only after all eight lookups; an invocation killed part-way (CPU
+  // or wall-clock limit, a hung provider) never wrote it, so the next run
+  // retried the same batch, died the same way, and the heal stalled forever.
+  // Each provider fetch is also bounded at 5s now (artwork.ts).
   let found = 0;
-  for (const t of results) {
+  for (let i = 0; i < results.length; i++) {
+    const t = results[i];
     try {
       const r = await lookupArtwork(env, t.id, t.title, t.artist ?? "", t.album);
       if (r.url) found++;
     } catch (e) {
       // One bad track must not stop the batch, or the cursor never moves.
       console.warn(`artwork heal: ${t.title} threw ${String(e)}`);
+    }
+    if (i < results.length - 1) {
+      await putSetting(env, CURSOR_KEY, String(healCursorAfter(offset, i + 1, found)));
     }
   }
 

@@ -14,6 +14,15 @@ import { parseScan, replaceDevices, getSelection, getForgetTarget } from "./spea
 import { parseReport, storeReport } from "./piReports";
 import { requireDeviceKey } from "./middleware";
 import { nowIso, uuid } from "./util";
+import {
+  HEARTBEAT_UPSERT_SQL,
+  HEARTBEAT_TOUCH_SQL,
+  KEEPALIVE_SQL,
+  heartbeatParams,
+  heartbeatTouchParams,
+  keepaliveParams,
+} from "./beacon";
+import type { AuxWrite, OutputWrite } from "./beacon";
 
 export const piRoutes = new Hono<AppEnv>();
 
@@ -116,6 +125,17 @@ piRoutes.post("/api/plays", requireDeviceKey, async (c) => {
   return c.json({ ok: true, play_id: body.play_id, track_id: track.id });
 });
 
+/**
+ * The Pi closing a play. COALESCE, so a field the Pi omits keeps its value -
+ * and a field it sends always wins, including over the values the orphan
+ * sweep (maintenance.ts) closed a forgotten play with.
+ */
+export const PLAY_PATCH_SQL = `UPDATE plays SET
+       ended_at = COALESCE(?, ended_at),
+       played_ms = COALESCE(?, played_ms),
+       counted = COALESCE(?, counted)
+     WHERE id = ?`;
+
 piRoutes.patch("/api/plays/:id", requireDeviceKey, async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<{
@@ -124,13 +144,7 @@ piRoutes.patch("/api/plays/:id", requireDeviceKey, async (c) => {
     counted?: boolean;
   }>();
 
-  const result = await c.env.DB.prepare(
-    `UPDATE plays SET
-       ended_at = COALESCE(?, ended_at),
-       played_ms = COALESCE(?, played_ms),
-       counted = COALESCE(?, counted)
-     WHERE id = ?`,
-  )
+  const result = await c.env.DB.prepare(PLAY_PATCH_SQL)
     .bind(
       body.ended_at ?? null,
       body.played_ms ?? null,
@@ -145,14 +159,6 @@ piRoutes.patch("/api/plays/:id", requireDeviceKey, async (c) => {
   return c.json({ ok: true });
 });
 
-const touchHeartbeat = (env: Env, speakerName: string) =>
-  env.DB.prepare(
-    `INSERT INTO heartbeats (speaker_name, last_seen_at) VALUES (?, ?)
-     ON CONFLICT(speaker_name) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
-  )
-    .bind(speakerName, nowIso())
-    .run();
-
 /** What the Pi reports about the aux. Raw MACs in, hashes only ever stored. */
 interface AuxReport {
   holder?: { mac?: string; alias?: string; free_in_ms?: number | null } | null;
@@ -160,43 +166,36 @@ interface AuxReport {
 }
 
 /**
- * Record who has the aux and who is waiting for it.
+ * Who has the aux and who is waiting for it, as the columns store it.
  *
  * MACs are hashed here and never stored raw, exactly as they are for a play —
  * same salt, so the hash joins straight to `devices` and therefore to a
  * person. That is what lets the site say "Mack has the aux" instead of naming
  * a phone at someone.
  *
- * Written on every beacon, including when nothing is connected: the site has
- * to be able to learn that the aux is FREE, and only a write can tell it that.
+ * Reported on every beacon, including when nothing is connected: the site has
+ * to be able to learn that the aux is FREE. Whether that costs a write is
+ * decided in beacon.ts - only when something changed.
  */
-async function recordAux(env: Env, speakerName: string, aux: AuxReport | undefined) {
-  if (!aux) return;
-  const holderHash = aux.holder?.mac
+async function auxColumns(env: Env, aux: AuxReport | undefined): Promise<AuxWrite | undefined> {
+  if (!aux || typeof aux !== "object") return undefined;
+  const holderHash = typeof aux.holder?.mac === "string" && aux.holder.mac
     ? await hashMac(aux.holder.mac, env.MAC_SALT)
     : null;
   const waiting = [];
-  for (const w of aux.waiting ?? []) {
-    if (!w?.mac) continue;
+  for (const w of Array.isArray(aux.waiting) ? aux.waiting : []) {
+    if (typeof w?.mac !== "string" || !w.mac) continue;
     waiting.push({ hash: await hashMac(w.mac, env.MAC_SALT), alias: w.alias ?? null });
   }
   // `?? null` rather than `|| null`: 0 is the meaningful "the aux is free
   // right now" reading, and `||` would turn it back into "no countdown".
-  const freeInMs = aux.holder?.free_in_ms ?? null;
-  await env.DB.prepare(
-    `UPDATE heartbeats
-        SET aux_holder_hash = ?, aux_holder_alias = ?, aux_waiting = ?,
-            aux_free_in_ms = ?
-      WHERE speaker_name = ?`,
-  )
-    .bind(
-      holderHash,
-      aux.holder?.alias ?? null,
-      JSON.stringify(waiting),
-      freeInMs,
-      speakerName,
-    )
-    .run();
+  const free = aux.holder?.free_in_ms;
+  return {
+    holderHash,
+    holderAlias: aux.holder?.alias ?? null,
+    waitingJson: JSON.stringify(waiting),
+    freeInMs: typeof free === "number" && Number.isFinite(free) ? Math.trunc(free) : null,
+  };
 }
 
 /**
@@ -208,26 +207,17 @@ async function recordAux(env: Env, speakerName: string, aux: AuxReport | undefin
  * a Pi running older code simply reports nothing and the screen says unknown
  * rather than showing a confident wrong answer.
  */
-async function recordOutput(
-  env: Env,
-  speakerName: string,
+function outputColumns(
   output: { kind?: string; card?: string } | undefined,
   relay: { mac?: string | null; connected?: boolean; last_error?: string | null } | undefined,
-): Promise<void> {
-  if (!output && !relay) return;
-  await env.DB.prepare(
-    `UPDATE heartbeats
-        SET output_kind = ?, output_card = ?, relay_connected = ?, relay_error = ?
-      WHERE speaker_name = ?`,
-  )
-    .bind(
-      output?.kind ?? null,
-      output?.card ?? null,
-      relay ? (relay.connected ? 1 : 0) : null,
-      relay?.last_error ?? null,
-      speakerName,
-    )
-    .run();
+): OutputWrite | undefined {
+  if (!output && !relay) return undefined;
+  return {
+    kind: output?.kind ?? null,
+    card: output?.card ?? null,
+    relayConnected: relay ? (relay.connected ? 1 : 0) : null,
+    relayError: relay?.last_error ?? null,
+  };
 }
 
 /**
@@ -237,7 +227,10 @@ async function recordOutput(
  */
 piRoutes.post("/api/heartbeat", requireDeviceKey, async (c) => {
   const body = await c.req.json<{ speaker_name?: string }>().catch(() => ({}) as any);
-  await touchHeartbeat(c.env, body.speaker_name ?? "AuxGoat");
+  const now = nowIso();
+  await c.env.DB.prepare(HEARTBEAT_TOUCH_SQL)
+    .bind(...heartbeatTouchParams(body?.speaker_name ?? "AuxGoat", now))
+    .run();
   return c.json({ ok: true });
 });
 
@@ -273,25 +266,37 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
     .catch(() => ({}) as any);
 
   const speakerName = body.speaker_name ?? "AuxGoat";
-  await touchHeartbeat(c.env, speakerName);
-  // After the heartbeat, never before: the UPDATE needs the row to exist, and
-  // on a brand new speaker the very first beacon is what creates it.
-  await recordAux(c.env, speakerName, body.aux);
+  const now = nowIso();
+  // Liveness, the aux and the output in ONE conditional upsert that writes
+  // nothing when nothing changed. See beacon.ts for what forces a write.
+  await c.env.DB.prepare(HEARTBEAT_UPSERT_SQL)
+    .bind(
+      ...heartbeatParams({
+        speakerName,
+        now,
+        aux: await auxColumns(c.env, body.aux),
+        output: outputColumns(body.output, body.relay),
+      }),
+    )
+    .run();
 
   // The song still on the speaker. This is what keeps the vote window open
   // through a pause: without it the window closes on wall-clock time, which
   // does not stop when the music does. played_ms comes from the Pi and
   // already excludes paused time, so the site can show a bar that freezes.
+  //
+  // Throttled in SQL (beacon.ts): a write only on a status flip, a seek, or a
+  // keepalive older than 30s.
   if (body.current_play?.id) {
-    await c.env.DB.prepare(
-      `UPDATE plays SET keepalive_at = ?, play_status = ?, played_ms = COALESCE(?, played_ms)
-       WHERE id = ? AND ended_at IS NULL`,
-    )
+    const pm = body.current_play.played_ms;
+    await c.env.DB.prepare(KEEPALIVE_SQL)
       .bind(
-        nowIso(),
-        body.current_play.status ?? "playing",
-        body.current_play.played_ms ?? null,
-        body.current_play.id,
+        ...keepaliveParams(
+          String(body.current_play.id),
+          body.current_play.status ?? "playing",
+          typeof pm === "number" && Number.isFinite(pm) ? Math.trunc(pm) : null,
+          now,
+        ),
       )
       .run();
   }
@@ -318,11 +323,6 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
     const report = parseReport(body.report);
     if (report) await storeReport(c.env, report);
   }
-
-  // What the box is actually playing through, so the admin screen can say so
-  // rather than inferring it from what was selected - the two disagree exactly
-  // when something is wrong, which is when it matters.
-  await recordOutput(c.env, speakerName, body.output, body.relay);
 
   // Report on whatever we handed out last time, before taking anything new.
   if (body.result?.id) {

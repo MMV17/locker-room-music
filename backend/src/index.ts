@@ -11,6 +11,7 @@ import { healArtwork } from "./artworkHeal";
 import { piRoutes } from "./piRoutes";
 import { sessionRoutes, meRoutes } from "./sessionRoutes";
 import { playRoutes } from "./playRoutes";
+import { isHourlyTick, prune, sweepOrphanPlays } from "./maintenance";
 
 export const app = new Hono<AppEnv>();
 
@@ -118,8 +119,24 @@ export default {
           (e) => console.error(`artwork heal FAILED: ${String(e)}`),
         ),
       );
+      // Once an hour, on the :00 tick: close plays the Pi opened and never
+      // closed. See maintenance.ts.
+      if (isHourlyTick(event.scheduledTime)) {
+        ctx.waitUntil(
+          sweepOrphanPlays(env).then(
+            (n) => console.log(`orphan sweep: closed=${n}`),
+            (e) => console.error(`orphan sweep FAILED: ${String(e)}`),
+          ),
+        );
+      }
       return;
     }
+    ctx.waitUntil(
+      prune(env).then(
+        (r) => console.log(`prune: auth_attempts=${r.attempts} device_tokens=${r.tokens}`),
+        (e) => console.error(`prune FAILED: ${String(e)}`),
+      ),
+    );
     ctx.waitUntil(
       runBackup(env, new Date()).then((r) => {
         // Logged either way: a backup that quietly stopped running is worse

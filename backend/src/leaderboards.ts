@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import type { AppEnv } from "./types";
 import { trackScore, djScore, DJ_MIN_PLAYS, playsUntilQualified } from "./scoring";
 import { fallbackColor } from "./crypto";
@@ -6,15 +7,81 @@ import { tallyVisible } from "./voteWindow";
 
 export const boards = new Hono<AppEnv>();
 
-/** Leaderboards are cached at the edge; they are never polled (spec 8). */
-const CACHE_60S = { "Cache-Control": "public, max-age=60" };
+/**
+ * The boards are computed from whole tables, so the computed JSON is cached
+ * for 60s in this colo's Cache API (caches.default), keyed by path + window.
+ *
+ * This used to claim the boards were "cached at the edge" because the response
+ * carried `Cache-Control: public, max-age=60`. A header on a Worker's own
+ * response caches nothing at Cloudflare's edge; every request recomputed both
+ * boards from every play and vote. The Cache API is the thing that actually
+ * stores it (a no-op on workers.dev, which is acceptable: it is then exactly as
+ * expensive as it always was).
+ *
+ * SAFE TO SHARE because neither board carries anything about the caller: no
+ * viewer, no "is you", no own vote - only aggregates every signed-in player
+ * sees identically. Anything per-user added to these responses must NOT go
+ * through boardResponse(); serve it separately (as /api/me/dj does).
+ *
+ * Still behind requireSession: the cache is consulted only after the gate.
+ */
+export const BOARD_TTL_S = 60;
+export const BOARD_WINDOWS = ["week", "month", "season"] as const;
+export type BoardWindow = (typeof BOARD_WINDOWS)[number];
+
+export function boardWindow(raw: string | undefined): BoardWindow {
+  return (BOARD_WINDOWS as readonly string[]).includes(raw ?? "") ? (raw as BoardWindow) : "season";
+}
+
+/**
+ * The cache key: our own origin, the board's path and the normalised window,
+ * and nothing else. Other query parameters (a cache-buster, junk) never make a
+ * new entry, and two spellings of "season" share one.
+ */
+export function boardCacheKey(requestUrl: string, window: string | undefined): string {
+  const u = new URL(requestUrl);
+  return `${u.origin}${u.pathname}?window=${boardWindow(window)}`;
+}
 
 function windowStart(window: string | undefined): string {
   const now = Date.now();
   const day = 86_400_000;
-  if (window === "week") return new Date(now - 7 * day).toISOString();
-  if (window === "month") return new Date(now - 30 * day).toISOString();
+  const w = boardWindow(window);
+  if (w === "week") return new Date(now - 7 * day).toISOString();
+  if (w === "month") return new Date(now - 30 * day).toISOString();
   return "0000-01-01T00:00:00Z"; // season
+}
+
+const JSON_TYPE = "application/json; charset=UTF-8";
+
+async function boardResponse(
+  c: Context<AppEnv>,
+  compute: () => Promise<unknown>,
+): Promise<Response> {
+  const cache = (globalThis as unknown as { caches?: { default?: Cache } }).caches?.default;
+  const key = new Request(boardCacheKey(c.req.url, c.req.query("window")), { method: "GET" });
+  // To the browser: private. The content is shared, but the request was
+  // authenticated and no proxy between here and the phone should keep it.
+  const clientHeaders = { "content-type": JSON_TYPE, "cache-control": `private, max-age=${BOARD_TTL_S}` };
+
+  if (cache) {
+    const hit = await cache.match(key).catch(() => undefined);
+    if (hit) return new Response(await hit.text(), { headers: { ...clientHeaders, "x-board-cache": "hit" } });
+  }
+
+  const body = JSON.stringify(await compute());
+  if (cache) {
+    const stored = new Response(body, {
+      headers: { "content-type": JSON_TYPE, "cache-control": `public, max-age=${BOARD_TTL_S}` },
+    });
+    const put = cache.put(key, stored).catch((e) => console.warn(`board cache put: ${String(e)}`));
+    try {
+      c.executionCtx.waitUntil(put);
+    } catch {
+      /* no execution context in unit tests */
+    }
+  }
+  return new Response(body, { headers: { ...clientHeaders, "x-board-cache": "miss" } });
 }
 
 /**
@@ -22,7 +89,9 @@ function windowStart(window: string | undefined): string {
  * so a song played five times accumulates all five plays' votes, and the
  * score is damped so small samples cannot top the board.
  */
-boards.get("/api/leaderboard/tracks", async (c) => {
+boards.get("/api/leaderboard/tracks", (c) => boardResponse(c, () => trackBoard(c)));
+
+async function trackBoard(c: Context<AppEnv>) {
   const since = windowStart(c.req.query("window"));
 
   /* Grouped by PLAY, not by track. Whether a tally may be published is a
@@ -92,19 +161,17 @@ boards.get("/api/leaderboard/tracks", async (c) => {
     }))
     .sort((a, b) => b.score - a.score);
 
-  return c.json(
-    { top: scored.slice(0, 20), bottom: scored.slice(-20).reverse() },
-    200,
-    CACHE_60S,
-  );
-});
+  return { top: scored.slice(0, 20), bottom: scored.slice(-20).reverse() };
+}
 
 /**
  * DJ leaderboard. Bayesian shrinkage toward the team mean, and anyone under
  * DJ_MIN_PLAYS counted plays is omitted entirely rather than shown with a
  * provisional score.
  */
-boards.get("/api/leaderboard/djs", async (c) => {
+boards.get("/api/leaderboard/djs", (c) => boardResponse(c, () => djBoard(c)));
+
+async function djBoard(c: Context<AppEnv>) {
   const since = windowStart(c.req.query("window"));
 
   const { results } = await c.env.DB.prepare(
@@ -155,8 +222,8 @@ boards.get("/api/leaderboard/djs", async (c) => {
     }))
     .sort((a, b) => b.score - a.score);
 
-  return c.json({ djs, global_mean: globalMean }, 200, CACHE_60S);
-});
+  return { djs, global_mean: globalMean };
+}
 
 /** A DJ's own standing, including the private "not yet qualified" case. */
 boards.get("/api/me/dj", async (c) => {
@@ -174,24 +241,28 @@ boards.get("/api/me/dj", async (c) => {
   });
 });
 
+/**
+ * The 50 newest non-voided plays are chosen FIRST, on the started_at index, and
+ * only those are joined to their votes. The old query joined and grouped every
+ * play on record, sorted the lot, and then kept 50: 112,000 rows read per
+ * request at 3,000 plays / 99,000 votes.
+ */
+export const HISTORY_SQL = `SELECT
+     p.id, p.started_at, p.ended_at, p.counted,
+     p.duration_ms, p.keepalive_at, p.voided,
+     t.title, t.artist, t.artwork_url, t.track_key,
+     TRIM(u.first_name || ' ' || u.last_name) AS dj_name, u.jersey_number,
+     SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
+     SUM(CASE WHEN v.value = -1 THEN 1 ELSE 0 END) AS down
+   FROM (SELECT * FROM plays WHERE voided = 0 ORDER BY started_at DESC LIMIT 50) p
+   JOIN tracks t ON t.id = p.track_id
+   LEFT JOIN users u ON u.id = p.user_id
+   LEFT JOIN votes v ON v.play_id = p.id AND v.voided = 0
+   GROUP BY p.id
+   ORDER BY p.started_at DESC`;
+
 boards.get("/api/history", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT
-       p.id, p.started_at, p.ended_at, p.counted,
-       p.duration_ms, p.keepalive_at, p.voided,
-       t.title, t.artist, t.artwork_url, t.track_key,
-       TRIM(u.first_name || ' ' || u.last_name) AS dj_name, u.jersey_number,
-       SUM(CASE WHEN v.value = 1 THEN 1 ELSE 0 END)  AS up,
-       SUM(CASE WHEN v.value = -1 THEN 1 ELSE 0 END) AS down
-     FROM plays p
-     JOIN tracks t ON t.id = p.track_id
-     LEFT JOIN users u ON u.id = p.user_id
-     LEFT JOIN votes v ON v.play_id = p.id AND v.voided = 0
-     WHERE p.voided = 0
-     GROUP BY p.id
-     ORDER BY p.started_at DESC
-     LIMIT 50`,
-  ).all<any>();
+  const { results } = await c.env.DB.prepare(HISTORY_SQL).all<any>();
 
   const now = Date.now();
   const plays = results

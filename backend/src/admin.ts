@@ -112,16 +112,34 @@ admin.post("/api/admin/artwork/retry", async (c) => {
 
 /* Roster CRUD. The identity key every writer shares lives in roster.ts. */
 
+/**
+ * Each table is read ONCE and grouped, then joined. The correlated
+ * `(SELECT COUNT(*) FROM votes v WHERE v.user_id = u.id)` this replaces has no
+ * index on votes.user_id to use, so it scanned every vote once PER PLAYER:
+ * 7.4 million rows read per page load at 99,000 votes, more than the free
+ * plan's daily read budget in a single click.
+ */
+export const ADMIN_USERS_SQL = `SELECT u.*, TRIM(u.first_name || ' ' || u.last_name) AS name,
+          COALESCE(pc.n, 0) AS plays,
+          COALESCE(vc.n, 0) AS votes
+     FROM users u
+     LEFT JOIN (SELECT user_id, COUNT(*) AS n FROM plays GROUP BY user_id) pc ON pc.user_id = u.id
+     LEFT JOIN (SELECT user_id, COUNT(*) AS n FROM votes GROUP BY user_id) vc ON vc.user_id = u.id
+    ORDER BY u.last_name, u.first_name`;
+
+/**
+ * Plays per phone, counted in one pass over plays rather than one pass per
+ * device: plays.device_hash has no index, so the old LEFT JOIN + GROUP BY
+ * scanned every play for every device.
+ */
+export const DEVICE_PLAY_COUNTS =
+  "SELECT device_hash, COUNT(*) AS n FROM plays WHERE device_hash IS NOT NULL GROUP BY device_hash";
+
 admin.get("/api/admin/users", async (c) => {
   // The play and vote counts are not decoration: deleting a player is
   // irreversible, and the confirm has to be able to say what is about to
   // happen to their history rather than asking for a blind yes.
-  const { results } = await c.env.DB.prepare(
-    `SELECT u.*, TRIM(u.first_name || ' ' || u.last_name) AS name,
-            (SELECT COUNT(*) FROM plays p WHERE p.user_id = u.id) AS plays,
-            (SELECT COUNT(*) FROM votes v WHERE v.user_id = u.id) AS votes
-       FROM users u ORDER BY u.last_name, u.first_name`,
-  ).all();
+  const { results } = await c.env.DB.prepare(ADMIN_USERS_SQL).all();
   return c.json({ users: results });
 });
 
@@ -251,11 +269,10 @@ admin.get("/api/admin/devices", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT d.mac_hash, d.mac_hint, d.alias, d.first_seen, d.claimed_at,
             TRIM(u.first_name || ' ' || u.last_name) AS owner_name,
-            COUNT(p.id) AS plays
+            COALESCE(pc.n, 0) AS plays
      FROM devices d
      LEFT JOIN users u ON u.id = d.user_id
-     LEFT JOIN plays p ON p.device_hash = d.mac_hash
-     GROUP BY d.mac_hash
+     LEFT JOIN (${DEVICE_PLAY_COUNTS}) pc ON pc.device_hash = d.mac_hash
      ORDER BY plays DESC`,
   ).all();
   return c.json({ devices: results });

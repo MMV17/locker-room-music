@@ -4,7 +4,13 @@
 import { Hono } from "hono";
 import type { AppEnv, Env, PlayRow } from "./types";
 import { fallbackColor } from "./crypto";
-import { isVoteWindowOpen, voteWindowClosesAt, presentablePlay } from "./voteWindow";
+import {
+  isVoteWindowOpen,
+  voteWindowClosesAt,
+  presentablePlay,
+  nowCandidate,
+  NOW_CANDIDATES,
+} from "./voteWindow";
 import { trackScore } from "./scoring";
 import { freshCountdown } from "./auxCountdown";
 import { serveArt } from "./artProxy";
@@ -107,10 +113,14 @@ playRoutes.get("/api/now", requireSession, async (c) => {
   // song ever played stays on screen forever — production read "Now on aux:
   // Mack Vinton" on 2026-08-09 for a play that started and ended on 08-05,
   // with nobody connected to the speaker.
-  const latest = await c.env.DB.prepare(
-    `SELECT * FROM plays WHERE voided = 0 ORDER BY started_at DESC LIMIT 1`,
-  ).first<PlayRow>();
-  const play = presentablePlay(latest);
+  //
+  // The newest few rows, filtered in code (nowCandidate): skips voided rows
+  // without walking the whole table after "Clear history", and ignores a play
+  // stamped more than 60s in the future by a Pi with a wrong clock.
+  const { results: newest } = await c.env.DB.prepare(
+    `SELECT * FROM plays ORDER BY started_at DESC LIMIT ${NOW_CANDIDATES}`,
+  ).all<PlayRow>();
+  const play = presentablePlay(nowCandidate(newest ?? []));
 
   const hb = await c.env.DB.prepare(
     `SELECT last_seen_at, aux_holder_hash, aux_holder_alias, aux_waiting,

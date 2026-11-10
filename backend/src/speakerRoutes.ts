@@ -19,7 +19,13 @@ import { isMacAddress, normaliseMac } from "./piControl";
 import { listDevices, getSelection, getSelectionName, setSelection } from "./speakers";
 import { hasOutstandingCommand, queueCommand, staleCutoff } from "./piCommands";
 import { putSetting } from "./settings";
-import { mayChangeSpeaker, isScanFresh, scanProblem, isAudiblyPlaying } from "./speakerAccess";
+import {
+  mayChangeSpeaker,
+  isScanFresh,
+  scanProblem,
+  isAudiblyPlaying,
+  newestLivePlay,
+} from "./speakerAccess";
 
 export const speakerRoutes = new Hono<AppEnv>();
 
@@ -99,10 +105,7 @@ speakerRoutes.post("/api/speakers/scan", async (c) => {
   // The Pi refuses to scan under a playing song (it would stutter the room).
   // Say so now, rather than after a minute of "Waiting for the AuxGoat…" that
   // ends in an empty list. Paused is fine - nothing is streaming.
-  const playing = await c.env.DB.prepare(
-    `SELECT play_status, keepalive_at FROM plays
-      WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
-  ).first<{ play_status: string | null; keepalive_at: string | null }>();
+  const playing = await newestLivePlay(c.env);
   if (isAudiblyPlaying(playing)) {
     return c.json(
       { error: "Pause the music first. The AuxGoat can't look for speakers while a song is playing." },

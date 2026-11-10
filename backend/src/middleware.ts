@@ -10,7 +10,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import type { AppEnv } from "./types";
 import { hashToken, safeEqual } from "./crypto";
-import { activeSessionUserId } from "./session";
+import { activeSessionUserId, touchCutoff, TOUCH_SESSION_SQL } from "./session";
 import type { SessionRow } from "./session";
 import {
   clientAddress,
@@ -19,7 +19,6 @@ import {
   throttleClear,
   ADMIN_POLICY,
 } from "./throttle";
-import { nowIso } from "./util";
 
 /** The cookie POST /api/session sets and every session-gated route reads. */
 export const SESSION_COOKIE = "lr_token";
@@ -52,7 +51,7 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   // vanishing into an empty result that reads the same as a bad cookie.
   const row = await db
     .prepare(
-      `SELECT t.user_id, u.active
+      `SELECT t.user_id, u.active, t.last_seen_at, t.created_at
          FROM device_tokens t
          LEFT JOIN users u ON u.id = t.user_id
         WHERE t.token_hash = ?`,
@@ -63,10 +62,20 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!userId) return c.json({ error: "Not signed in" }, 401);
 
   c.set("userId", userId);
-  await db
-    .prepare("UPDATE device_tokens SET last_seen_at = ? WHERE token_hash = ?")
-    .bind(nowIso(), tokenHash)
-    .run();
+  // At most once an hour, and never on the request's critical path: a failed
+  // bookkeeping write must not turn a successful read into a 500.
+  const now = Date.now();
+  const touch = db
+    .prepare(TOUCH_SESSION_SQL)
+    .bind(new Date(now).toISOString(), tokenHash, touchCutoff(now))
+    .run()
+    .catch((e) => console.error(`session touch failed: ${String(e)}`));
+  try {
+    c.executionCtx.waitUntil(touch);
+  } catch {
+    // No execution context (a unit test calling app.request): the promise is
+    // already running and carries its own catch.
+  }
   await next();
 };
 
