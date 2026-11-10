@@ -166,6 +166,18 @@ export interface Results {
   counted: boolean;
 }
 
+/**
+ * The 403 body GET /api/plays/:id/results sends while that song's vote window
+ * is still open. `closes_at` (ISO) is when the window closes: retry the
+ * request a moment after it rather than giving up. With back-to-back songs
+ * this is the normal case - the next song starts inside the previous one's
+ * 30-second grace.
+ */
+export interface ResultsNotYet {
+  error: string;
+  closes_at: string;
+}
+
 export interface TrackEntry {
   id: string;
   title: string;

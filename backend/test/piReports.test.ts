@@ -32,7 +32,10 @@ describe("the escape hatch is on the allowlist", () => {
   });
 
   it("stores output only for commands that can actually be sent", () => {
-    for (const kind of REPORT_KINDS) expect(isPiCommand(kind)).toBe(true);
+    // Each kind is named after the command that produces it, except `update`,
+    // the log of an `update-software` run (the name the Pi side reports under).
+    const producer = (kind: string) => (kind === "update" ? "update-software" : kind);
+    for (const kind of REPORT_KINDS) expect(isPiCommand(producer(kind))).toBe(true);
   });
 });
 

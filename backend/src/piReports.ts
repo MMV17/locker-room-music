@@ -12,7 +12,8 @@
 import type { Env } from "./types";
 
 /** The command names whose output is stored here. */
-export const REPORT_KINDS = ["report-full", "run-repair"] as const;
+// "update" is the log of an `update-software` run (install, trial, rollback).
+export const REPORT_KINDS = ["report-full", "run-repair", "update"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 /**

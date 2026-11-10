@@ -190,6 +190,10 @@ echo "$NOW_RAW" | grep -q '"my_vote":1' \
 
 code=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' "$BASE/api/plays/$PLAY_ID/results")
 [ "$code" = "403" ] && ok "results are 403 while voting is open" || bad "results while open" "got $code"
+# ...and say when to ask again, so a client can retry instead of giving up.
+OPEN_BODY=$(curl -s -b "$JAR" "$BASE/api/plays/$PLAY_ID/results")
+echo "$OPEN_BODY" | grep -Eq '"closes_at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T' \
+  && ok "the 403 carries closes_at" || bad "closes_at in the 403" "$OPEN_BODY"
 
 echo "== vote changes and the unique constraint =="
 curl -s -b "$JAR" -X POST "$BASE/api/votes" -H 'content-type: application/json' \
@@ -797,6 +801,52 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/users" -H
 for id in "$A_ID" "$B_ID"; do
   curl -s -o /dev/null -X DELETE "$BASE/api/admin/users/$id" -H "X-Admin-Password: $ADMIN_PW"
 done
+
+echo "== wireless update =="
+# A box that has never reported `software` is on the pre-updater listener, so
+# update-software queues run-repair (which installs the updater) instead.
+drain() {
+  for _ in 1 2 3; do
+    local r id
+    r=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
+    id=$(echo "$r" | sed -n 's/.*"command":{"id":"\([^"]*\)".*/\1/p')
+    [ -z "$id" ] && break
+    curl -s -o /dev/null -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' \
+      -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$id\",\"ok\":true,\"output\":\"drained by e2e\"}}"
+  done
+}
+drain
+BEFORE=$(curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/commands")
+UPD=$(curl -s -X POST "$BASE/api/admin/pi/commands" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' -d '{"command":"update-software"}')
+if echo "$BEFORE" | grep -q '"software":null'; then
+  echo "$UPD" | grep -q '"queued":"run-repair"' && echo "$UPD" | grep -q '"bootstrap":true' \
+    && ok "update on a never-reported box queues run-repair (bootstrap)" || bad "bootstrap" "$UPD"
+else
+  echo "$UPD" | grep -q '"queued":"update-software"' && ok "update on a reporting box queues update-software" || bad "update" "$UPD"
+fi
+drain
+# A beacon carrying the new `software` block (and the Pi's clock) is stored,
+# and unknown keys alongside it are ignored rather than rejected.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' \
+  -d "{\"speaker_name\":\"AuxGoat\",\"at\":\"$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"software\":{\"commit\":\"0123abcd\",\"installed_at\":\"2026-11-01T12:00:00Z\"},\"some_future_key\":{\"x\":1}}")
+[ "$code" = "200" ] && ok "a beacon with software, at and an unknown key is accepted" || bad "software beacon" "got $code"
+AFTER=$(curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/commands")
+echo "$AFTER" | grep -q '"software":{"commit":"0123abcd","installed_at":"2026-11-01T12:00:00Z"}' \
+  && ok "admin sees the reported software" || bad "software stored" "$AFTER"
+# wrangler dev rewrites the request URL to the first route's host, so the exact
+# name depends on how the Worker is run; that it is a hostname is the check.
+echo "$AFTER" | grep -Eq '"via_host":"[a-z0-9.-]+"' && ok "admin sees the check-in hostname" || bad "via_host" "$AFTER"
+echo "$AFTER" | grep -Eq '"clock_skew_ms":(59|60|61)[0-9]{4}' && ok "admin sees the clock skew (~10 min)" || bad "clock skew" "$AFTER"
+UPD=$(curl -s -X POST "$BASE/api/admin/pi/commands" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' -d '{"name":"update-software"}')
+echo "$UPD" | grep -q '"queued":"update-software"' && echo "$UPD" | grep -q '"bootstrap":false' \
+  && ok "once software is reported, update-software is queued as itself" || bad "update after report" "$UPD"
+GOT=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
+UPD_ID=$(echo "$GOT" | sed -n 's/.*"command":{"id":"\([^"]*\)","name":"update-software".*/\1/p')
+[ -n "$UPD_ID" ] && ok "the Pi is handed update-software" || bad "dispatch update-software" "$GOT"
+curl -s -o /dev/null -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' \
+  -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$UPD_ID\",\"ok\":true,\"output\":\"updated\"},\"report\":{\"kind\":\"update\",\"at\":\"2026-11-10T12:00:00Z\",\"body\":\"installed 0123abcd\",\"ok\":true}}"
+curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/reports" | grep -q '"kind":"update"' \
+  && ok "an update report is stored" || bad "update report" "not listed"
 
 rm -f "$JAR"
 echo

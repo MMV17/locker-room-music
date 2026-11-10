@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
 import { PI_COMMANDS, isPiCommand, normaliseMac, OFFLINE_AFTER_MS } from "./piControl";
+import type { PiCommand } from "./piControl";
+import { getSetting } from "./settings";
+import { readSoftware, PI_SOFTWARE_KEY, PI_VIA_HOST_KEY, PI_CLOCK_SKEW_KEY } from "./beacon";
 import { hasOutstandingCommand, queueCommand } from "./piCommands";
 import { identityKey, identityProblem, isIdentityClash, textField } from "./roster";
 import { readJson, badJson } from "./http";
@@ -426,12 +429,39 @@ admin.post("/api/admin/votes/:id/void", async (c) => {
    queue, so a mistyped name fails loudly at the point of entry rather than
    sitting queued forever waiting for a Pi that will refuse it. */
 
+/**
+ * What actually goes on the queue for a requested command.
+ *
+ * `update-software` on a box that has never reported a `software` block is
+ * still running the pre-updater listener, which has no handler for it and
+ * would refuse it. `run-repair` runs the committed repair script, which
+ * installs the updater - so that is what is queued, and the response says so.
+ */
+export function commandToQueue(requested: PiCommand, storedSoftware: string | null): PiCommand {
+  if (requested === "update-software" && readSoftware(storedSoftware) === null) return "run-repair";
+  return requested;
+}
+
 admin.get("/api/admin/pi/commands", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
-       FROM pi_commands ORDER BY created_at DESC LIMIT 20`,
-  ).all();
-  return c.json({ commands: results, allowed: PI_COMMANDS });
+  const [{ results }, software, via, skew] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
+         FROM pi_commands ORDER BY created_at DESC LIMIT 20`,
+    ).all(),
+    getSetting(c.env, PI_SOFTWARE_KEY),
+    getSetting(c.env, PI_VIA_HOST_KEY),
+    getSetting(c.env, PI_CLOCK_SKEW_KEY),
+  ]);
+  const skewMs = skew === null ? null : Number(skew);
+  return c.json({
+    commands: results,
+    allowed: PI_COMMANDS,
+    // What the box last said about itself. null = never reported: for
+    // `software` that means the pre-updater listener is still running.
+    software: readSoftware(software),
+    via_host: via,
+    clock_skew_ms: skewMs !== null && Number.isFinite(skewMs) ? skewMs : null,
+  });
 });
 
 /**
@@ -448,7 +478,9 @@ admin.get("/api/admin/pi/reports", async (c) => {
 
 admin.post("/api/admin/pi/commands", async (c) => {
   const b = (await readJson<{ command?: unknown; name?: unknown }>(c)) ?? {};
-  if (!isPiCommand(b.command)) {
+  // `command` is what the Admin screen has always sent; `name` is accepted too.
+  const requested = b.command ?? b.name;
+  if (!isPiCommand(requested)) {
     return c.json({ error: `Unknown command. Allowed: ${PI_COMMANDS.join(", ")}` }, 400);
   }
 
@@ -457,8 +489,16 @@ admin.post("/api/admin/pi/commands", async (c) => {
     return c.json({ error: "A command is already queued or running" }, 409);
   }
 
-  const id = await queueCommand(c.env, b.command);
-  return c.json({ ok: true, id, command: b.command });
+  const queued = commandToQueue(requested, await getSetting(c.env, PI_SOFTWARE_KEY));
+  const id = await queueCommand(c.env, queued);
+  return c.json({
+    ok: true,
+    id,
+    command: queued,
+    queued,
+    // true when an update was asked for and run-repair went instead.
+    bootstrap: queued !== requested,
+  });
 });
 
 /* The relay speaker: what the box plays OUT through.

@@ -173,3 +173,97 @@ describe.skipIf(!sqliteAvailable)("atomic command dispatch (2i)", () => {
     expect(db.all(DISPATCH_SQL, "t3")).toEqual([]);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Group 3: reveal, clock skew, wireless update
+ * ------------------------------------------------------------------ */
+import {
+  clockSkewMs,
+  parseSoftware,
+  softwareJson,
+  readSoftware,
+  validHost,
+  SKEW_UPSERT_SQL,
+  SETTING_IF_CHANGED_SQL,
+  SKEW_STORE_DELTA_MS,
+} from "../src/beacon";
+import { commandToQueue } from "../src/admin";
+import { PI_COMMANDS, isPiCommand } from "../src/piControl";
+import { REPORT_KINDS } from "../src/piReports";
+
+describe("Pi clock skew (3b)", () => {
+  it("is server minus Pi, and null when `at` is missing or junk", () => {
+    expect(clockSkewMs(T0, "2026-11-10T11:50:00Z")).toBe(10 * MIN);
+    expect(clockSkewMs(T0, "2026-11-10T12:01:00Z")).toBe(-MIN);
+    expect(clockSkewMs(T0, undefined)).toBeNull();
+    expect(clockSkewMs(T0, "yesterday-ish")).toBeNull();
+  });
+
+  it.skipIf(!sqliteAvailable)("is stored only when it moves by more than 5s", () => {
+    const db = schemaDb();
+    const put = (v: number) => db.run(SKEW_UPSERT_SQL, String(v), "now", SKEW_STORE_DELTA_MS);
+    expect(put(600_000)).toBe(1);
+    expect(put(603_000)).toBe(0);
+    expect(put(595_500)).toBe(0);
+    expect(put(606_000)).toBe(1);
+    expect(db.get("SELECT value FROM settings WHERE key = 'pi_clock_skew_ms'").value).toBe("606000");
+  });
+});
+
+describe("software report (3c)", () => {
+  it("accepts 4-40 lowercase hex or 'unknown', and an ISO or null install time", () => {
+    expect(parseSoftware({ commit: "0123abcd", installed_at: "2026-11-01T12:00:00Z" })).toEqual({
+      commit: "0123abcd",
+      installed_at: "2026-11-01T12:00:00Z",
+    });
+    expect(parseSoftware({ commit: "unknown", installed_at: null })).toEqual({ commit: "unknown", installed_at: null });
+    expect(parseSoftware({ commit: "a".repeat(40), extra: 1 })).toEqual({ commit: "a".repeat(40), installed_at: null });
+    expect(parseSoftware({ commit: "ABCD" })).toBeNull();
+    expect(parseSoftware({ commit: "abc" })).toBeNull();
+    expect(parseSoftware({ commit: "a".repeat(41) })).toBeNull();
+    expect(parseSoftware({ commit: "abcd", installed_at: "soon" })).toBeNull();
+    expect(parseSoftware("abcd")).toBeNull();
+    expect(parseSoftware(null)).toBeNull();
+  });
+
+  it("round-trips through settings, and a mangled row reads as never reported", () => {
+    const s = { commit: "beef", installed_at: null };
+    expect(readSoftware(softwareJson(s))).toEqual(s);
+    expect(readSoftware("{oops")).toBeNull();
+    expect(readSoftware(null)).toBeNull();
+  });
+
+  it.skipIf(!sqliteAvailable)("is written only when the value changes", () => {
+    const db = schemaDb();
+    const put = (k: string, v: string) => db.run(SETTING_IF_CHANGED_SQL, k, v, "now");
+    expect(put("pi_software", '{"commit":"beef","installed_at":null}')).toBe(1);
+    expect(put("pi_software", '{"commit":"beef","installed_at":null}')).toBe(0);
+    expect(put("pi_software", '{"commit":"cafe","installed_at":null}')).toBe(1);
+    expect(put("pi_via_host", "hc.auxgoat.com")).toBe(1);
+    expect(put("pi_via_host", "hc.auxgoat.com")).toBe(0);
+  });
+
+  it("validates the check-in hostname", () => {
+    expect(validHost("HC.AuxGoat.com")).toBe("hc.auxgoat.com");
+    expect(validHost("localhost")).toBe("localhost");
+    expect(validHost("evil.com/<script>")).toBeNull();
+    expect(validHost("")).toBeNull();
+  });
+
+  it("update-software bootstraps through run-repair until software is reported", () => {
+    expect(isPiCommand("update-software")).toBe(true);
+    expect(PI_COMMANDS).toContain("update-software");
+    expect(commandToQueue("update-software", null)).toBe("run-repair");
+    expect(commandToQueue("update-software", "{garbage")).toBe("run-repair");
+    expect(commandToQueue("update-software", softwareJson({ commit: "beef", installed_at: null }))).toBe("update-software");
+    expect(commandToQueue("reboot", null)).toBe("reboot");
+  });
+
+  it("stores an `update` report like the others", () => {
+    expect(REPORT_KINDS).toContain("update");
+    const big = parseReport({ kind: "update", body: "x".repeat(70 * 1024) })!;
+    expect(big.kind).toBe("update");
+    expect(big.body).toContain("CUT HERE");
+    expect(big.body.length).toBe(64 * 1024);
+  });
+});

@@ -47,6 +47,16 @@ interface PiCommand {
  * that column to 2000 characters, so the body travels on its own beacon
  * payload into `pi_reports`. See backend/migrations/007-remote-diagnostics.sql.
  */
+/** What the box last said about itself, from GET /api/admin/pi/commands. */
+interface PiInfo {
+  /** null = never reported: the box still runs the pre-updater listener. */
+  software: { commit: string; installed_at: string | null } | null;
+  /** The hostname the box checks in through. */
+  via_host: string | null;
+  /** Server clock minus the Pi's clock, in ms. Positive = Pi is behind. */
+  clock_skew_ms: number | null;
+}
+
 interface PiReport {
   kind: string;
   collected_at: string;
@@ -1150,6 +1160,7 @@ function Speaker({ call }: { call: Call }) {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [info, setInfo] = useState<PiInfo | null>(null);
 
   /**
    * navigator.clipboard needs a secure context; the site is https so it is
@@ -1219,9 +1230,52 @@ function Speaker({ call }: { call: Call }) {
     }
   };
 
+  /**
+   * Wireless update. A box that has never reported its software is still on
+   * the listener from before the updater existed, so the server queues Run
+   * repair instead (which installs the updater) and the confirm has to say
+   * what that really costs.
+   */
+  const updateSoftware = async () => {
+    const bootstrap = !info?.software;
+    const ok = await confirm({
+      title: "Update speaker software?",
+      body: bootstrap
+        ? "This speaker has not had a wireless update before. The first one goes through Run repair: Bluetooth restarts, music stops if anything is playing, and the speaker can show as offline for a few minutes."
+        : "Installs the latest speaker software from GitHub and restarts the listener. Music stops for a moment. If the new version cannot check in within a few minutes, the speaker puts the old version back by itself.",
+      confirmLabel: "Update",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await call<{ queued: string; bootstrap: boolean }>("/api/admin/pi/commands", {
+        method: "POST",
+        body: JSON.stringify({ command: "update-software" }),
+      });
+      setSent(
+        r.bootstrap
+          ? "Run repair — queued, to install the updater. The speaker picks it up on its next check-in."
+          : "Update speaker software — queued. The speaker picks it up on its next check-in.",
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not queue that");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const load = useCallback(() => {
-    call<{ commands: PiCommand[]; allowed: string[] }>("/api/admin/pi/commands")
-      .then((r) => setCommands(r.commands))
+    call<{ commands: PiCommand[]; allowed: string[] } & PiInfo>("/api/admin/pi/commands")
+      .then((r) => {
+        setCommands(r.commands);
+        setInfo({
+          software: r.software ?? null,
+          via_host: r.via_host ?? null,
+          clock_skew_ms: r.clock_skew_ms ?? null,
+        });
+      })
       .catch(() => setCommands([]));
     // Separate request because it is separate storage. A failure here must not
     // blank the command list — the buttons are the half you need when the box
@@ -1246,6 +1300,36 @@ function Speaker({ call }: { call: Call }) {
         about once a minute, so a result can take that long to appear.
       </p>
 
+      {info && (
+        <p className="t-sub" style={{ marginBottom: 12 }}>
+          Speaker software:{" "}
+          {info.software ? (
+            <>
+              <strong>{info.software.commit.slice(0, 12)}</strong>
+              {info.software.installed_at
+                ? ` - updated ${formatWhen(info.software.installed_at)}`
+                : ""}
+            </>
+          ) : (
+            "not reported yet"
+          )}
+          {info.via_host && (
+            <>
+              <br />
+              Checking in through: <strong>{info.via_host}</strong>
+            </>
+          )}
+        </p>
+      )}
+      {/* The Pi has no clock battery. Votes and plays carry its timestamps,
+          so a clock minutes off is worth a coach knowing about. */}
+      {info?.clock_skew_ms != null && Math.abs(info.clock_skew_ms) > 2 * 60_000 && (
+        <div className="banner is-bad">
+          The speaker's clock is {Math.round(Math.abs(info.clock_skew_ms) / 60_000)} minutes{" "}
+          {info.clock_skew_ms > 0 ? "behind" : "ahead"}. Song times it reports may be off.
+        </div>
+      )}
+
       {/* The actions sit WITH their results rather than in Speaker output.
           Pressing "Check it" in one section and reading its report in another
           was the awkward seam in the first cut of this screen — the whole
@@ -1266,6 +1350,19 @@ function Speaker({ call }: { call: Call }) {
             </button>
           </div>
         ))}
+        <div className="row">
+          <span className="row-main">
+            <span className="row-title">Update speaker software</span>
+            <span className="row-sub">
+              {info && !info.software
+                ? "First update goes through Run repair. Stops the music."
+                : "Latest version from GitHub. Rolls back by itself if it fails."}
+            </span>
+          </span>
+          <button className="btn-quiet is-danger" disabled={busy} onClick={updateSoftware}>
+            Run
+          </button>
+        </div>
       </div>
 
       {!commands ? (
@@ -1334,7 +1431,11 @@ function Speaker({ call }: { call: Call }) {
         <details key={r.kind} className="fold">
           <summary className="fold-head">
             <span className="fold-title t-section" style={{ fontSize: 16 }}>
-              {r.kind === "run-repair" ? "Repair log" : "Full report"}
+              {r.kind === "run-repair"
+                ? "Repair log"
+                : r.kind === "update"
+                  ? "Last update"
+                  : "Full report"}
             </span>
             <span className="dump-when" style={{ marginLeft: "auto", marginRight: 10 }}>
               <span className={r.ok ? "dump-ok" : "dump-bad"}>

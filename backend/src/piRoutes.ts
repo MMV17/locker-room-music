@@ -26,6 +26,16 @@ import {
   cleanText,
   intOrNull,
   speakerNameFrom,
+  clockSkewMs,
+  parseSoftware,
+  softwareJson,
+  validHost,
+  SKEW_UPSERT_SQL,
+  SETTING_IF_CHANGED_SQL,
+  SKEW_STORE_DELTA_MS,
+  SKEW_LOG_MS,
+  PI_SOFTWARE_KEY,
+  PI_VIA_HOST_KEY,
   MAX_ALIAS,
   MAX_SHORT_FIELD,
   MAX_ERROR_TEXT,
@@ -232,6 +242,38 @@ function outputColumns(
 }
 
 /**
+ * Clock skew, listener version and check-in hostname, each in `settings`, each
+ * written only when it changed (beacon.ts) - so an ordinary beacon writes none
+ * of them.
+ *
+ * The skew is logged when it is beyond a minute AND the stored value moved, so
+ * a box running an hour slow logs once rather than on every beacon.
+ */
+async function recordPiFacts(
+  env: Env,
+  body: { at?: unknown; software?: unknown },
+  host: string,
+  now: string,
+): Promise<void> {
+  const stmts: D1PreparedStatement[] = [];
+  const skew = clockSkewMs(Date.parse(now), body.at);
+  if (skew !== null) {
+    stmts.push(env.DB.prepare(SKEW_UPSERT_SQL).bind(String(skew), now, SKEW_STORE_DELTA_MS));
+  }
+  const software = parseSoftware(body.software);
+  if (software) {
+    stmts.push(env.DB.prepare(SETTING_IF_CHANGED_SQL).bind(PI_SOFTWARE_KEY, softwareJson(software), now));
+  }
+  const via = validHost(host);
+  if (via) stmts.push(env.DB.prepare(SETTING_IF_CHANGED_SQL).bind(PI_VIA_HOST_KEY, via, now));
+  if (!stmts.length) return;
+  const results = await env.DB.batch(stmts);
+  if (skew !== null && Math.abs(skew) > SKEW_LOG_MS && (results[0]?.meta?.changes ?? 0) > 0) {
+    console.warn(`pi clock skew ${skew}ms (server minus Pi); the Pi's clock is ${skew > 0 ? "behind" : "ahead"}`);
+  }
+}
+
+/**
  * Superseded by /api/pi/beacon, kept because the Pi's outbox may still hold
  * unsent rows addressed here. Removing it would strand them: the drain treats
  * a 404 as non-retryable, backs off hard, and keeps the row forever.
@@ -273,6 +315,10 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       relay?: { mac?: string | null; connected?: boolean; last_error?: string | null };
       // What audio-route.sh actually selected: usb, jack or relay.
       output?: { kind?: string; card?: string };
+      // The Pi's own clock when it built this beacon. It has no RTC.
+      at?: string;
+      // Which listener build is running; newer listeners only. See beacon.ts.
+      software?: { commit?: string; installed_at?: string | null };
     }>(c)) ?? {};
 
   // Bounded and cleaned, never rejected (beacon.ts): old listeners must keep
@@ -291,6 +337,8 @@ piRoutes.post("/api/pi/beacon", requireDeviceKey, async (c) => {
       }),
     )
     .run();
+
+  await recordPiFacts(c.env, body, new URL(c.req.url).hostname, now);
 
   // The song still on the speaker. This is what keeps the vote window open
   // through a pause: without it the window closes on wall-clock time, which

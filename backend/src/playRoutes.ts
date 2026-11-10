@@ -302,7 +302,16 @@ playRoutes.get("/api/plays/:id/results", requireSession, async (c) => {
   if (!play) return c.json({ error: "Unknown song" }, 404);
 
   if (isVoteWindowOpen(play)) {
-    return c.json({ error: "Voting is still open for this song" }, 403);
+    // closes_at: when to ask again. With back-to-back songs the client asks
+    // for A's result the moment B starts, while A's grace is still running;
+    // without a time it had nothing to retry against.
+    return c.json(
+      {
+        error: "Voting is still open for this song",
+        closes_at: new Date(voteWindowClosesAt(play)).toISOString(),
+      },
+      403,
+    );
   }
 
   const tally = await c.env.DB.prepare(

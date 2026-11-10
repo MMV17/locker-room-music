@@ -52,6 +52,15 @@ export const PI_COMMANDS = [
   // `settings` row and is validated on the Pi, the same split the speaker
   // picker makes between scanning and selecting.
   "forget-selected-phone",
+  // Install the latest listener from GitHub and restart it, with an automatic
+  // rollback on the Pi if the new build cannot check in. No parameter: the
+  // version is whatever is released, not an argument here.
+  //
+  // A box still on the pre-updater listener has no handler for this, so the
+  // admin route queues `run-repair` instead until the box has reported a
+  // `software` block once - the committed repair script bootstraps the
+  // updater. See POST /api/admin/pi/commands.
+  "update-software",
 ] as const;
 export type PiCommand = (typeof PI_COMMANDS)[number];
 
