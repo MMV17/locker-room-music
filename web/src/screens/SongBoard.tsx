@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { TrackEntry } from "./../api";
-import { Artwork, Empty, LoadError, Spinner, Tabs, useLoad, formatScore, scoreClass } from "./../components";
+import { Artwork, ChartsPage, Empty, LoadError, Spinner, Tabs, useLoad, formatScore, scoreClass } from "./../components";
 
 type Window = "season" | "month" | "week";
 
@@ -21,10 +21,7 @@ export function SongBoard() {
   );
 
   return (
-    <main className="screen">
-      <header className="screen-head">
-        <h1 className="t-display">Songs</h1>
-      </header>
+    <ChartsPage value="songs">
 
       <Tabs value={window_} options={WINDOWS} onChange={setWindow} />
 
@@ -42,7 +39,7 @@ export function SongBoard() {
           {data.bottom.length > 3 && <Section title="Worst" tracks={data.bottom} />}
         </>
       )}
-    </main>
+    </ChartsPage>
   );
 }
 

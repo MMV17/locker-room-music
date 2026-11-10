@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { ApiError, errorMessage, post } from "./../api";
 import type { UnclaimedDevice } from "./../api";
-import { Banner, Empty, LoadError, Spinner, useLoad } from "./../components";
+import { Banner, Empty, LoadError, PushedPage, Spinner, useLoad } from "./../components";
 import { IconPhone } from "./../icons";
-import { goBack, setFlash, useNavigate } from "./../router";
+import { setFlash, useNavigate } from "./../router";
 
 /**
  * Claiming a device is what turns anonymous plays into DJ credit. It is also
@@ -78,13 +78,7 @@ export function Claim() {
   }
 
   return (
-    <main className="screen">
-      <header className="set-head">
-        <button className="btn-quiet" onClick={() => goBack("/settings/account")}>
-          &lsaquo; Back
-        </button>
-        <h1 className="t-section">Claim your phone</h1>
-      </header>
+    <PushedPage title="Your phone" back="/settings">
 
       {error && <Banner kind="bad">{error}</Banner>}
 
@@ -118,6 +112,6 @@ export function Claim() {
           </div>
         </>
       )}
-    </main>
+    </PushedPage>
   );
 }

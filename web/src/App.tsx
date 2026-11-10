@@ -11,19 +11,19 @@ import { DjBoard } from "./screens/DjBoard";
 import { History } from "./screens/History";
 import { Join } from "./screens/Join";
 import { NowPlaying } from "./screens/NowPlaying";
-import { AccountScreen, ProfileScreen, SpeakerScreen } from "./screens/Settings";
+import { AccountScreen, ProfileScreen, SpeakerScreen, YouScreen } from "./screens/Settings";
 import { SongBoard } from "./screens/SongBoard";
 
 const TITLES: Record<string, string> = {
   "/join": "Join",
-  "/songs": "Songs",
-  "/djs": "DJs",
+  "/songs": "Charts \u00b7 Songs",
+  "/djs": "Charts \u00b7 DJs",
   "/history": "History",
   "/claim": "Claim your phone",
   "/admin": "Admin",
-  "/settings": "Profile",
+  "/settings": "You",
   "/settings/profile": "Profile",
-  "/settings/speaker": "Speaker & connection",
+  "/settings/speaker": "Speaker",
   "/settings/account": "Account",
 };
 
@@ -127,9 +127,7 @@ export function App() {
       ) : route === "/settings/account" ? (
         <AccountScreen onSignedOut={() => setSignedIn(false)} />
       ) : route === "/settings" ? (
-        /* Anything still pointing at the old single page lands on Profile
-           rather than a blank screen. */
-        <ProfileScreen />
+        <YouScreen onSignedOut={() => setSignedIn(false)} />
       ) : (
         <NowPlaying teamName={theme.team_name} />
       )}
