@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
-import { get } from "./../api";
 import type { DjEntry, MyDj } from "./../api";
-import { Empty, Spinner, formatScore, scoreClass } from "./../components";
+import { Empty, LoadError, Spinner, formatScore, scoreClass, useLoad } from "./../components";
 
 /**
  * Qualified DJs only. Anyone under the threshold is absent from this list
@@ -9,17 +7,10 @@ import { Empty, Spinner, formatScore, scoreClass } from "./../components";
  * and nobody else sees it at all.
  */
 export function DjBoard() {
-  const [djs, setDjs] = useState<DjEntry[] | null>(null);
-  const [mine, setMine] = useState<MyDj | null>(null);
-
-  useEffect(() => {
-    get<{ djs: DjEntry[] }>("/api/leaderboard/djs")
-      .then((r) => setDjs(r.djs))
-      .catch(() => setDjs([]));
-    get<MyDj>("/api/me/dj")
-      .then(setMine)
-      .catch(() => setMine(null));
-  }, []);
+  const board = useLoad<{ djs: DjEntry[] }>("/api/leaderboard/djs");
+  const djs = board.data?.djs ?? null;
+  // Your own standing is a nice-to-have; if it fails the board still stands.
+  const mine = useLoad<MyDj>("/api/me/dj").data;
 
   // Scores come back sorted descending, so the leader is [0]. A shared top
   // score is not a tiebreak to invent — it is a tie, and saying so is honest.
@@ -83,7 +74,9 @@ export function DjBoard() {
         </div>
       )}
 
-      {!djs ? (
+      {board.error ? (
+        <LoadError message={board.error} onRetry={board.retry} />
+      ) : !djs ? (
         <Spinner />
       ) : djs.length === 0 ? (
         <Empty title="No qualified DJs yet">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { errorMessage, get } from "./api";
 import { IconDjs, IconHistory, IconNow, IconSongs } from "./icons";
 import { useNavigate, useRoute } from "./router";
 
@@ -73,11 +74,88 @@ export function Spinner() {
   return <div className="spinner" aria-label="Loading" />;
 }
 
-export function Empty({ title, children }: { title: string; children?: ReactNode }) {
+/**
+ * `heading` renders the title as the screen's h1, for the states where the
+ * empty message IS the screen (Now Playing with nothing on). Elsewhere the
+ * screen already has an h1 and this is a paragraph.
+ */
+export function Empty({
+  title,
+  heading = false,
+  children,
+}: {
+  title: string;
+  heading?: boolean;
+  children?: ReactNode;
+}) {
   return (
     <div className="empty">
-      <p className="empty-title">{title}</p>
+      {heading ? <h1 className="empty-title">{title}</h1> : <p className="empty-title">{title}</p>}
       {children}
+    </div>
+  );
+}
+
+/**
+ * A message strip. Errors are an alert, so a screen reader interrupts with
+ * them; everything else is a polite status. Hand-rolled `.banner` divs said
+ * nothing at all to a screen reader.
+ */
+export function Banner({ kind, children }: { kind: "bad" | "ok" | "info"; children: ReactNode }) {
+  return (
+    <div className={"banner is-" + kind} role={kind === "bad" ? "alert" : "status"}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * GET a path and keep the answer, with a real error state.
+ *
+ * The boards used to turn a failed fetch into an empty list, so a dropped
+ * request on bad wifi read "No songs rated yet". A response for a path the
+ * screen has since moved off (a fast tab switch) is dropped, never applied
+ * over the newer one.
+ */
+export function useLoad<T>(path: string): {
+  data: T | null;
+  error: string | null;
+  retry: () => void;
+} {
+  const [state, setState] = useState<{ data: T | null; error: string | null }>({
+    data: null,
+    error: null,
+  });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    setState({ data: null, error: null });
+    get<T>(path)
+      .then((data) => current && setState({ data, error: null }))
+      .catch(
+        (e) =>
+          current &&
+          setState({ data: null, error: errorMessage(e, "Check your connection and try again.") }),
+      );
+    return () => {
+      current = false;
+    };
+  }, [path, attempt]);
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  return { ...state, retry };
+}
+
+/** What a screen shows when its data did not load. */
+export function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="empty" role="alert">
+      <p className="empty-title">Couldn&rsquo;t load this</p>
+      <p className="t-sub">{message}</p>
+      <button className="btn" style={{ marginTop: 16 }} onClick={onRetry}>
+        Retry
+      </button>
     </div>
   );
 }

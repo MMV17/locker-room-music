@@ -111,6 +111,7 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
         </div>
       ) : step === "code" ? (
         <form
+          data-hold-reload
           onSubmit={async (e) => {
             e.preventDefault();
             if (!code.trim() || busy) return;
@@ -154,7 +155,11 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
           </button>
         </form>
       ) : (
-        <form onSubmit={join}>
+        <form data-hold-reload onSubmit={join}>
+          {/* The checked code lives in this step too, so a new build waits for
+              the sign-in to finish rather than dropping the player back to
+              the code (staleBuild.ts reads every input in the form). */}
+          <input type="hidden" value={code} />
           <label className="field">
             <span className="t-label">First name</span>
             <input

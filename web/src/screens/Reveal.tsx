@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
-import { get } from "./../api";
+import { useEffect } from "react";
 import type { NowPlay, Results } from "./../api";
-import { Artwork, Spinner, formatScore, scoreClass } from "./../components";
+import { Artwork, formatScore, scoreClass } from "./../components";
 import { ThumbDown, ThumbUp } from "./../icons";
 
 /**
@@ -41,22 +40,15 @@ export function markRevealed(playId: string): void {
  * this one transition to get proper attention and for animation elsewhere to
  * stay near zero — that is why this is a full takeover rather than a toast.
  */
-export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }) {
-  const [results, setResults] = useState<Results | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    get<Results>(`/api/plays/${play.id}/results`)
-      .then(setResults)
-      // 403 means the window had not actually closed yet — a clock skew race.
-      // Nothing useful to say about it; drop the reveal.
-      .catch(() => setFailed(true));
-  }, [play.id]);
-
-  useEffect(() => {
-    if (failed) onClose();
-  }, [failed, onClose]);
-
+export function Reveal({
+  play,
+  results,
+  onClose,
+}: {
+  play: NowPlay;
+  results: Results;
+  onClose: () => void;
+}) {
   // Dismissable with Escape on the off chance someone is on a laptop.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -64,14 +56,8 @@ export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  if (failed) return null;
-
   return (
     <div className="reveal" role="dialog" aria-modal="true" aria-label="Song result">
-      {!results ? (
-        <Spinner />
-      ) : (
-        <>
           <p className="t-label">The room has spoken</p>
 
           <Artwork
@@ -115,8 +101,6 @@ export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }
           <button className="btn is-primary" onClick={onClose}>
             Done
           </button>
-        </>
-      )}
     </div>
   );
 }

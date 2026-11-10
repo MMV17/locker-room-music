@@ -585,6 +585,13 @@ input {
   color: var(--up);
 }
 
+/* Quiet on purpose: two dropped polls on locker-room wifi is ordinary, and the
+   last good reading stays on screen underneath it. */
+.np-reconnecting {
+  margin: 0;
+  color: var(--muted);
+}
+
 /* THE ARTWORK IS THE ONLY THING THAT GIVES, and it is sized by the space left
    over rather than by a guess at the viewport.
 

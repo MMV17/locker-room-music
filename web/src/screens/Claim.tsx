@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { ApiError, get, post } from "./../api";
+import { useState } from "react";
+import { ApiError, errorMessage, post } from "./../api";
 import type { UnclaimedDevice } from "./../api";
-import { Empty, Spinner } from "./../components";
+import { Empty, LoadError, Spinner, useLoad } from "./../components";
 import { IconPhone } from "./../icons";
 import { useNavigate } from "./../router";
 
@@ -16,19 +16,11 @@ import { useNavigate } from "./../router";
  */
 export function Claim() {
   const navigate = useNavigate();
-  const [devices, setDevices] = useState<UnclaimedDevice[] | null>(null);
+  const list = useLoad<{ devices: UnclaimedDevice[] }>("/api/devices/unclaimed");
+  const devices = list.data?.devices ?? null;
   const [confirming, setConfirming] = useState<UnclaimedDevice | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const load = () =>
-    get<{ devices: UnclaimedDevice[] }>("/api/devices/unclaimed")
-      .then((r) => setDevices(r.devices))
-      .catch(() => setDevices([]));
-
-  useEffect(() => {
-    void load();
-  }, []);
 
   const claim = async (device: UnclaimedDevice) => {
     setBusy(true);
@@ -37,9 +29,12 @@ export function Claim() {
       await post(`/api/devices/${device.mac_hash}/claim`);
       navigate("/");
     } catch (e) {
-      if (e instanceof ApiError) setError(e.message);
+      // 401 is App's: it is already returning to Join.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setError(errorMessage(e, "Could not claim that phone. Try again."));
+      }
       setConfirming(null);
-      void load();
+      list.retry();
     } finally {
       setBusy(false);
     }
@@ -89,7 +84,9 @@ export function Claim() {
 
       {error && <div className="banner is-bad">{error}</div>}
 
-      {!devices ? (
+      {list.error ? (
+        <LoadError message={list.error} onRetry={list.retry} />
+      ) : !devices ? (
         <Spinner />
       ) : devices.length === 0 ? (
         <Empty title="No unclaimed phones">

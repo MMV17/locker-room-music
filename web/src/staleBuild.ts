@@ -62,8 +62,36 @@ export async function reloadIfStale(): Promise<void> {
     return;
   }
   if (sessionStorage.getItem(TRIED_KEY) === theirs) return; // already tried
-  sessionStorage.setItem(TRIED_KEY, theirs);
-  location.reload();
+  reloadWhenIdle(theirs);
+}
+
+/**
+ * True while a form that asked to be protected (`data-hold-reload`, the Join
+ * form) has something typed into it. Reloading then would throw away a team
+ * code or a half-typed name - on the screen a new player sees first.
+ */
+function formInProgress(): boolean {
+  return [...document.querySelectorAll<HTMLInputElement>("[data-hold-reload] input")].some(
+    (el) => el.value.trim() !== "",
+  );
+}
+
+let waiting = false;
+
+/** Reload now, or as soon as the protected form is empty or gone (submitted). */
+function reloadWhenIdle(theirs: string): void {
+  const go = () => {
+    sessionStorage.setItem(TRIED_KEY, theirs);
+    location.reload();
+  };
+  if (!formInProgress()) return go();
+  if (waiting) return;
+  waiting = true;
+  const id = window.setInterval(() => {
+    if (formInProgress()) return;
+    window.clearInterval(id);
+    go();
+  }, 2_000);
 }
 
 /**
