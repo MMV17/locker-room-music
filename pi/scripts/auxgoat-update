@@ -406,7 +406,11 @@ def _git_argv(args: list[str]) -> list[str]:
         # Root in somebody else's clone trips git's "dubious ownership" check,
         # and the owner's SSH key is the one that can reach GitHub.
         if os.geteuid() == 0 and st.st_uid != 0:
-            return ["runuser", "-u", pwd.getpwuid(st.st_uid).pw_name, "--", *argv]
+            owner = pwd.getpwuid(st.st_uid)
+            # HOME set explicitly: git DIES (not warns) if it cannot read the
+            # global config, and root's HOME is unreadable to the clone's owner.
+            return ["runuser", "-u", owner.pw_name, "--",
+                    "env", f"HOME={owner.pw_dir}", *argv]
     except (OSError, KeyError):
         pass
     return argv
@@ -659,6 +663,13 @@ def ensure_consistent(st: dict) -> dict:
         if st.get("state") in ("trial", "committing") and st.get("to") == rid:
             finish("rolled-back", "the new release was damaged on disk", st)
             st = {"state": "idle"}
+        elif st.get("state") == "idle":
+            # Nobody asked for this, so nobody is looking for it. Put it where
+            # the Admin screen will show it: the listener reports this result.
+            finish("rolled-back",
+                   f"release {rid} failed its integrity check (a damaged file on the "
+                   f"card, or one edited by hand) - now running {live_release() or 'nothing'}",
+                   {"from": rid, "to": rid, "to_commit": release_meta(rid).get("commit")})
 
     state = st.get("state")
     if state == "converting":

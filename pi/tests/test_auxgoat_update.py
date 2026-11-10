@@ -502,6 +502,8 @@ class TestPowerCuts:
         box.reboot()
         assert box.live_behavior() == "legacy"
         box.assert_sound()
+        # And it is not silent about it: this result is reported to the Admin screen.
+        assert "failed its integrity check" in box.result()["reason"]
 
 
 class TestReleasesAreImmutable:
