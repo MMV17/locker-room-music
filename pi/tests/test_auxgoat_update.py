@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 
 import pytest
 
@@ -147,6 +148,23 @@ class TestTrialDecisions:
         assert box.update("verify").returncode == 1
         assert box.live_behavior() == "legacy"
         assert "never reported in" in box.result()["reason"]
+
+    def test_one_listener_restart_mid_trial_is_not_mistaken_for_silence(self, box):
+        """The listener is beaconing, but something restarted it once part-way
+        through (bluetooth coming back, an operator pressing restart). It now
+        needs a fresh run on one PID to commit - and "ran but never reported
+        in" must be judged over that same run, not from the switch."""
+        sha = box.push(package("healthy"), "v2")
+        assert box.apply(sha).returncode == 0
+        out: dict = {}
+        t = threading.Thread(target=lambda: out.update(r=box.update(
+            "verify", AUXGOAT_STABLE_S="3", AUXGOAT_NOBEACON_S="4")))
+        t.start()
+        time.sleep(1.5)
+        subprocess.run(["systemctl", "restart", "lockerroom-listener"], env=box.env, check=True)
+        t.join(60)
+        assert box.result()["outcome"] == "committed", box.result().get("reason")
+        assert box.live_behavior() == "healthy"
 
     def test_a_network_outage_neither_rolls_back_nor_commits(self, box):
         """I6, second half: do not punish good code for the campus wifi."""

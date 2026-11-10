@@ -1298,7 +1298,12 @@ def cmd_verify(_args: argparse.Namespace) -> int:
                 net_since = net_since if net_since is not None else now
             else:
                 net_since = None
-        if net_since is not None and now - net_since >= NOBEACON_S and now - seg_start >= NOBEACON_S:
+        # Judged over ONE run of the listener, like the commit above. Measured
+        # from the switch instead, a single restart part-way through (bluetooth
+        # coming back, an operator pressing restart) pushed the commit past
+        # this deadline and a release that WAS beaconing got rolled back as
+        # silent. A crash loop is caught by the restart count, not here.
+        if net_since is not None and now - max(net_since, seg_start, pid_since) >= NOBEACON_S:
             with_lock(roll_back, st, "the new listener ran but never reported in, "
                       "while the network was up")
             return 1
