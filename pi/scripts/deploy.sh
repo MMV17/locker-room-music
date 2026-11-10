@@ -119,7 +119,7 @@ else
   echo "== repair: NO git clone at /opt/lockerroom/repo =="
   echo "   Seeding the committed repair script directly. run-repair will work,"
   echo "   but it cannot pick up NEW commits until the clone exists. To finish:"
-  echo "     sudo git clone ssh://git@ssh.github.com:443/MMV17/locker-room-music.git \\"
+  echo "     sudo git clone ssh://git@ssh.github.com:443/MMV17/auxgoat.git \\"
   echo "       /opt/lockerroom/repo && sudo chown -R pi:pi /opt/lockerroom/repo"
   sudo mkdir -p /opt/lockerroom/repo/pi/scripts
   sudo install -m 755 /tmp/remote-repair.sh /opt/lockerroom/repo/pi/scripts/remote-repair.sh

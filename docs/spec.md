@@ -1,4 +1,4 @@
-# Locker Room Music Rating System — Build Spec
+# AuxGoat — Build Spec
 
 A build specification for Claude Code. Read this whole document before writing any code.
 

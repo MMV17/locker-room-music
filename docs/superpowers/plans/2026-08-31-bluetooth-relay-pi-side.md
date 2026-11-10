@@ -1026,7 +1026,7 @@ Expected: PASS — 138 passed.
 # Recover a wedged Bluetooth controller without a reboot. See btwatch.sh for
 # why the three obvious commands cannot do it.
 [Unit]
-Description=Locker Room Music Bluetooth controller watchdog
+Description=AuxGoat Bluetooth controller watchdog
 After=bluetooth.service
 Wants=bluetooth.service
 

@@ -1197,7 +1197,7 @@ function Speaker({ call }: { call: Call }) {
           cmd === "reboot"
             ? "Music stops for about a minute, and whoever is DJing is cut off."
             : cmd === "run-repair"
-              ? "Restarts Bluetooth and the lockerroom services. Music stops if anything is playing, and the speaker can show as offline for a few minutes. It will not touch the listener's code."
+              ? "Restarts Bluetooth and the speaker's services. Music stops if anything is playing, and the speaker can show as offline for a few minutes. It will not touch the listener's code."
               : "Restarts the listener. Anything playing right now is interrupted.",
         confirmLabel: label,
         danger: true,

@@ -14,7 +14,7 @@ describe("isAllowedArtUrl", () => {
 
   it("refuses any other host", () => {
     expect(isAllowedArtUrl("https://example.com/cover.jpg")).toBe(false);
-    expect(isAllowedArtUrl("https://lockerroom.finestkindfarms.com/api/admin/pi/commands")).toBe(false);
+    expect(isAllowedArtUrl("https://hc.auxgoat.com/api/admin/pi/commands")).toBe(false);
   });
 
   it("refuses a lookalike host that only contains the name", () => {

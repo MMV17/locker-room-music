@@ -3,7 +3,7 @@ import type { Env } from "./types";
 
 export const theme = new Hono<{ Bindings: Env }>();
 
-export const DEFAULT_TEAM_NAME = "Locker Room";
+export const DEFAULT_TEAM_NAME = "AuxGoat";
 
 /*
  * THERE IS NO TEAM COLOUR ANY MORE.

@@ -32,7 +32,7 @@ jobs:
       run:
         working-directory: backend
     env:
-      APP: https://locker-room-music.mmvinton17.workers.dev
+      APP: https://hc.auxgoat.com
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -62,7 +62,11 @@ jobs:
       - name: 2. Watch the live Worker through one heal run (6 minutes)
         continue-on-error: true
         run: |
-          timeout 370 npx wrangler tail locker-room-music --format pretty > tail.log 2>&1 || true
+          # The Worker that exists right now: the new name, or the pre-rename
+          # one until the dashboard rename is done (see resolve-worker.sh).
+          WORKER="$(WANT_NAME="$(sed -n 's/^name = "\(.*\)"$/\1/p' wrangler.toml | head -n 1)" \
+            LEGACY_NAME="locker-room-music" bash ../.github/scripts/resolve-worker.sh)"
+          timeout 370 npx wrangler tail "$WORKER" --format pretty > tail.log 2>&1 || true
           echo "===== heal runs ====="
           grep -i "artwork heal" tail.log || echo "(no heal line seen in 6 minutes)"
           echo "===== why lookups failed (first 40) ====="

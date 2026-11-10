@@ -1,6 +1,6 @@
 # Copy to /etc/lockerroom/config.toml. Secrets never in the repo.
 
-api_base_url = "https://locker-room-music.example.workers.dev"
+api_base_url = "https://auxgoat-hc.example.workers.dev"
 device_key = "REPLACE_ME"
 # Reported to the server (the heartbeats key). Keep it the same as the
 # Bluetooth Name in /etc/bluetooth/main.conf — they are two different

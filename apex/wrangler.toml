@@ -9,7 +9,7 @@ compatibility_date = "2024-12-18"
 
 # auxgoat.com — the front door, and deliberately NOT the school's Worker.
 #
-# This started life inside locker-room-music, and could not work there. That
+# This started life inside the team Worker, and could not work there. That
 # Worker serves the voting app from an [assets] binding, and Cloudflare serves
 # any file matching the request path WITHOUT invoking the Worker at all — so
 # `/` was answered with the team app's index.html and the apex routing never
@@ -37,8 +37,8 @@ compatibility_date = "2024-12-18"
 #
 # The whole auxgoat.com zone is SNI-filtered on the school's wired network.
 # Measured 2026-08-08 against the same Cloudflare IP: SNI hc.auxgoat.com gets
-# "no peer certificate available" while example.com and
-# lockerroom.finestkindfarms.com are served normally, and workers.dev returned
+# "no peer certificate available" while example.com and an unrelated
+# hostname on another zone are served normally, and workers.dev returned
 # 200 throughout. So auxgoat.mmvinton17.workers.dev is what a player on campus
 # can actually open, and /go sends them on to a hostname chosen the same way
 # (see Team.url in src/teams.ts).

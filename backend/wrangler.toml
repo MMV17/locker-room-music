@@ -1,4 +1,13 @@
-name = "locker-room-music"
+# RENAMED 2026-11-10 from the project's old name. `wrangler deploy` CREATES a
+# Worker when none has this name, and a new Worker has no secrets - so the
+# rename is finished in the Cloudflare dashboard (Workers & Pages -> the
+# Worker -> Settings -> rename), which keeps the secrets, the D1 and R2
+# bindings and the cron triggers. Until that is done the deploy workflow keeps
+# uploading to the Worker that actually exists: see
+# .github/scripts/resolve-worker.sh and docs/LAUNCH.md. Deploying BY HAND
+# is `npm run deploy` (scripts/deploy.sh), which does the same check - never a
+# bare `npx wrangler deploy`.
+name = "auxgoat-hc"
 main = "src/index.ts"
 compatibility_date = "2024-12-18"
 
@@ -19,12 +28,15 @@ compatibility_date = "2024-12-18"
 # colour come from the settings table, which is why /admin can change them —
 # so adding a school is a deploy, not a rewrite.
 #
-# lockerroom.finestkindfarms.com is KEPT DELIBERATELY. The Pi's config names
-# exactly one API host, there is no allowlisted command to change it, and over
-# HCGuest the Pi cannot be reached at all (TCP/22 is filtered). If the new
-# hostname ever fails to resolve and it were the only one, the Pi would go
-# dark and take the control channel with it — recoverable only by physically
-# standing next to it. A spare hostname costs nothing; do not remove this.
+# THE SECOND ROUTE BELOW IS THE LEGACY API HOSTNAME, AND IT IS ON ITS WAY OUT.
+# It is on an unrelated test domain and is the address speaker 0001 was
+# provisioned with. Do NOT delete the route (or that zone) until Admin shows
+# the speaker checking in through another hostname: removing a custom domain
+# from this list deletes it on the next deploy, the speaker's listener and its
+# wifi watchdog would both lose the only host they know, and the box would go
+# dark and start rebooting itself - recoverable only with a cable. The speaker
+# learns its other hostnames from the over-the-air update (pi/lockerroom
+# /endpoints.py). The exact retirement steps are in docs/LAUNCH.md.
 workers_dev = true
 # auxgoat.com and www USED TO BE HERE and were moved to the apex Worker
 # (../apex) on 2026-08-08. Do not add them back.

@@ -170,7 +170,7 @@ export function Tabs<T extends string>({
  *
  * The native dialog is rendered by the browser, not the page: it cannot be
  * styled, it is prefixed with the bare hostname
- * ("locker-room-music.mmvinton17.workers.dev says"), and on a phone it reads
+ * ("auxgoat-hc.mmvinton17.workers.dev says"), and on a phone it reads
  * more like a security warning than like part of the product. For a control
  * that deletes a player or empties every leaderboard, looking untrustworthy is
  * the wrong problem to have.

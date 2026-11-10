@@ -1,5 +1,5 @@
 [Unit]
-Description=Locker Room Music wifi egress watchdog (probe wlan0 -> bounce -> reboot)
+Description=AuxGoat wifi egress watchdog (probe wlan0 -> bounce -> reboot)
 After=network-online.target NetworkManager.service
 Wants=network-online.target
 # Deliberately NOT Requires=lockerroom-listener.service. The watchdog exists to

@@ -6,7 +6,7 @@
 # and why a wedged controller is invisible to `systemctl status` — every unit
 # stays active while the radio answers nothing.
 [Unit]
-Description=Locker Room Music Bluetooth controller watchdog
+Description=AuxGoat Bluetooth controller watchdog
 After=bluetooth.service
 Wants=bluetooth.service
 
