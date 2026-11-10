@@ -57,6 +57,61 @@ Build order status (spec section 10):
 
 ---
 
+## TO DO: Bluetooth gets spotty when more than one phone is connected (noted 2026-11-10)
+
+**The complaint:** with one phone connected the audio is fine; as soon as more
+than one person is connected, it gets spotty. Not yet measured on the box -
+everything below is from reading the code and the earlier hardware notes.
+
+**Leading suspect: phones that are not on the aux are still streaming.** The
+design keeps waiting phones CONNECTED and simply does not route them
+(`bluealsa-aplay` gets a one-MAC allowlist; see "One phone on the aux"). But
+not routing is not the same as not transmitting: a waiting phone that presses
+play still sends a full A2DP stream to the Pi, over the same single radio the
+DJ's stream arrives on, and the Pi throws it away. The only brake is
+`_pause_politely` in `pi/lockerroom/lifecycle.py` - an AVRCP pause at most
+every `PAUSE_COOLDOWN` (10s) - and iOS resumes on its own after an external
+pause (measured 2026-08-09: 12 pauses in 41s). Two or three phones streaming
+into one Pi 4 radio is the same airtime starvation that made the 2026-08-23
+relay test stutter ("Why it is a no-go: airtime, not tuning").
+
+**Other things that share that radio, to rule in or out:**
+- the relay link to the JBL, if a `[relay]` speaker is selected (a third A2DP
+  stream), and the 2026-09-27 workaround of the DJ's phone paired to the Pi
+  AND the JBL at once
+- `keep-discoverable`'s page/inquiry scanning, which runs continuously
+- wifi falling back to 2.4GHz (it is pinned to 5GHz with
+  `802-11-wireless.band a`; a new network profile would lose that)
+
+**First step - measure, from a phone, no laptop needed:** with 2-3 phones
+connected and the audio spotty, press Admin -> Diagnostics -> report full and
+read: `hciconfig hci0` (link count), the `nmcli` band, `bluealsa`/listener
+journals, and `aux_waiting` on the server. Then have the waiting phones stop
+playing and listen for whether the spottiness goes away. If it does, the
+suspect is confirmed.
+
+**Candidate fixes, in order of preference:**
+1. **Stop a waiting phone's stream, not just its playback.** When a non-aux
+   phone opens an A2DP transport, drop just its A2DP profile
+   (`Device1.DisconnectProfile` on the Audio Source UUID) and keep the rest of
+   the connection, so it still shows as waiting; reconnect the profile when it
+   is granted the aux. Needs hardware testing on iOS and Android: some phones
+   treat a dropped A2DP profile as a full disconnect.
+2. **Pause harder:** shorter `PAUSE_COOLDOWN` for a phone that keeps resuming.
+   Cheap, but fights iOS rather than winning.
+3. **Cap simultaneous connections** (e.g. holder + 2 waiting). Blunt; costs the
+   "waiting" display for everyone past the cap.
+4. **Lower the scan duty cycle** in `keep-discoverable.sh` (longer page/inquiry
+   scan intervals). This one is a script, not the listener, so it CAN ship over
+   `run repair` - but the 2026-08-23 test found killing scans entirely did not
+   cure stutter, so expect a small effect.
+
+**How it ships:** 1-3 are listener changes (`lifecycle.py`), so the same
+constraint as the item below - next cable/serial deploy, or Tier 2. 4 can go
+over `run repair`. **Group it with the other listener work waiting on a
+cable:** the 10s check-in (below) and the 2026-10-31 `may_scan` change (paused
+songs may scan), so one deploy carries all three.
+
 ## TO DO: make the Pi answer in seconds, not up to a minute (noted 2026-10-31)
 
 **The complaint:** pressing Find speakers (or any speaker/connection action)
