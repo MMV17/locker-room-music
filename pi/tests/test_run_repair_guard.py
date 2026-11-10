@@ -14,6 +14,7 @@ a stubbed systemctl, sudo and git on PATH.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -56,6 +57,9 @@ def box(tmp_path):
     env = dict(os.environ)
     env["LOCKERROOM_PKG"] = str(pkg)
     env["LOCKERROOM_REPO"] = str(repo)
+    # Its own lock directory: never the real /run/lockerroom of whatever
+    # machine is running the tests.
+    env["AUXGOAT_RUN"] = str(tmp_path / "run")
     env["PATH"] = f"{binv}:{env['PATH']}"
     return {"pkg": pkg, "repo": repo, "env": env}
 
@@ -216,3 +220,118 @@ class TestRepairCannotKillTheControlChannel:
         """The line that explained the 2026-09-21 fault was missing from the
         dump that was supposed to explain it."""
         assert "rfkill" in REPORT_SH.read_text()
+
+
+class TestThePackageAsAReleaseSymlink:
+    """After the first over-the-air update the package path is a symlink into
+    releases/<id>/. The original guard ran `find` on the link, which finds
+    nothing - an empty list verified against an empty list. These hold the
+    guard to meaning something there too."""
+
+    @pytest.fixture
+    def linked(self, box, tmp_path):
+        real = tmp_path / "releases" / "abc-0" / "lockerroom"
+        real.parent.mkdir(parents=True)
+        shutil.move(str(box["pkg"]), str(real))
+        other = tmp_path / "releases" / "evil-0" / "lockerroom"
+        other.mkdir(parents=True)
+        (other / "control.py").write_text("SOMEBODY ELSE'S LISTENER\n")
+        box["pkg"].symlink_to("releases/abc-0/lockerroom")
+        box["real"], box["other"] = real, other
+        return box
+
+    def test_an_untouched_release_verifies(self, linked):
+        write_repair(linked, 'echo "fine"\n')
+        result = run(linked)
+        assert "VERIFIED" in result.stdout
+        assert "package is release: releases/abc-0/lockerroom" in result.stdout
+        assert linked["pkg"].is_symlink()
+        assert not list(linked["real"].parent.glob(".pkg-snapshot.*")), "snapshot left behind"
+
+    def test_an_edit_inside_the_release_is_undone(self, linked):
+        write_repair(linked, 'echo "BACKDOOR" > "$LOCKERROOM_PKG/control.py"\n')
+        before = package_state(linked["real"])
+        result = run(linked)
+        assert package_state(linked["real"]) == before
+        assert "MODIFIED THE LISTENER PACKAGE" in result.stdout and "RESTORED" in result.stdout
+        assert linked["pkg"].is_symlink()
+
+    def test_repointing_the_link_at_other_code_is_undone(self, linked):
+        """The files were never touched - and the listener would still have
+        started somebody else's code."""
+        write_repair(linked, 'ln -sfn releases/evil-0/lockerroom "$LOCKERROOM_PKG"\n')
+        result = run(linked)
+        assert os.readlink(linked["pkg"]) == "releases/abc-0/lockerroom"
+        assert "RESTORED" in result.stdout
+        assert "ORIGINAL" in (linked["pkg"] / "control.py").read_text()
+
+    def test_replacing_the_link_with_a_directory_is_undone(self, linked):
+        write_repair(linked, 'rm "$LOCKERROOM_PKG"; mkdir "$LOCKERROOM_PKG"; '
+                             'echo EVIL > "$LOCKERROOM_PKG/control.py"\n')
+        result = run(linked)
+        assert linked["pkg"].is_symlink()
+        assert os.readlink(linked["pkg"]) == "releases/abc-0/lockerroom"
+        assert "RESTORED" in result.stdout
+
+    def test_deleting_the_link_is_undone(self, linked):
+        write_repair(linked, 'rm "$LOCKERROOM_PKG"\n')
+        result = run(linked)
+        assert os.readlink(linked["pkg"]) == "releases/abc-0/lockerroom"
+        assert "RESTORED" in result.stdout
+
+
+class TestTheUpdateLock:
+    def test_a_repair_does_not_run_while_an_update_is_switching_code(self, box, tmp_path):
+        import fcntl
+        write_repair(box, 'echo "THE REPAIR RAN"\n')
+        lockdir = tmp_path / "run"
+        lockdir.mkdir()
+        fd = os.open(lockdir / "update.lock", os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            text = SCRIPT.read_text().replace("flock -s -w 20 9", "flock -s -w 1 9")
+            fast = tmp_path / "run-repair-fast.sh"
+            fast.write_text(text)
+            result = subprocess.run(["bash", str(fast)], env=box["env"], capture_output=True,
+                                    text=True, timeout=60)
+        finally:
+            os.close(fd)
+        assert result.returncode == 1
+        assert "THE REPAIR RAN" not in result.stdout
+        assert "update is switching the listener" in result.stdout
+
+    def test_nothing_the_repair_starts_can_keep_the_lock(self, box, tmp_path):
+        """A stray background process holding it would block every later update."""
+        import fcntl
+        write_repair(box, 'sleep 30 >/dev/null 2>&1 &\n'
+                          'echo $! > "$LOCKERROOM_REPO/bg.pid"\necho started\n')
+        result = run(box)
+        assert "started" in result.stdout
+        fd = os.open(tmp_path / "run" / "update.lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)   # raises if still held
+        finally:
+            os.close(fd)
+            try:
+                os.kill(int((box["repo"] / "bg.pid").read_text()), 9)
+            except (OSError, ValueError):
+                pass
+
+    def test_the_snapshot_is_not_taken_in_tmp(self):
+        """/tmp is a RAM disk on the box and can be full; a short snapshot is
+        how a restore turns into deleting the listener."""
+        text = SCRIPT.read_text()
+        assert "mktemp -d /tmp" not in text
+        assert 'mktemp -d "$(dirname "$REAL")/.pkg-snapshot' in text
+
+    def test_an_incomplete_snapshot_reports_but_never_destroys(self, box, tmp_path):
+        """If the snapshot could not be taken, a modified package is left as
+        it is rather than replaced with nothing."""
+        write_repair(box, 'echo "CHANGED" > "$LOCKERROOM_PKG/control.py"\n')
+        stub = Path(box["env"]["PATH"].split(":")[0]) / "cp"
+        stub.write_text("#!/bin/sh\nexit 1\n")
+        stub.chmod(0o755)
+        result = run(box)
+        assert "could not take a complete snapshot" in result.stdout
+        assert "RESTORE FAILED" in result.stdout
+        assert (box["pkg"] / "control.py").exists(), "the package was destroyed"

@@ -30,13 +30,15 @@ BTCTL="${BT_SCAN_BLUETOOTHCTL:-bluetoothctl}"
 # be read. --timeout makes bluetoothctl do exactly that and exit, which is what
 # lets this be a plain blocking command instead of a background process someone
 # has to remember to kill.
-"$BTCTL" --timeout "$SECONDS_TO_SCAN" scan on >/dev/null 2>&1
+# The outer `timeout` is for a bluetoothd that is not answering at all: then
+# bluetoothctl never reaches the point where its own --timeout starts counting.
+timeout "$((SECONDS_TO_SCAN + 10))" "$BTCTL" --timeout "$SECONDS_TO_SCAN" scan on >/dev/null 2>&1
 
 # `devices` lists everything the controller knows about, which after a scan is
 # everything nearby plus everything ever paired. That is deliberate: a speaker
 # that is already paired but switched off should still be selectable, so the
 # operator can re-point the box at it before walking over to turn it on.
-mac_list="$("$BTCTL" devices 2>/dev/null | awk '$1 == "Device" { print $2 }')"
+mac_list="$(timeout 10 "$BTCTL" devices 2>/dev/null | awk '$1 == "Device" { print $2 }')"
 
 [ -z "$mac_list" ] && exit 0
 
@@ -45,7 +47,7 @@ while IFS= read -r mac; do
 
   # One info call per device. Class and RSSI are not in `devices` output, and
   # the class is what sorts speakers to the top of the list.
-  info="$("$BTCTL" info "$mac" 2>/dev/null)"
+  info="$(timeout 5 "$BTCTL" info "$mac" 2>/dev/null)"
 
   # Everything below tolerates a missing field. A device that reports no class
   # is still a device, and dropping it would hide the exact speaker somebody is

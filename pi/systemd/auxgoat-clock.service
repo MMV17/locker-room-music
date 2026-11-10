@@ -1,0 +1,29 @@
+# Set a badly wrong clock from an HTTP Date header, once, at boot.
+#
+# Installs to /etc/systemd/system/auxgoat-clock.service
+#
+# This box has no clock battery. systemd restores roughly the time it was last
+# powered off, which is fine after a power cut and ruinous after a holiday: a
+# clock weeks behind is EARLIER than the "valid from" date of the server's
+# current TLS certificate, so every HTTPS request fails, the beacon goes silent
+# and nobody can reach the box to fix it. NTP would correct that - if the
+# campus network lets UDP 123 through, which nobody has measured.
+#
+# ORDERED Before= THE LISTENER, NEVER Required BY ANYTHING, AND HARD-BOUNDED.
+# It runs before the listener so the clock never moves under an open song. If
+# it fails, hangs or is missing, the listener starts anyway, 45 seconds later
+# at worst. There is no timer: after boot this never runs again.
+[Unit]
+Description=AuxGoat boot-time clock correction (forward only, when NTP has not synchronised)
+After=network-online.target
+Wants=network-online.target
+Before=lockerroom-listener.service
+ConditionPathExists=/usr/local/bin/auxgoat-clock.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/auxgoat-clock.sh
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target

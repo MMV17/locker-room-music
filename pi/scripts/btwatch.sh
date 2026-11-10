@@ -32,7 +32,13 @@ RECOVER_CMD="${RECOVER_CMD:-}"
 
 # "UP RUNNING", not just "UP". The wedged controller can still report UP while
 # answering nothing, so UP alone is not evidence of a working radio.
-healthy() { hciconfig hci0 2>/dev/null | grep -q "UP RUNNING"; }
+#
+# `timeout` on every hciconfig and bluetoothctl in this file, added 2026-11. A
+# watchdog that hangs on the thing it is watching recovers nothing: with
+# bluetoothd off the bus, bluetoothctl waits for ever, and this script used to
+# stop inside power_up - before the rebind, before the restarts - exactly when
+# it was needed. pi/tests/test_script_timeouts.py holds the rule for all scripts.
+healthy() { timeout 10 hciconfig hci0 2>/dev/null | grep -q "UP RUNNING"; }
 
 # An rfkill SOFT BLOCK is invisible to everything this watchdog used to do, and
 # a rebind actively preserves it. Measured 2026-09-21: 212 rebinds over nine
@@ -52,7 +58,7 @@ unblock() {
   command -v rfkill >/dev/null 2>&1 || return 1
 
   local before after
-  before="$(rfkill list bluetooth 2>/dev/null)"
+  before="$(timeout 10 rfkill list bluetooth 2>/dev/null)"
 
   # A HARD block is a kill switch, not software state, and `rfkill unblock`
   # cannot clear it. Name it, because otherwise it presents exactly like the
@@ -71,9 +77,9 @@ unblock() {
   # the radio off — which is precisely the bug this function exists to fix.
   # The clear is a no-op on a healthy adapter, which is what makes it safe to
   # run every time. remote-repair.sh runs it unconditionally for this reason.
-  rfkill unblock bluetooth 2>/dev/null
+  timeout 10 rfkill unblock bluetooth 2>/dev/null
 
-  after="$(rfkill list bluetooth 2>/dev/null)"
+  after="$(timeout 10 rfkill list bluetooth 2>/dev/null)"
   if printf '%s' "$after" | grep -q "Soft blocked: yes"; then
     # Never let a failed clear look like a successful one. That specific
     # blindness is what cost nine hours on 2026-09-21.
@@ -92,8 +98,8 @@ unblock() {
 # waiting for it is a race btwatch loses more often than it wins - and losing
 # means falling through to a rebind that restarts the listener for nothing.
 power_up() {
-  hciconfig hci0 up 2>/dev/null
-  command -v bluetoothctl >/dev/null 2>&1 && bluetoothctl power on >/dev/null 2>&1
+  timeout 15 hciconfig hci0 up 2>/dev/null
+  command -v bluetoothctl >/dev/null 2>&1 && timeout 15 bluetoothctl power on >/dev/null 2>&1
   return 0
 }
 
@@ -126,7 +132,7 @@ recover() {
   # Everything that held a handle on the old adapter has to re-bind to the new
   # one, or the radio comes back and nothing is using it — which looks exactly
   # like the fault it just recovered from.
-  systemctl restart bluealsa bluealsa-aplay keep-discoverable bt-agent lockerroom-listener 2>/dev/null
+  timeout 120 systemctl restart bluealsa bluealsa-aplay keep-discoverable bt-agent lockerroom-listener 2>/dev/null
   echo "btwatch: rebind complete"
 }
 

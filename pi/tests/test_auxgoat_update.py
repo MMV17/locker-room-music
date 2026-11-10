@@ -648,3 +648,153 @@ class TestTheRealTree:
         assert "enable auxgoat-update-recover.service" in box.systemctl_log()
         # And the probe list came from the real endpoints module.
         assert box.update("status", "--field", "state").stdout.strip() == "idle"
+
+
+class TestBootstrapThroughTheInstalledRepair:
+    """I11. The box today has the OLD run-repair.sh in /usr/local/bin and the
+    OLD listener, and neither can be changed first. The only way the updater
+    reaches it is: push, press "run repair", and the old script runs the NEW
+    remote-repair.sh from the clone.
+
+    So this runs the run-repair.sh that is actually installed - pinned as a
+    fixture from commit 828f6a2 - against the real remote-repair.sh.
+    """
+
+    OLD_REPAIR = PI / "tests" / "fixtures" / "run-repair-828f6a2.sh"
+
+    @pytest.fixture
+    def site(self, box):
+        stubbin = box.tmp / "stubbin"
+        extra = {
+            # `sudo -u X cmd` -> cmd, as in test_run_repair_guard.py.
+            "sudo": '#!/bin/sh\nwhile [ "$1" = "-u" ]; do shift 2; done\nexec "$@"\n',
+            # Never let a test unblock a real radio or touch a real network.
+            "rfkill": "#!/bin/sh\nexit 0\n",
+            "hciconfig": '#!/bin/sh\necho "hci0: UP RUNNING PSCAN ISCAN"\n',
+            "nmcli": "#!/bin/sh\nexit 0\n",
+        }
+        for name, body in extra.items():
+            (stubbin / name).write_text(body)
+            (stubbin / name).chmod(0o755)
+        # The real tree, as the commit the owner would push.
+        for part in ("lockerroom", "scripts", "systemd"):
+            dest = box.author / "pi" / part
+            shutil.rmtree(dest)
+            shutil.copytree(PI / part, dest, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy(PI / "requirements.txt", box.author / "pi" / "requirements.txt")
+        (box.author / "pi" / "lockerroom" / "behavior.txt").write_text("healthy\n")
+        (box.etc / "config.toml").write_text(
+            'api_base_url = "https://example.invalid"\ndevice_key = "k"\n'
+            f'db_path = "{box.tmp}/x.db"\nlog_path = "{box.tmp}/x.log"\n')
+        box.sha = box.push({}, "release 0")
+        box.env["LOCKERROOM_PKG"] = str(box.pkg)
+        box.env["LOCKERROOM_REPO"] = str(box.repo)
+        return box
+
+    def press_run_repair(self, box) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", str(self.OLD_REPAIR)], env=box.env,
+                              capture_output=True, text=True, timeout=180)
+
+    def test_the_fixture_is_the_script_that_is_on_the_box(self):
+        text = self.OLD_REPAIR.read_text()
+        assert 'SNAPSHOT="$(mktemp -d /tmp/lockerroom-pkg-snapshot.XXXXXX)"' in text
+        assert "timeout 120 bash" in text and "flock" not in text
+
+    def test_the_old_guard_passes_and_the_update_is_scheduled(self, site):
+        import time
+        before = {p.name: p.read_bytes() for p in site.pkg.iterdir() if p.is_file()}
+        started = time.monotonic()
+        result = self.press_run_repair(site)
+        elapsed = time.monotonic() - started
+        out = result.stdout
+
+        # The old integrity guard saw nothing change, because nothing did.
+        assert "VERIFIED: the listener package is byte-for-byte unchanged." in out, out[-3000:]
+        assert "MODIFIED THE LISTENER PACKAGE" not in out
+        assert not site.pkg.is_symlink()
+        assert {p.name: p.read_bytes() for p in site.pkg.iterdir() if p.is_file()} == before
+        assert "restart lockerroom-listener" not in site.systemctl_log()
+
+        # The updater and its recovery units are installed, outside the package.
+        assert (site.bin / "auxgoat-update").read_bytes() == UPDATER.read_bytes()
+        assert (site.bin / "auxgoat-update").stat().st_mode & 0o111
+        assert (site.units / "auxgoat-update-recover.service").exists()
+        assert (site.units / "auxgoat-update-verify.service").exists()
+        assert ("enable auxgoat-update-recover.service auxgoat-update-verify.service"
+                in site.systemctl_log())
+
+        # Exactly one detached apply, for exactly the pushed commit.
+        scheduled = (site.stub / "systemd-run.log").read_text().splitlines()
+        assert scheduled == [
+            "--unit=auxgoat-update-apply --collect --on-active=20 "
+            f"--timer-property=AccuracySec=1s {UPDATER} apply --commit {site.sha} "
+            "--wait-for-repair"
+        ]
+        assert f"scheduled unknown -> {site.sha[:7]}" in out
+        # Well inside the 120 seconds the old script allows the repair.
+        assert elapsed < 60, f"the bootstrap repair took {elapsed:.0f}s"
+
+    def test_then_the_scheduled_apply_installs_and_commits(self, site):
+        self.press_run_repair(site)
+        applied = site.update("apply", "--commit", site.sha, "--wait-for-repair")
+        assert applied.returncode == 0, site.result().get("reason")
+        assert site.update("verify").returncode == 0
+        assert site.result()["outcome"] == "committed"
+        assert site.pkg.is_symlink() and site.live_behavior() == "healthy"
+        # run-repair.sh itself was replaced only now, after the trial.
+        assert "flock" in (site.bin / "run-repair.sh").read_text()
+
+    def test_apply_waits_for_the_repair_that_scheduled_it(self, site):
+        """The old script takes no lock, and its guard restores the package if
+        it sees it change - so the apply must not start underneath it."""
+        import time
+        self.press_run_repair(site)
+        (site.stub / "repair-running").write_text("")
+        started = time.monotonic()
+        applied = site.update("apply", "--commit", site.sha, "--wait-for-repair",
+                              AUXGOAT_REPAIR_WAIT_S="1")
+        assert time.monotonic() - started >= 1.0, "it did not wait for run-repair.sh"
+        assert applied.returncode == 0
+
+    def test_pressing_repair_again_is_a_no_op(self, site):
+        self.press_run_repair(site)
+        site.update("apply", "--commit", site.sha, "--wait-for-repair")
+        site.update("verify")
+        (site.stub / "systemd-run.log").unlink()
+        log_before = site.systemctl_log()
+
+        again = self.press_run_repair(site)
+        assert "VERIFIED" in again.stdout
+        assert "installed " not in again.stdout, "an unchanged file was reinstalled"
+        assert "this box updates from the Admin screen" in again.stdout
+        assert not (site.stub / "systemd-run.log").exists()
+        assert "restart lockerroom-listener" not in site.systemctl_log()[len(log_before):]
+
+    def test_a_failed_first_update_can_be_retried_with_a_new_commit(self, site):
+        """Rolled back onto the old listener, which has no update button: the
+        repair path must still be open."""
+        (site.author / "pi" / "lockerroom" / "behavior.txt").write_text("crash\n")
+        bad = site.push({}, "a bad release 0")
+        self.press_run_repair(site)
+        site.update("apply", "--commit", bad, "--wait-for-repair")
+        assert site.update("verify").returncode == 1
+        assert site.live_behavior() == "legacy"
+
+        (site.stub / "systemd-run.log").unlink()
+        same = self.press_run_repair(site)
+        assert "already tried and rolled back" in same.stdout
+        assert not (site.stub / "systemd-run.log").exists()
+
+        (site.author / "pi" / "lockerroom" / "behavior.txt").write_text("healthy\n")
+        good = site.push({}, "fixed")
+        retry = self.press_run_repair(site)
+        assert f"apply --commit {good}" in (site.stub / "systemd-run.log").read_text()
+        assert "rolled-back" in retry.stdout, "the repair report did not show the last outcome"
+
+    def test_the_new_run_repair_also_lets_the_request_through(self, site):
+        """The new script holds the update lock for its whole run. `request`
+        runs underneath it and must not be refused by that."""
+        new_repair = subprocess.run(["bash", str(PI / "scripts" / "run-repair.sh")],
+                                    env=site.env, capture_output=True, text=True, timeout=180)
+        assert "VERIFIED" in new_repair.stdout
+        assert f"scheduled unknown -> {site.sha[:7]}" in new_repair.stdout, new_repair.stdout[-2000:]

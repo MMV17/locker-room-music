@@ -303,7 +303,16 @@ echo "== python venv =="
 # off keeps a distro upgrade from silently changing what the listener imports.
 python3 -m venv /opt/lockerroom/venv
 /opt/lockerroom/venv/bin/pip install --upgrade pip
-/opt/lockerroom/venv/bin/pip install "dbus-fast>=2.21" "httpx>=0.27"
+# From requirements.txt, not a second list written out here. The updater
+# refuses a release whose requirements.txt the box does not satisfy, so the
+# two must be the same list by construction rather than by remembering.
+if [ -f "$(dirname "$0")/../requirements.txt" ]; then
+  /opt/lockerroom/venv/bin/pip install -r "$(dirname "$0")/../requirements.txt"
+else
+  echo "   requirements.txt is not next to this script (expected ../requirements.txt)." >&2
+  echo "   Run provision.sh from a checkout of the repo, not on its own." >&2
+  exit 1
+fi
 
 echo "== stop grinding the SD card =="
 # Written when 2026-08-11 looked like a worn card. It was not — see the
@@ -348,7 +357,7 @@ if [ ! -f /etc/lockerroom/config.toml ]; then
   cat > /etc/lockerroom/config.toml <<EOF
 # Copy DEVICE_KEY from backend/.secrets.local on the laptop. It is a secret and
 # is NOT in git; Cloudflare secrets are write-only so this is the only copy.
-api_base_url = "https://lockerroom.finestkindfarms.com"
+api_base_url = "https://auxgoat-hc.mmvinton17.workers.dev"
 device_key = "REPLACE_ME"
 speaker_name = "$SPEAKER_NAME"
 sync_interval_s = 5
@@ -359,6 +368,41 @@ EOF
   echo "   wrote template — device_key still needs filling in"
 else
   echo "   already present, left alone"
+fi
+
+echo "== wired network profile =="
+# The ethernet cable is an ACCESS path and nothing else. Left at its defaults it
+# takes the default route (metric 100 beats wifi) and puts a dead resolver
+# first in /etc/resolv.conf, which makes healthy wifi look dead and walks the
+# watchdog toward a reboot. Fixed by hand on the first box on 2026-08-31 and
+# then lost with that card; asserted here and in remote-repair.sh so it is a
+# property of the box rather than of somebody's memory.
+if command -v nmcli >/dev/null 2>&1; then
+  timeout 15 nmcli -t -f NAME,TYPE connection show 2>/dev/null | while IFS= read -r line; do
+    [ "${line##*:}" = "802-3-ethernet" ] || continue
+    name="${line%:*}"
+    name="${name//\\:/:}"
+    timeout 15 nmcli connection modify "$name" ipv4.ignore-auto-dns yes \
+      ipv6.ignore-auto-dns yes ipv4.never-default yes \
+      && echo "   $name: will not take DNS or the default route"
+  done || true   # a box with no wired profile yet is not a failed provision
+else
+  echo "   nmcli not present, skipping"
+fi
+
+echo "== over-the-air updater =="
+# So a freshly provisioned box can be updated from the Admin screen without
+# ever needing the "run repair" bootstrap. deploy.sh installs the rest.
+HERE="$(dirname "$0")"
+if [ -f "$HERE/auxgoat-update" ]; then
+  install -m 755 "$HERE/auxgoat-update" /usr/local/bin/auxgoat-update
+  for u in auxgoat-update-recover.service auxgoat-update-verify.service; do
+    [ -f "$HERE/../systemd/$u" ] && install -m 644 "$HERE/../systemd/$u" "/etc/systemd/system/$u"
+  done
+  systemctl daemon-reload
+  systemctl enable auxgoat-update-recover.service auxgoat-update-verify.service
+else
+  echo "   auxgoat-update not next to this script; deploy.sh will install it"
 fi
 
 echo "== helper script =="

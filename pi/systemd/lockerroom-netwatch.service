@@ -2,6 +2,11 @@
 Description=AuxGoat wifi egress watchdog (probe wlan0 -> bounce -> reboot)
 After=network-online.target NetworkManager.service
 Wants=network-online.target
+# No start rate limit. The default (5 starts in 10s) turns a few fast failures
+# into a unit systemd refuses to start again until someone runs reset-failed -
+# and nobody can, on a box with no way in. Restart= below keeps trying for ever
+# instead. In [Unit], not [Service]: it is silently ignored under [Service].
+StartLimitIntervalSec=0
 # Deliberately NOT Requires=lockerroom-listener.service. The watchdog exists to
 # recover a box nobody can reach, so it must survive the listener being dead.
 

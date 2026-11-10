@@ -57,15 +57,28 @@ CHUNK = 256                     # base64 chars per write; small on purpose
 REPO = Path(__file__).resolve().parents[2]
 
 # (source, destination, mode). Order matters only for readability.
+#
+# EVERY module in pi/lockerroom, found by glob, not three files named by hand.
+# The package is one program: shipping control.py without the endpoints.py it
+# now imports is a listener that crash-loops the moment it restarts, on the one
+# deploy path that has no network to fall back on. A list written out here
+# went stale the first time a module was added.
 PAYLOAD = [
-    ("pi/lockerroom/control.py",   "/opt/lockerroom/lockerroom/control.py",   "644"),
-    ("pi/lockerroom/lifecycle.py", "/opt/lockerroom/lockerroom/lifecycle.py", "644"),
+    (f"pi/lockerroom/{p.name}", f"/opt/lockerroom/lockerroom/{p.name}", "644")
+    for p in sorted((REPO / "pi" / "lockerroom").glob("*.py"))
+] + [
     ("pi/scripts/report-full.sh",  "/usr/local/bin/report-full.sh",           "755"),
     ("pi/scripts/run-repair.sh",   "/usr/local/bin/run-repair.sh",            "755"),
     ("pi/scripts/btwatch.sh",      "/usr/local/bin/btwatch.sh",               "755"),
     ("pi/scripts/bt-forget.sh",    "/usr/local/bin/bt-forget.sh",             "755"),
-    ("pi/lockerroom/forgettarget.py",
-     "/opt/lockerroom/lockerroom/forgettarget.py", "644"),
+    ("pi/scripts/bt-scan.sh",      "/usr/local/bin/bt-scan.sh",               "755"),
+    ("pi/scripts/keep-discoverable.sh", "/usr/local/bin/keep-discoverable.sh", "755"),
+    # The over-the-air updater and the two units it cannot work without.
+    ("pi/scripts/auxgoat-update",  "/usr/local/bin/auxgoat-update",           "755"),
+    ("pi/systemd/auxgoat-update-recover.service",
+     "/etc/systemd/system/auxgoat-update-recover.service", "644"),
+    ("pi/systemd/auxgoat-update-verify.service",
+     "/etc/systemd/system/auxgoat-update-verify.service", "644"),
     # A systemd unit, not a script. It needs a daemon-reload before its restart
     # means anything, which the restart block below does.
     ("pi/systemd/keep-discoverable.service",
@@ -253,6 +266,15 @@ def main() -> int:
     try:
         login(s, args.user, password)
 
+        # If the box has been updated over the air, /opt/lockerroom/lockerroom is
+        # a symlink into an immutable release. Writing files through it would
+        # change a release the boot-time check then judges DAMAGED and reverts,
+        # silently undoing this deploy on the next power cut. So first turn it
+        # back into a plain directory. A no-op on a box without the updater.
+        log("  preparing the package directory...")
+        run(s, "test -x /usr/local/bin/auxgoat-update && "
+               "sudo /usr/local/bin/auxgoat-update adopt --materialise; true", timeout=60)
+
         log("  sending files...")
         ok = True
         for p, d, m in files:
@@ -269,7 +291,13 @@ def main() -> int:
             log("    no git clone — seeding remote-repair.sh")
             send_file(s, REPO / SEED[0], SEED[1], SEED[2])
 
-        run(s, "sudo find /opt/lockerroom/lockerroom -name '__pycache__' -exec rm -rf {} + 2>/dev/null; true")
+        run(s, "sudo find /opt/lockerroom/lockerroom/ -name '__pycache__' -exec rm -rf {} + 2>/dev/null; true")
+        # Record that this code came over the cable, and stand down any update
+        # that was on trial. The commit is "unknown" on purpose: a serial deploy
+        # ships a working tree, which need not be any commit the box can check.
+        run(s, "sudo /usr/local/bin/auxgoat-update adopt; "
+               "sudo systemctl enable auxgoat-update-recover.service "
+               "auxgoat-update-verify.service; true", timeout=60)
 
         if not args.no_restart:
             # EVERY unit whose code this deploy replaced, not just the listener.

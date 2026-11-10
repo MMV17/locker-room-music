@@ -683,10 +683,10 @@ def ensure_consistent(st: dict) -> dict:
 # --------------------------------------------------------------------------
 
 def cmd_request(args: argparse.Namespace) -> int:
-    lock = Lock()
+    # Deliberately takes NO lock. It only reads, and it is run from inside
+    # run-repair.sh for the first update - which is holding the lock shared at
+    # that moment. `apply` takes it exclusively and re-checks everything.
     try:
-        if not lock.acquire(0):
-            raise Refuse("an update is already being applied")
         st = load_state()
         if st.get("state") != "idle":
             raise Refuse(f"an update is already in progress (state: {st.get('state')})")
@@ -699,7 +699,6 @@ def cmd_request(args: argparse.Namespace) -> int:
         if rc != 0:
             raise Refuse(f"could not resolve {up}")
         info = check_target(commit, up)
-        lock.release()
 
         run(["systemctl", "reset-failed", f"{APPLY_UNIT}.service", f"{APPLY_UNIT}.timer"], 15)
         argv = [
@@ -713,7 +712,6 @@ def cmd_request(args: argparse.Namespace) -> int:
         if rc != 0:
             raise Refuse(f"could not schedule the update: {out[:200]}")
     except Refuse as exc:
-        lock.release()
         msg = str(exc)
         if msg.startswith("already up to date"):
             print(msg)

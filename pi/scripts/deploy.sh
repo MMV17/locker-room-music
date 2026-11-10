@@ -75,12 +75,59 @@ scp -q "${REPO_ROOT}/pi/systemd/lockerroom-btwatch.service" "${PI_HOST}:/tmp/loc
 scp -q "${REPO_ROOT}/pi/scripts/report-full.sh" "${PI_HOST}:/tmp/report-full.sh"
 scp -q "${REPO_ROOT}/pi/scripts/run-repair.sh" "${PI_HOST}:/tmp/run-repair.sh"
 scp -q "${REPO_ROOT}/pi/scripts/remote-repair.sh" "${PI_HOST}:/tmp/remote-repair.sh"
+# The over-the-air updater, its units, and the small boot/nightly helpers. A box
+# deployed by cable gets the same files a wireless update would have synced, so
+# the two paths cannot leave it in different states.
+ssh "${PI_HOST}" "rm -rf /tmp/auxgoat-stage && mkdir -p /tmp/auxgoat-stage"
+scp -q "${REPO_ROOT}/pi/scripts/auxgoat-update" \
+       "${REPO_ROOT}/pi/scripts/auxgoat-clock.sh" \
+       "${REPO_ROOT}/pi/scripts/auxgoat-nightly-restart.sh" \
+       "${REPO_ROOT}/pi/systemd/auxgoat-update-recover.service" \
+       "${REPO_ROOT}/pi/systemd/auxgoat-update-verify.service" \
+       "${REPO_ROOT}/pi/systemd/auxgoat-clock.service" \
+       "${REPO_ROOT}/pi/systemd/auxgoat-nightly-restart.service" \
+       "${REPO_ROOT}/pi/systemd/auxgoat-nightly-restart.timer" \
+       "${REPO_ROOT}/pi/systemd/lockerroom-listener-auxgoat.conf" \
+       "${PI_HOST}:/tmp/auxgoat-stage/"
 
-ssh "${PI_HOST}" bash -s <<'REMOTE'
+# Which commit this is - but ONLY if the box could check it: the tree under pi/
+# is clean and the commit is already on the branch's upstream. The updater
+# refuses to install anything that is not a descendant of what is installed, so
+# recording a commit GitHub has never seen would lock the box out of wireless
+# updates until the next cable visit. "unknown" keeps it open.
+DEPLOY_COMMIT="unknown"
+if git -C "${REPO_ROOT}" diff --quiet HEAD -- pi 2>/dev/null \
+   && UPSTREAM_REF="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" \
+   && git -C "${REPO_ROOT}" merge-base --is-ancestor HEAD "${UPSTREAM_REF}" 2>/dev/null; then
+  DEPLOY_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+fi
+case "${DEPLOY_COMMIT}" in ''|*[!0-9a-f]*) DEPLOY_COMMIT="unknown" ;; esac
+echo "Recording installed commit: ${DEPLOY_COMMIT}"
+
+ssh "${PI_HOST}" "DEPLOY_COMMIT='${DEPLOY_COMMIT}' bash -s" <<'REMOTE'
 set -euo pipefail
+# /opt/lockerroom/lockerroom is a plain directory on a box that has only ever
+# been deployed by cable, and a SYMLINK into /opt/lockerroom/releases/<id>/ on
+# one that has been updated over the air. `rm -rf` on the link removes the link
+# and leaves the release it pointed at alone, so this pair works for both and
+# always ends with a plain directory holding exactly what was just copied.
 sudo rm -rf /opt/lockerroom/lockerroom
 sudo mv /tmp/lockerroom_pkg /opt/lockerroom/lockerroom
-sudo find /opt/lockerroom/lockerroom -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+sudo find /opt/lockerroom/lockerroom/ -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+# The updater, then tell it what just happened: record the commit and stand
+# down any update that was on trial, so its boot-time check does not "repair"
+# a deliberate cable deploy back to an older release.
+sudo install -m 755 /tmp/auxgoat-stage/auxgoat-update /usr/local/bin/auxgoat-update
+sudo install -m 755 /tmp/auxgoat-stage/auxgoat-clock.sh /usr/local/bin/auxgoat-clock.sh
+sudo install -m 755 /tmp/auxgoat-stage/auxgoat-nightly-restart.sh /usr/local/bin/auxgoat-nightly-restart.sh
+for u in auxgoat-update-recover.service auxgoat-update-verify.service auxgoat-clock.service \
+         auxgoat-nightly-restart.service auxgoat-nightly-restart.timer; do
+  sudo install -m 644 "/tmp/auxgoat-stage/$u" "/etc/systemd/system/$u"
+done
+sudo mkdir -p /etc/systemd/system/lockerroom-listener.service.d
+sudo install -m 644 /tmp/auxgoat-stage/lockerroom-listener-auxgoat.conf \
+  /etc/systemd/system/lockerroom-listener.service.d/10-auxgoat.conf
+sudo /usr/local/bin/auxgoat-update adopt --commit "${DEPLOY_COMMIT:-unknown}"
 sudo mv /tmp/lockerroom-listener.service /etc/systemd/system/lockerroom-listener.service
 sudo mv /tmp/lockerroom-netwatch.service /etc/systemd/system/lockerroom-netwatch.service
 # Auto-accept pairing, and stay visible to the next DJ.
@@ -163,6 +210,11 @@ sudo systemctl restart bt-agent keep-discoverable
 # --now only starts a stopped unit and would silently skip a changed one.
 sudo systemctl enable lockerroom-btwatch
 sudo systemctl restart lockerroom-btwatch
+# The update units. recover and clock are boot-time oneshots and verify exits
+# at once when nothing is on trial, so they are enabled, not started.
+sudo systemctl enable auxgoat-update-recover.service auxgoat-update-verify.service \
+  auxgoat-clock.service auxgoat-nightly-restart.timer
+sudo systemctl start auxgoat-nightly-restart.timer
 sleep 3
 systemctl is-active lockerroom-listener
 systemctl is-active lockerroom-netwatch
@@ -175,10 +227,13 @@ systemctl is-active lockerroom-btwatch
 # a locker room needing it to work.
 echo "== remote escape hatch =="
 for f in /usr/local/bin/report-full.sh /usr/local/bin/run-repair.sh \
-         /usr/local/bin/bt-forget.sh \
+         /usr/local/bin/bt-forget.sh /usr/local/bin/auxgoat-update \
          /opt/lockerroom/repo/pi/scripts/remote-repair.sh; do
   if [ -x "$f" ]; then echo "   ok      $f"; else echo "   MISSING $f"; fi
 done
+
+echo "== software =="
+sudo /usr/local/bin/auxgoat-update status | sed 's/^/   /' || true
 
 # Audio output drift check. This VERIFICATION is read-only; it diagnoses and
 # never fixes.
@@ -227,7 +282,7 @@ if [ "$SELECTED_KIND" = "relay" ]; then
     echo "   ERROR: output.env does not name $RELAY_MAC — the player is on the wrong device"
     RELAY_OK=0
   fi
-  if ! bluetoothctl info "$RELAY_MAC" 2>/dev/null | grep -q "Connected: yes"; then
+  if ! timeout 10 bluetoothctl info "$RELAY_MAC" 2>/dev/null | grep -q "Connected: yes"; then
     echo "   ERROR: $RELAY_MAC is not connected"
     RELAY_OK=0
   fi

@@ -7,6 +7,11 @@ device_key = "REPLACE_ME"
 # settings that only look like one, and letting them drift means the site
 # names a speaker nobody can find in their Bluetooth list.
 speaker_name = "AuxGoat"
+# Extra hosts to try, in order, if api_base_url stops answering - because it
+# was filtered, or retired. OPTIONAL: two more are built into the listener
+# (lockerroom/endpoints.py), tried after these. HTTPS only. The box remembers
+# whichever host last worked and starts there after a restart.
+# api_fallback_urls = ["https://another-host.example"]
 # How often the outbox drains. This is how quickly a NEW song reaches the
 # site, so it is felt directly as "skips are late". Costs nothing when idle:
 # a drain pass with an empty outbox makes no network call at all.
