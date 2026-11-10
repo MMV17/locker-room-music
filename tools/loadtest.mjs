@@ -177,7 +177,7 @@ function report() {
   console.log("");
   for (const [name, pass] of gates) console.log(`${pass ? "PASS" : "FAIL"}  ${name}`);
   const perSession = Math.round((75 * 2 * 3600) / INTERVAL_S);
-  console.log(`\nThis run used ~${total} requests. A 75-player x 2h session at ${INTERVAL_S}s polls is ~${perSession} requests (and, until the token touch is throttled, the same number of D1 row writes).`);
+  console.log(`\nThis run used ~${total} requests. A 75-player x 2h session at ${INTERVAL_S}s polls is ~${perSession} requests (the free plan allows 100,000 a day; the app itself polls every 7.5s, slower when nothing is playing).`);
   console.log('Remember to delete the "Loadtest Bot" player in Admin.');
   process.exit(gates.every(([, p]) => p) ? 0 : 1);
 }

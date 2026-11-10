@@ -58,7 +58,9 @@ for ways the box could go quiet. If the new software cannot check in, the
 speaker puts the old version back by itself.
 
 **Before you start:** steps 1 and 2 are done (step 2 is optional but
-recommended), and nobody is playing music.
+recommended), the site itself is working, and nobody is playing music. Once
+you have pressed the button, leave the speaker alone for five minutes: do not
+press Restart listener or Reboot while it is deciding.
 
 1. **Check the speaker can fetch code.** Admin → Diagnostics → open the most
    recent **run repair** report (press Run repair once if there is none).
@@ -239,6 +241,20 @@ Deliberately left for a decision or for hardware testing:
   Moving the hashing onto the speaker needs a config change on the box.
 - **The speaker's own folder and service names still say `lockerroom`**, as do
   the database and backup bucket. See the README for why.
+- **The speaker has no clock battery.** If the school network does not give
+  it the time, its clock drifts or lags after a long power-off. Report full
+  now shows whether the clock is synchronised, and Admin warns when it is more
+  than two minutes out. A boot-time clock setter was written and deliberately
+  left out of this release: as built, one bad answer from a network filter
+  could have pushed the clock into the future for good.
+- **Two rare updater cases clear themselves only on the next power cycle:** a
+  completely full disk at the last step of an update, and a power cut in the
+  few seconds an update is being finalised. In both the speaker keeps working;
+  it just refuses further updates until it has been restarted (Admin →
+  Reboot).
+- **If the website has an outage in the two minutes an update is on trial,**
+  the speaker puts the old software back, to be safe, and that commit has to
+  be re-issued as a new one.
 - **The daily database backup runs inside the Worker** and may outgrow its time
   limit late in a season. Check Cloudflare → R2 → `lockerroom-backups` shows a
   new file each morning.
