@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { get, post, put, ApiError } from "./../api";
-import { Spinner } from "./../components";
+import { Banner, Spinner } from "./../components";
 
 /**
  * Point the AuxGoat at a speaker, from the team app.
@@ -155,7 +155,7 @@ export function SpeakerSection() {
         {state?.relay_error ? ` — ${state.relay_error}` : ""}
       </p>
 
-        {error && <div className="banner is-bad">{error}</div>}
+        {error && <Banner kind="bad">{error}</Banner>}
 
         {!state ? (
           <Spinner />
@@ -178,7 +178,7 @@ export function SpeakerSection() {
             {/* A refused or failed scan used to look exactly like a button that
                 did nothing. Say why, and what to do. */}
             {!state.scanning && state.scan_problem && (
-              <div className="banner is-bad">{state.scan_problem}</div>
+              <Banner kind="bad">{state.scan_problem}</Banner>
             )}
 
             <button

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ApiError, errorMessage, post } from "./../api";
 import type { UnclaimedDevice } from "./../api";
-import { Empty, LoadError, Spinner, useLoad } from "./../components";
+import { Banner, Empty, LoadError, Spinner, useLoad } from "./../components";
 import { IconPhone } from "./../icons";
 import { useNavigate } from "./../router";
 
@@ -82,7 +82,7 @@ export function Claim() {
         <h1 className="t-display">Claim</h1>
       </header>
 
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
 
       {list.error ? (
         <LoadError message={list.error} onRetry={list.retry} />
@@ -100,7 +100,7 @@ export function Claim() {
           <div className="rows">
             {devices.map((d) => (
               <button key={d.mac_hash} className="row" onClick={() => setConfirming(d)}>
-                <span className="jersey" style={{ background: "var(--hairline)", color: "var(--muted)" }}>
+                <span className="jersey" aria-hidden="true" style={{ background: "var(--hairline)", color: "var(--muted)" }}>
                   <IconPhone />
                 </span>
                 <span className="row-main">

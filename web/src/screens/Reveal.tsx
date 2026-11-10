@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { NowPlay, Results } from "./../api";
-import { Artwork, formatScore, scoreClass } from "./../components";
+import { Artwork, formatScore, useEscape, useFocusTrap, scoreClass } from "./../components";
 import { ThumbDown, ThumbUp } from "./../icons";
 
 /**
@@ -49,15 +49,17 @@ export function Reveal({
   results: Results;
   onClose: () => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const done = useRef<HTMLButtonElement>(null);
   // Dismissable with Escape on the off chance someone is on a laptop.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEscape(onClose);
+  // A takeover that never takes focus leaves a keyboard or screen-reader user
+  // on a button behind it. Results are already in hand when this mounts.
+  useFocusTrap(ref);
+  useEffect(() => done.current?.focus(), []);
 
   return (
-    <div className="reveal" role="dialog" aria-modal="true" aria-label="Song result">
+    <div ref={ref} className="reveal" role="dialog" aria-modal="true" aria-label="Song result">
           <p className="t-label">The room has spoken</p>
 
           <Artwork
@@ -67,7 +69,7 @@ export function Reveal({
           />
 
           <div>
-            <h1 className="t-title">{results.title}</h1>
+            <h2 className="t-title">{results.title}</h2>
             <p className="t-sub">{results.artist ?? "Unknown artist"}</p>
           </div>
 
@@ -82,10 +84,12 @@ export function Reveal({
                 <span className="tally is-up">
                   <ThumbUp />
                   {results.upvotes}
+                  <span className="sr-only"> up votes</span>
                 </span>
                 <span className="tally is-down">
                   <ThumbDown />
                   {results.downvotes}
+                  <span className="sr-only"> down votes</span>
                 </span>
               </div>
               <p className="t-sub">
@@ -98,7 +102,7 @@ export function Reveal({
             <p className="t-label">Skipped early — not counted toward rankings</p>
           )}
 
-          <button className="btn is-primary" onClick={onClose}>
+          <button ref={done} className="btn is-primary" onClick={onClose}>
             Done
           </button>
     </div>

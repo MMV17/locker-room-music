@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, patch, signOut } from "./../api";
+import { Banner } from "./../components";
 import { useNavigate } from "./../router";
 import { SpeakerSection } from "./SpeakerSection";
 
@@ -163,8 +164,8 @@ function ProfileForm({ me, onSaved }: { me: Me | null; onSaved: (m: Me) => void 
 
   return (
     <>
-      {error && <div className="banner is-bad">{error}</div>}
-      {saved && <div className="banner is-ok">Saved.</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
+      {saved && <Banner kind="ok">Saved.</Banner>}
 
       <label className="field">
         <span className="t-label">First name</span>

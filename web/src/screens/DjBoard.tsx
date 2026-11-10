@@ -41,7 +41,7 @@ export function DjBoard() {
           ranked list; this is the only thing anyone will screenshot. */}
       {djs && djs.length > 0 && !tiedAtTop && (
         <div className="goat">
-          <span className="jersey">{djs[0].jersey_number || djs[0].name[0]}</span>
+          <span className="jersey" aria-hidden="true">{djs[0].jersey_number || djs[0].name[0]}</span>
           <span className="stack">
             <p className="goat-line">
               <strong>{djs[0].name}</strong> is the{" "}
@@ -87,7 +87,7 @@ export function DjBoard() {
           {djs.map((d, i) => (
             <div key={d.id} className="row">
               <span className="row-rank num">{i + 1}</span>
-              <span className="jersey">{d.jersey_number || d.name[0]}</span>
+              <span className="jersey" aria-hidden="true">{d.jersey_number || d.name[0]}</span>
               <span className="row-main">
                 <span className="row-title">{d.name}</span>
                 <span className="row-sub">

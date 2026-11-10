@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, errorMessage, get, isNetworkError, post } from "./../api";
 import type { AuxState, MyDj, NowPlay, NowResponse, Results } from "./../api";
-import { Artwork, Banner, Empty, Spinner, formatClock, formatWhen } from "./../components";
+import {
+  Artwork,
+  Banner,
+  Empty,
+  Spinner,
+  formatClock,
+  formatWhen,
+  useEscape,
+} from "./../components";
 import { IconCheck, IconSettings, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
 import { useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
@@ -69,6 +77,11 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   const [voteFailed, setVoteFailed] = useState(false);
   const [speakerOpen, setSpeakerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Read out by the polite live region: the song changing, a vote landing.
+  const [announce, setAnnounce] = useState("");
+  const speakerBtn = useRef<HTMLButtonElement>(null);
+  const gearBtn = useRef<HTMLButtonElement>(null);
+  const lastPlayId = useRef<string | null | undefined>(undefined);
 
   // The play we last saw with an *open* window. The reveal fires on the
   // transition out of that, which is also why a cold open onto an
@@ -179,6 +192,14 @@ export function NowPlaying({ teamName }: { teamName: string }) {
       }
       if (next.play?.vote_window_open) openPlay.current = next.play;
 
+      // Not on the first load: the h1 already says it, and a cold open
+      // should not talk over the page being read.
+      const id = next.play?.id ?? null;
+      if (lastPlayId.current !== undefined && id && id !== lastPlayId.current && next.play) {
+        setAnnounce(`Now playing ${next.play.title} by ${next.play.artist ?? "an unknown artist"}`);
+      }
+      lastPlayId.current = id;
+
       nowRef.current = next;
       setNow(next);
       setFailures(0);
@@ -265,6 +286,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
         if (q && q.playId === playId && q.value === value) queuedVote.current = null;
         if (!queuedVote.current && alive.current) {
           voteGuard.current = { playId, value, throughSeq: issued.current };
+          setAnnounce(`Vote counted: ${value === 1 ? "Fire" : "Nah"}`);
           setVoteFailed(false);
           setError(null);
         }
@@ -320,6 +342,9 @@ export function NowPlaying({ teamName }: { teamName: string }) {
       )}
 
       <main className="screen np">
+        <p className="sr-only" aria-live="polite">
+          {announce}
+        </p>
         <header className="np-head">
           {/* "Live" used to sit here as a word, and it was read as "music is
               playing". It never meant that: speaker_online is only whether the
@@ -334,6 +359,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               and what a long-press shows. */}
           <span className="np-speaker-wrap">
             <button
+              ref={speakerBtn}
               className={"np-speaker" + (now?.speaker_online ? " is-live" : "")}
               aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}. Details.`}
               aria-expanded={speakerOpen}
@@ -346,7 +372,10 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                 online={now?.speaker_online ?? false}
                 lastSeen={now?.speaker_last_seen ?? null}
                 aux={now?.aux ?? null}
-                onClose={() => setSpeakerOpen(false)}
+                onClose={() => {
+                  setSpeakerOpen(false);
+                  speakerBtn.current?.focus();
+                }}
               />
             )}
           </span>
@@ -356,6 +385,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               "settings". Identity moved into the Profile screen. */}
           <span className="np-gear-wrap">
             <button
+              ref={gearBtn}
               className="np-gear"
               aria-label={`Settings. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
               aria-expanded={menuOpen}
@@ -363,7 +393,14 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             >
               <IconSettings />
             </button>
-            {menuOpen && <SettingsMenu onClose={() => setMenuOpen(false)} />}
+            {menuOpen && (
+              <SettingsMenu
+                onClose={() => {
+                  setMenuOpen(false);
+                  gearBtn.current?.focus();
+                }}
+              />
+            )}
           </span>
         </header>
 
@@ -388,7 +425,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                 className="np-art"
                 src={play.artwork_url}
                 fallback={play.artwork_fallback}
-                alt={`Artwork for ${play.title}`}
+                alt=""
               />
             </div>
 
@@ -485,7 +522,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
  */
 function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null }) {
   if (!online) {
-    return <Empty title="Speaker offline">Songs and votes resume when it reconnects.</Empty>;
+    return <Empty title="Speaker offline" heading>Songs and votes resume when it reconnects.</Empty>;
   }
 
   const holder = aux?.holder;
@@ -495,13 +532,13 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
     // two different sentences about one fact on the same screen — and the
     // "you can connect too" half is actively wrong for someone who already is.
     if (aux?.you_are_waiting) {
-      return <Empty title="Nothing playing">Nobody has pressed play yet.</Empty>;
+      return <Empty title="Nothing playing" heading>Nobody has pressed play yet.</Empty>;
     }
     // Roster name when the phone is claimed, Bluetooth name when it is not —
     // an unclaimed phone has nothing else, and naming it still beats silence.
     const who = holder.name ?? holder.alias ?? "Someone else";
     return (
-      <Empty title="Someone else has the aux">
+      <Empty title="Someone else has the aux" heading>
         {who} is connected. You can connect too — you&rsquo;ll be able to play once
         they&rsquo;re done.
       </Empty>
@@ -509,11 +546,11 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
   }
 
   if (holder?.is_you) {
-    return <Empty title="You have the aux">Press play on your phone.</Empty>;
+    return <Empty title="You have the aux" heading>Press play on your phone.</Empty>;
   }
 
   return (
-    <Empty title="Nothing playing">
+    <Empty title="Nothing playing" heading>
       Connect to <strong>AuxGoat</strong> over Bluetooth to DJ.
     </Empty>
   );
@@ -577,27 +614,27 @@ function WaitingBanner({ aux }: { aux: AuxState | null }) {
   // did for the whole length of the grace before free_in_ms existed.
   if (left === 0) {
     return (
-      <div className="banner is-info">
+      <Banner kind="info">
         The aux is free — press play and it&rsquo;s yours.
-      </div>
+      </Banner>
     );
   }
 
   // Their song is over and the clock is running.
   if (left != null) {
     return (
-      <div className="banner is-info">
+      <Banner kind="info">
         {who} has the aux — yours in {Math.ceil(left / 1000)}s.
-      </div>
+      </Banner>
     );
   }
 
   // A song is open. No deadline exists, so promise nothing but the rule.
   return (
-    <div className="banner is-info">
+    <Banner kind="info">
       You&rsquo;re connected, but {who} has the aux. Press play once
       they&rsquo;re done and it&rsquo;s yours.
-    </div>
+    </Banner>
   );
 }
 
@@ -615,6 +652,7 @@ function SettingsMenu({ onClose }: { onClose: () => void }) {
     onClose();
     navigate(to);
   };
+  useEscape(onClose);
   const items: [string, string, string][] = [
     ["/settings/profile", "Profile", "Your name and number"],
     ["/settings/speaker", "Speaker & connection", "What the box plays through"],
@@ -623,9 +661,11 @@ function SettingsMenu({ onClose }: { onClose: () => void }) {
   return (
     <>
       <button className="pop-scrim" aria-label="Close" onClick={onClose} />
-      <div className="pop is-right" role="menu" aria-label="Settings">
+      {/* A labelled group of buttons, not role="menu": a menu promises
+          arrow-key navigation, and this has none. */}
+      <div className="pop is-right" role="group" aria-label="Settings">
         {items.map(([to, label, sub]) => (
-          <button key={to} className="pop-item" role="menuitem" onClick={() => go(to)}>
+          <button key={to} className="pop-item" onClick={() => go(to)}>
             <span>
               {label}
               <span className="pop-item-sub">{sub}</span>
@@ -665,6 +705,7 @@ function SpeakerPopover({
   onClose: () => void;
 }) {
   const holder = aux?.holder ?? null;
+  useEscape(onClose);
   return (
     <>
       {/* Catches the next tap anywhere. A popover you cannot dismiss by
@@ -709,7 +750,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
   if (play.dj) {
     return (
       <span className="dj-chip">
-        <span className="jersey is-sm">{play.dj.jersey_number || play.dj.name[0]}</span>
+        <span className="jersey is-sm" aria-hidden="true">{play.dj.jersey_number || play.dj.name[0]}</span>
         <span className="stack">
           {/* Leads rather than trails. A bare "DJ" under a name read as a job
               title — it never said what the chip is actually telling you,
@@ -730,7 +771,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
     return (
       <span className="stack" style={{ alignItems: "center", gap: 6 }}>
         <span className="dj-chip is-unclaimed">
-          <span className="jersey is-sm">?</span>
+          <span className="jersey is-sm" aria-hidden="true">?</span>
           <span className="stack">
             <span className="t-chrome dj-chip-label">Now on aux</span>
             <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
@@ -748,7 +789,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
 
   return (
     <span className="dj-chip is-unclaimed">
-      <span className="jersey is-sm">?</span>
+      <span className="jersey is-sm" aria-hidden="true">?</span>
       <span className="stack">
         <span className="t-chrome dj-chip-label">Now on aux</span>
         <span className="dj-chip-name">Unknown phone</span>
@@ -931,6 +972,8 @@ function Progress({ play }: { play: NowPlay }) {
       <span
         className="np-bar"
         role="progressbar"
+        aria-label="Song progress"
+        aria-valuetext={`${formatClock(shown)} of ${formatClock(duration)}`}
         aria-valuemin={0}
         aria-valuemax={Math.round(duration / 1000)}
         aria-valuenow={Math.round(shown / 1000)}

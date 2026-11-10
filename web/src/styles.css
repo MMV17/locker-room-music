@@ -88,6 +88,10 @@
   --shadow-lift: inset 0 1px 0 rgba(248, 242, 233, 0.09), 0 16px 40px rgba(0, 0, 0, 0.7);
 
   --safe-b: env(safe-area-inset-bottom, 0px);
+
+  /* One dark theme. Tells the browser too, so its own scrollbars, form
+     controls and autofill are dark rather than white boxes on black. */
+  color-scheme: dark;
 }
 
 
@@ -109,10 +113,40 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
-  /* The vote controls are the only interactive target that matters; nothing
-     here should be selectable-draggable under a wet thumb. */
+}
+
+/* The controls a wet thumb hammers must not start a text selection. Scoped to
+   them: on the whole body it also stopped anyone copying a song title or an
+   admin diagnostic. */
+.vote,
+.nav,
+.btn {
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* ------------------------------------------------------------------ *
+ * Focus. One visible ring for every control, in the accent (6.59:1 on
+ * --page, so it clears the 3:1 non-text minimum). :focus-visible keeps it
+ * off taps and on keyboard and switch access, where it is the only cue.
+ * :where() keeps the specificity at zero so a component can adjust it.
+ * ------------------------------------------------------------------ */
+:where(button, a, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+
+/* Hidden from the eye, read by a screen reader. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 button {
@@ -206,7 +240,8 @@ input {
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: none;
-  opacity: 0.75;
+  /* A colour, not an opacity: opacity on --muted text dropped it below 4.5:1. */
+  color: var(--muted);
 }
 
 .num {
@@ -449,12 +484,14 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
+/* The -ink tokens: --up/--down are FILLS, and as text on black they measured
+   4.11:1 and ~4.2:1. */
 .row-score.is-pos {
-  color: var(--up);
+  color: var(--up-ink);
 }
 
 .row-score.is-neg {
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .row-score.is-flat {
@@ -647,7 +684,7 @@ input {
 
 .np-eyebrow-label {
   flex: none;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.2em;
   color: var(--gold);
 }
@@ -807,6 +844,11 @@ input {
   transform: scale(0.94);
 }
 
+/* Clear of the selected state's 5px ring, so focus never reads as a vote. */
+.vote:focus-visible {
+  outline-offset: 6px;
+}
+
 .vote svg {
   width: 42px;
   height: 42px;
@@ -861,7 +903,7 @@ input {
 /* The caption under each thumb — the third signal, and the only one that
    says in words which way you voted. */
 .vote-cap {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -969,7 +1011,7 @@ input {
    like the down vote — this is a deadline, not a brand moment. */
 .vote-window .vw-time.is-soon .vw-clock,
 .vote-window .vw-time.is-soon .t-label {
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .vote-window.is-paused .vw-icon {
@@ -1141,7 +1183,7 @@ input {
 }
 
 .btn.is-danger {
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .btn.is-block {
@@ -1155,6 +1197,8 @@ input {
 .btn:disabled {
   background: var(--hairline);
   color: var(--muted);
+  /* .btn.is-primary's gold edge would otherwise survive on an inert button. */
+  border-color: var(--hairline);
   box-shadow: none;
   cursor: not-allowed;
 }
@@ -1165,14 +1209,30 @@ input {
   color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
-  padding: 8px;
+  /* 44px is the minimum touch target; these measured 36px on Admin, where
+     several of them delete things. */
+  min-height: 44px;
+  padding: 8px 12px;
 }
 
 /* Void and Delete. The admin rows already asked for this class; without the
    rule they rendered in the same grey as Restore, so the destructive action
    and the harmless one looked identical right up until the confirm. */
 .btn-quiet.is-danger {
-  color: var(--down);
+  color: var(--down-ink);
+}
+
+/* A row's buttons, kept together. The 8px keeps a destructive button from
+   sitting flush against its harmless neighbour (Deactivate | Delete). */
+.row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* A deactivated player, a voided play: present but out of play. */
+.row-title.is-inactive {
+  color: var(--muted);
 }
 
 /* Same reasoning as .btn:disabled — a destructive control that is inert must
@@ -1205,6 +1265,11 @@ input {
 
 .input:focus {
   border-color: var(--gold);
+}
+
+/* The border change alone is a 1px shift; keyboard focus gets a halo too. */
+.input:focus-visible {
+  box-shadow: 0 0 0 3px var(--gold-soft);
 }
 
 .input.is-code {
@@ -1325,7 +1390,7 @@ input {
   /* Enough to sit the card forward without hiding which screen you are on —
      the dialog names a player or a count, and the list behind it is the
      context for that. */
-  background: rgba(20, 23, 28, 0.45);
+  background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(2px);
 }
 
@@ -1604,7 +1669,7 @@ input {
 }
 
 .pop-state {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--ink);
 }
 
@@ -1679,7 +1744,7 @@ input {
 }
 
 .prof-sub {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--gold);
 }
 

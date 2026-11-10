@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./../api";
-import { Fold as Section, Spinner, artworkSrc, formatWhen, useConfirm } from "./../components";
+import { Banner, Fold as Section, Spinner, artworkSrc, formatWhen, useConfirm } from "./../components";
 import { useNavigate } from "./../router";
 import { cacheTheme } from "./../theme";
 import type { Theme } from "./../theme";
@@ -149,7 +149,7 @@ export function Admin({ teamName }: { teamName: string }) {
         <h1 className="t-display" style={{ margin: "6px 0 26px" }}>
           Admin
         </h1>
-        {error && <div className="banner is-bad">{error}</div>}
+        {error && <Banner kind="bad">{error}</Banner>}
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -170,6 +170,7 @@ export function Admin({ teamName }: { teamName: string }) {
               type="password"
               value={pw}
               onChange={(e) => setPw(e.target.value)}
+              autoComplete="current-password"
               autoFocus
             />
           </label>
@@ -256,8 +257,8 @@ function Appearance({ call }: { call: Call }) {
 
   return (
     <Section title="Team">
-      {error && <div className="banner is-bad">{error}</div>}
-      {saved && <div className="banner is-ok">Saved.</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
+      {saved && <Banner kind="ok">Saved.</Banner>}
 
       <label className="field">
         <span className="t-label">Team name</span>
@@ -354,17 +355,19 @@ function Roster({ call }: { call: Call }) {
   return (
     <Section title="Roster">
       {dialog}
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input
           className="input"
           placeholder="First name"
+          aria-label="First name"
           value={first}
           onChange={(e) => setFirst(e.target.value)}
         />
         <input
           className="input"
           placeholder="Last name"
+          aria-label="Last name"
           value={last}
           onChange={(e) => setLast(e.target.value)}
         />
@@ -373,6 +376,7 @@ function Roster({ call }: { call: Call }) {
         <input
           className="input"
           placeholder="#"
+          aria-label="Jersey number (optional)"
           value={jersey}
           onChange={(e) => setJersey(e.target.value)}
           inputMode="numeric"
@@ -394,17 +398,22 @@ function Roster({ call }: { call: Call }) {
         <div className="rows">
           {users.map((u) => (
             <div key={u.id} className="row">
-              <span className="jersey is-sm">{u.jersey_number || u.name[0]}</span>
+              <span className="jersey is-sm" aria-hidden="true">
+                {u.jersey_number || u.name[0]}
+              </span>
               <span className="row-main">
-                <span className="row-title" style={{ opacity: u.active ? 1 : 0.5 }}>
-                  {u.name}
+                {/* A colour, not opacity: half-opacity text failed contrast,
+                    and the word says it for anyone who cannot see either. */}
+                <span className={"row-title" + (u.active ? "" : " is-inactive")}>{u.name}</span>
+                <span className="row-sub">
+                  #{u.jersey_number ?? "—"}
+                  {!u.active && " (deactivated)"}
                 </span>
-                <span className="row-sub">#{u.jersey_number ?? "—"}</span>
               </span>
               {/* Grouped so the row's 14px gap falls once, before the pair,
                   rather than between two already-padded buttons — the name
                   needs that width back on a phone. */}
-              <span style={{ display: "flex", flexShrink: 0 }}>
+              <span className="row-actions">
                 <button className="btn-quiet" onClick={() => toggle(u)}>
                   {u.active ? "Deactivate" : "Restore"}
                 </button>
@@ -468,7 +477,7 @@ function Devices({ call }: { call: Call }) {
   return (
     <Section title="Phones">
       {dialog}
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
         Un-claiming leaves the songs on record but removes DJ credit for them. Deleting
         removes the phone itself — the songs stay, and the phone reappears the next time
@@ -489,7 +498,7 @@ function Devices({ call }: { call: Call }) {
                   {d.owner_name ?? "unclaimed"}
                 </span>
               </span>
-              <span style={{ display: "flex", flexShrink: 0 }}>
+              <span className="row-actions">
                 {d.owner_name && (
                   <button className="btn-quiet" onClick={() => unclaim(d)}>
                     Un-claim
@@ -574,8 +583,8 @@ function Pairings({ call }: { call: Call }) {
   return (
     <Section title="Bluetooth pairings">
       {dialog}
-      {error && <div className="banner is-bad">{error}</div>}
-      {note && <div className="banner is-info">{note}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
+      {note && <Banner kind="info">{note}</Banner>}
 
       <p className="t-sub" style={{ marginBottom: 12 }}>
         What the speaker has paired with or seen nearby. Forget one when
@@ -702,7 +711,7 @@ function Plays({ call }: { call: Call }) {
       }
     >
       {dialog}
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
       {!plays ? (
         <Spinner />
       ) : plays.length === 0 ? (
@@ -713,9 +722,7 @@ function Plays({ call }: { call: Call }) {
           {plays.map((p) => (
             <div key={p.id} className="row">
               <span className="row-main">
-                <span className="row-title" style={{ opacity: p.voided ? 0.45 : 1 }}>
-                  {p.title}
-                </span>
+                <span className={"row-title" + (p.voided ? " is-inactive" : "")}>{p.title}</span>
                 <span className="row-sub">
                   {p.dj_name ?? "Unclaimed"} · {formatWhen(p.started_at)}
                   {!p.counted && " · skipped"}
@@ -854,7 +861,7 @@ function Covers({ call }: { call: Call }) {
 
   return (
     <Section title="Album covers">
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
       {status && (
         <p className="t-sub" style={{ marginBottom: 12 }}>
           {status.found} with a cover · {status.none} without
@@ -1055,7 +1062,7 @@ function SpeakerOutput({ call }: { call: Call }) {
 
   return (
     <Section title="Speaker output">
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
 
       {!state ? (
         <Spinner />
@@ -1293,8 +1300,8 @@ function Speaker({ call }: { call: Call }) {
   return (
     <Section title="Diagnostics">
       {dialog}
-      {error && <div className="banner is-bad">{error}</div>}
-      {sent && <div className="banner is-info">{sent}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
+      {sent && <Banner kind="info">{sent}</Banner>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
         Check the box, try to fix it, and read what it sent back. It checks in
         about once a minute, so a result can take that long to appear.
@@ -1324,10 +1331,10 @@ function Speaker({ call }: { call: Call }) {
       {/* The Pi has no clock battery. Votes and plays carry its timestamps,
           so a clock minutes off is worth a coach knowing about. */}
       {info?.clock_skew_ms != null && Math.abs(info.clock_skew_ms) > 2 * 60_000 && (
-        <div className="banner is-bad">
+        <Banner kind="bad">
           The speaker's clock is {Math.round(Math.abs(info.clock_skew_ms) / 60_000)} minutes{" "}
           {info.clock_skew_ms > 0 ? "behind" : "ahead"}. Song times it reports may be off.
-        </div>
+        </Banner>
       )}
 
       {/* The actions sit WITH their results rather than in Speaker output.

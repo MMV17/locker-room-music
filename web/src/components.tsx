@@ -67,7 +67,61 @@ export function Artwork({
       />
     );
   }
-  return <div className={className} style={{ background: fallback }} role="presentation" />;
+  return <div className={className} style={{ background: fallback }} aria-hidden="true" />;
+}
+
+/** Close on Escape. Popovers you cannot dismiss from a keyboard trap people. */
+export function useEscape(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+}
+
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keep Tab inside a modal and give focus back when it closes.
+ *
+ * aria-modal tells a screen reader the page behind is inert; it does nothing
+ * for the Tab key, which walked straight out of the confirm dialog and the
+ * reveal into the buttons underneath them.
+ */
+export function useFocusTrap(ref: React.RefObject<HTMLElement>) {
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      const root = ref.current;
+      if (e.key !== "Tab" || !root) return;
+      const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!root.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (before?.isConnected) before.focus();
+    };
+  }, [ref]);
 }
 
 export function Spinner() {
@@ -302,6 +356,8 @@ function ConfirmDialog({
   onSettle,
 }: ConfirmOptions & { onSettle: (ok: boolean) => void }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(cardRef);
 
   useEffect(() => {
     // Focus lands on CANCEL, never on the destructive button — a stray Return
@@ -323,7 +379,7 @@ function ConfirmDialog({
         if (e.target === e.currentTarget) onSettle(false);
       }}
     >
-      <div className="modal" role="alertdialog" aria-modal="true" aria-label={title}>
+      <div ref={cardRef} className="modal" role="alertdialog" aria-modal="true" aria-label={title}>
         <h2 className="t-section" style={{ marginBottom: 8 }}>
           {title}
         </h2>

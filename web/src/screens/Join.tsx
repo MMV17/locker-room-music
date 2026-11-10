@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, post } from "./../api";
 import { navigate } from "./../router";
-import { Spinner } from "./../components";
+import { Banner, Spinner } from "./../components";
 import { handedTeamCode } from "./../handoff";
 
 /**
@@ -101,7 +101,7 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
         {step === "code" ? "Join" : "Who are you?"}
       </h1>
 
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
 
       {verifying ? (
         // The code came from the front door and is being checked. Showing the
