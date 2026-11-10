@@ -1757,6 +1757,33 @@ input {
 }
 
 /* ------------------------------------------------------------------ *
+ * Now Playing fits the viewport.
+ *
+ * .np-artwrap was meant to be the one row that gives, but .screen.np had no
+ * bounded height, so it never had anything to give up: the thumbs were laid
+ * out behind the fixed nav (thumb bottom 645px vs nav top 587px at 375x667).
+ * Bounding the screen to the viewport hands the art exactly what is left.
+ * Below 560px of height it scrolls instead - see the short-screen block.
+ * ------------------------------------------------------------------ */
+@media (min-height: 560px) {
+  .screen.np {
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .np-artwrap {
+    flex: 1 1 0;
+  }
+
+  .np-art {
+    width: auto;
+    height: 100%;
+    max-width: min(84vw, 326px);
+    max-height: min(84vw, 326px);
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Short-screen overrides.
  *
  * THESE MUST STAY LAST. They were written at the top of the file, above
@@ -1794,7 +1821,8 @@ input {
      this is a ceiling for a small screen rather than a second guess at the
      height — which is what the old 27svh term was. */
   .np-art {
-    width: min(64vw, 240px);
+    max-width: min(64vw, 240px);
+    max-height: min(64vw, 240px);
   }
 
   .t-title {
