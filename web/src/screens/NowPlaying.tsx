@@ -425,7 +425,10 @@ export function NowPlaying({ teamName }: { teamName: string }) {
         {!play ? (
           <NothingPlaying online={now?.speaker_online ?? false} aux={now?.aux ?? null} />
         ) : (
-          <>
+          /* .np-stage and .np-side are layout-transparent on a phone
+             (display: contents) and become the two columns on a wide,
+             tall screen. */
+          <div className="np-stage">
             {/* The artwork is the ONLY thing on this screen that gives. See
                 .np-artwrap — everything else has a job that does not
                 compress, so the art takes what is left and no more. */}
@@ -438,6 +441,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               />
             </div>
 
+            <div className="np-side">
             <div className="np-meta">
               <span className="np-eyebrow">
                 <span className="t-chrome np-eyebrow-label">Now playing</span>
@@ -517,7 +521,8 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                 )}
               </div>
             )}
-          </>
+            </div>
+          </div>
         )}
       </main>
     </>
