@@ -1,3 +1,8 @@
+# NOT INSTALLED. Nothing in this release copies or enables this unit - see the
+# header of pi/scripts/auxgoat-clock.sh for why (a single wrong HTTP Date header
+# could pin the clock in the future permanently). Kept for when it has an
+# HTTPS-first source and a bounded step.
+#
 # Set a badly wrong clock from an HTTP Date header, once, at boot.
 #
 # Installs to /etc/systemd/system/auxgoat-clock.service

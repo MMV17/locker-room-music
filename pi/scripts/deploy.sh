@@ -75,16 +75,14 @@ scp -q "${REPO_ROOT}/pi/systemd/lockerroom-btwatch.service" "${PI_HOST}:/tmp/loc
 scp -q "${REPO_ROOT}/pi/scripts/report-full.sh" "${PI_HOST}:/tmp/report-full.sh"
 scp -q "${REPO_ROOT}/pi/scripts/run-repair.sh" "${PI_HOST}:/tmp/run-repair.sh"
 scp -q "${REPO_ROOT}/pi/scripts/remote-repair.sh" "${PI_HOST}:/tmp/remote-repair.sh"
-# The over-the-air updater, its units, and the small boot/nightly helpers. A box
+# The over-the-air updater, its units, and the nightly helper. A box
 # deployed by cable gets the same files a wireless update would have synced, so
 # the two paths cannot leave it in different states.
 ssh "${PI_HOST}" "rm -rf /tmp/auxgoat-stage && mkdir -p /tmp/auxgoat-stage"
 scp -q "${REPO_ROOT}/pi/scripts/auxgoat-update" \
-       "${REPO_ROOT}/pi/scripts/auxgoat-clock.sh" \
        "${REPO_ROOT}/pi/scripts/auxgoat-nightly-restart.sh" \
        "${REPO_ROOT}/pi/systemd/auxgoat-update-recover.service" \
        "${REPO_ROOT}/pi/systemd/auxgoat-update-verify.service" \
-       "${REPO_ROOT}/pi/systemd/auxgoat-clock.service" \
        "${REPO_ROOT}/pi/systemd/auxgoat-nightly-restart.service" \
        "${REPO_ROOT}/pi/systemd/auxgoat-nightly-restart.timer" \
        "${REPO_ROOT}/pi/systemd/lockerroom-listener-auxgoat.conf" \
@@ -118,9 +116,8 @@ sudo find /opt/lockerroom/lockerroom/ -name '__pycache__' -exec rm -rf {} + 2>/d
 # down any update that was on trial, so its boot-time check does not "repair"
 # a deliberate cable deploy back to an older release.
 sudo install -m 755 /tmp/auxgoat-stage/auxgoat-update /usr/local/bin/auxgoat-update
-sudo install -m 755 /tmp/auxgoat-stage/auxgoat-clock.sh /usr/local/bin/auxgoat-clock.sh
 sudo install -m 755 /tmp/auxgoat-stage/auxgoat-nightly-restart.sh /usr/local/bin/auxgoat-nightly-restart.sh
-for u in auxgoat-update-recover.service auxgoat-update-verify.service auxgoat-clock.service \
+for u in auxgoat-update-recover.service auxgoat-update-verify.service \
          auxgoat-nightly-restart.service auxgoat-nightly-restart.timer; do
   sudo install -m 644 "/tmp/auxgoat-stage/$u" "/etc/systemd/system/$u"
 done
@@ -210,10 +207,10 @@ sudo systemctl restart bt-agent keep-discoverable
 # --now only starts a stopped unit and would silently skip a changed one.
 sudo systemctl enable lockerroom-btwatch
 sudo systemctl restart lockerroom-btwatch
-# The update units. recover and clock are boot-time oneshots and verify exits
-# at once when nothing is on trial, so they are enabled, not started.
+# The update units. recover is a boot-time oneshot and verify exits at once
+# when nothing is on trial, so they are enabled, not started.
 sudo systemctl enable auxgoat-update-recover.service auxgoat-update-verify.service \
-  auxgoat-clock.service auxgoat-nightly-restart.timer
+  auxgoat-nightly-restart.timer
 sudo systemctl start auxgoat-nightly-restart.timer
 sleep 3
 systemctl is-active lockerroom-listener

@@ -71,12 +71,12 @@ done
 # ---------------------------------------------------------------------------
 # The adapter. This section is the reason the script exists.
 # ---------------------------------------------------------------------------
-# The over-the-air update units. Listed separately: recover and clock are
-# oneshots that run at boot and then read "inactive", and verify exits as soon
-# as there is no update on trial - so for all three, inactive is the healthy
-# answer and ENABLED is the column that matters.
+# The over-the-air update units. Listed separately: recover is a oneshot that
+# runs at boot and then reads "inactive", verify exits as soon as there is no
+# update on trial, and the timer only fires at night - so for all three,
+# inactive is the healthy answer and ENABLED is the column that matters.
 printf '%-34s %-13s %s\n' "UPDATE UNIT (inactive is normal)" "ACTIVE" "ENABLED"
-for u in auxgoat-update-recover auxgoat-update-verify auxgoat-clock auxgoat-nightly-restart.timer; do
+for u in auxgoat-update-recover auxgoat-update-verify auxgoat-nightly-restart.timer; do
   act="$(systemctl is-active "$u" 2>/dev/null)"; [ -n "$act" ] || act=unknown
   ena="$(systemctl is-enabled "$u" 2>/dev/null)"; [ -n "$ena" ] || ena=unknown
   printf '%-34s %-13s %s\n' "$u" "$act" "$ena"

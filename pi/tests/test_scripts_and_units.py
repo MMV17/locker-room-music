@@ -132,6 +132,26 @@ class TestTheClockUnit:
                     assert "auxgoat-clock" not in line, unit.name
         assert not (UNITS / "auxgoat-clock.timer").exists()
 
+    def test_nothing_in_this_release_installs_enables_or_starts_it(self):
+        """NOT SHIPPED YET. One spoofed plain-HTTP Date header can pin the
+        clock in the future for good (it only ever steps forward), which ends
+        every TLS handshake and with them the beacon. Until it has an
+        HTTPS-first source and a bounded step, the script and its unit sit in
+        the repo and nothing - updater, repair, deploy, provision, report -
+        so much as names them."""
+        own = {SCRIPTS / "auxgoat-clock.sh", UNITS / "auxgoat-clock.service"}
+        pi = SCRIPTS.parent
+        others = [f for d in (SCRIPTS, UNITS, pi / "lockerroom") for f in d.glob("*")
+                  if f.is_file() and f not in own]
+        assert len(others) > 30
+        for f in others:
+            assert "auxgoat-clock" not in f.read_text(errors="replace"), f.name
+        for f in own:
+            assert "NOT INSTALLED" in f.read_text(), f.name
+        # And the report still says whether NTP works on campus, which is what
+        # decides whether this is ever needed.
+        assert re.search(r"^run \d+ timedatectl", (SCRIPTS / "report-full.sh").read_text(), re.M)
+
 
 class TestTheNightlyRestart:
     def test_the_timer_does_not_catch_up_after_being_off(self):

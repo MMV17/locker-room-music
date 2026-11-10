@@ -135,7 +135,7 @@ ARCHIVE_PATHS = ["pi/lockerroom", "pi/scripts", "pi/systemd", "pi/requirements.t
 SYNC_SCRIPTS = [
     "keep-discoverable.sh", "btwatch.sh", "bt-scan.sh", "bt-forget.sh",
     "report-full.sh", "audio-check.sh", "audio-route.sh", "run-repair.sh",
-    "auxgoat-clock.sh", "auxgoat-nightly-restart.sh", "auxgoat-update",
+    "auxgoat-nightly-restart.sh", "auxgoat-update",
 ]
 # Installed into /etc/systemd/system after a release COMMITS.
 #
@@ -148,7 +148,6 @@ SYNC_UNITS = [
     "lockerroom-btwatch.service", "lockerroom-netwatch.service",
     "lockerroom-audio-route.service",
     "auxgoat-update-recover.service", "auxgoat-update-verify.service",
-    "auxgoat-clock.service",
     "auxgoat-nightly-restart.service", "auxgoat-nightly-restart.timer",
 ]
 # source name in the release -> path relative to the unit directory
@@ -158,7 +157,7 @@ SYNC_DROPINS = {
 SYNC_UDEV = ["99-lockerroom-audio.rules"]
 ENABLE_UNITS = [
     "auxgoat-update-recover.service", "auxgoat-update-verify.service",
-    "auxgoat-clock.service", "auxgoat-nightly-restart.timer",
+    "auxgoat-nightly-restart.timer",
 ]
 # A changed file here means this unit has to be restarted to pick it up.
 RESTART_FOR = {

@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# ============================================================================
+# NOT INSTALLED. Nothing in this release copies, enables or starts this script.
+#
+# It only ever steps the clock FORWARD, and its first source is a plain-HTTP
+# Date header. So one wrong header - a filter page, a captive portal, anything
+# on the path - dated further ahead than a certificate lifetime would pin the
+# clock in the future for good: every TLS handshake fails, the beacon goes
+# silent, and nothing here would ever step back. That is a box nobody can
+# reach, caused by the thing meant to prevent one.
+#
+# Before it ships it needs an HTTPS-first source and a bounded forward step.
+# Whether it is needed at all depends on whether NTP works on the school
+# network, which "Report full" now shows (timedatectl).
+# ============================================================================
 # Step a badly wrong clock FORWARD from an HTTP Date header. Boot only.
 #
 #   /usr/local/bin/auxgoat-clock.sh       # run by auxgoat-clock.service
