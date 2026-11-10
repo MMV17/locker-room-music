@@ -26,7 +26,13 @@ on:
       - "backend/**"
       - "web/**"
       - ".github/workflows/deploy-worker.yml"
+      - ".github/scripts/resolve-worker.sh"
   workflow_dispatch:
+    inputs:
+      allow_create:
+        description: "First-ever deploy: allow creating a Worker that does not exist yet"
+        type: boolean
+        default: false
 
 # Read-only access to the repo. The deploy credential is the Cloudflare token;
 # the workflow's own GitHub token needs nothing beyond checking the code out.
@@ -117,4 +123,19 @@ jobs:
           ACCOUNT_ID="$(printf '%s' "$ACCOUNT_ID" | tr -d '[:space:]')"
           if [ -n "$ACCOUNT_ID" ]; then export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"; fi
           find public -name '.DS_Store' -delete 2>/dev/null || true
-          npx wrangler deploy
+          # Which Worker to upload to. NEVER a bare `wrangler deploy` here: if
+          # no Worker has the name in wrangler.toml, that creates one with no
+          # secrets and moves the custom domains onto it. The script picks the
+          # Worker that really exists (the new name, or the pre-rename one)
+          # and stops the run when it cannot tell.
+          WANT_NAME="$(sed -n 's/^name = "\(.*\)"$/\1/p' wrangler.toml | head -n 1)"
+          if [ -z "$WANT_NAME" ]; then
+            echo "::error::Could not read the Worker name from backend/wrangler.toml."
+            exit 1
+          fi
+          export WANT_NAME
+          export LEGACY_NAME="locker-room-music"
+          export REQUIRED_SECRETS="DEVICE_KEY MAC_SALT TEAM_CODE ADMIN_PASSWORD"
+          export ALLOW_CREATE="${{ inputs.allow_create && '1' || '0' }}"
+          TARGET="$(bash ../.github/scripts/resolve-worker.sh)"
+          npx wrangler deploy --name "$TARGET"

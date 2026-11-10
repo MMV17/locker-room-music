@@ -1,5 +1,23 @@
 # Project state — resume here
 
+> **RENAMED 2026-11-10: the project is AuxGoat.** "Locker Room Music" is gone
+> from the product, the packages and the docs. Start with the root `README.md`
+> (what everything is called now and how to run it) and `docs/LAUNCH.md` (the
+> pre-launch checklist and the few manual cut-over steps). This file is the
+> dated engineering log; entries below were written before the rename, so:
+>
+> - the team Worker they call `locker-room-music` is **`auxgoat-hc`**;
+> - the GitHub repo is **`MMV17/auxgoat`** once it is renamed in GitHub;
+> - "the legacy API hostname" is the test-domain address speaker 0001 was
+>   provisioned with — being retired, see `docs/LAUNCH.md`;
+> - `lockerroom` (one word) still appears on purpose: it is the on-box install
+>   name (`/opt/lockerroom`, `lockerroom-listener.service`, the Python package)
+>   and the name of the D1 database and R2 bucket. Those are not renamed —
+>   see "What is still called lockerroom" in the README;
+> - the local checkout path `~/Desktop/Home_Projects/locker-room-music.nosync`
+>   is whatever the folder on the Mac is called; rename it if you like, but
+>   keep the `.nosync` suffix.
+
 Last worked: **2026-09-27**. Spec is `docs/spec.md`. Repo lives at
 `~/Desktop/Home_Projects/locker-room-music.nosync` — the `.nosync` is
 deliberate, see "Why `.nosync`" below.
@@ -20,13 +38,13 @@ including `hc.auxgoat.com`, not just the apex. Re-measured 2026-08-08; see
 
 | Hostname | Use |
 |---|---|
-| `https://locker-room-music.mmvinton17.workers.dev` | **the voting app** |
+| `https://auxgoat-hc.mmvinton17.workers.dev` | **the voting app** |
 | `https://auxgoat.mmvinton17.workers.dev` | **the front door** (apex Worker) |
-| `https://lockerroom.finestkindfarms.com` | also unfiltered; what the Pi points at |
+| the legacy API hostname (the second route in `backend/wrangler.toml`) | also unfiltered; what the Pi points at |
 | `https://hc.auxgoat.com` | **filtered on campus**, fine off it |
 
 All seven build-order phases are done and deployed. Code is backed up to a
-**private GitHub repo**, `git@github.com:MMV17/locker-room-music.git`, branch
+**private GitHub repo**, `git@github.com:MMV17/auxgoat.git`, branch
 `phase5-voting-site`.
 
 **There are TWO Workers now** (since 2026-08-08). `auxgoat.com` is a real
@@ -157,7 +175,7 @@ hatch" below). Two ways, undecided:
 **Worker deployed 2026-10-31 23:47 UTC by GitHub Actions** (run 4 of
 `deploy-worker.yml`), version `25cad960-476d-46f0-96c9-741b6e386405`, bundle
 `index-CWdQkmBZ.js`, to workers.dev, `hc.auxgoat.com` and
-`lockerroom.finestkindfarms.com`. First deploy ever made without the Mac.
+the legacy API hostname. First deploy ever made without the Mac.
 Runs 2-3 failed with Cloudflare 9106 at `/memberships`: an account-owned API
 token cannot call it, so the workflow now passes the account id (below).
 
@@ -483,7 +501,7 @@ last-known repair because the network is also unwell would make the button
 useless exactly when it is needed. To finish the job properly:
 
 ```bash
-sudo git clone ssh://git@ssh.github.com:443/MMV17/locker-room-music.git \
+sudo git clone ssh://git@ssh.github.com:443/MMV17/auxgoat.git \
   /opt/lockerroom/repo && sudo chown -R pi:pi /opt/lockerroom/repo
 ```
 
@@ -748,7 +766,7 @@ does not look like a network problem.
 
 Every symptom points at the wifi:
 
-- `curl https://lockerroom.finestkindfarms.com` -> `000 in 0.007s`
+- `curl` to the legacy API hostname -> `000 in 0.007s`
 - the netwatch probe fails, logging `offline — no egress on wlan0`
 - **netwatch then escalates: bounce at 5 min, restart NetworkManager at 10,
   REBOOT at 15** — for a fault that is entirely caused by the cable
@@ -1981,11 +1999,11 @@ concluding the board is dead.
 
 | Thing | Value |
 |---|---|
-| Worker (team app) | `locker-room-music`, deployed from `backend/` |
+| Worker (team app) | `auxgoat-hc` (named `locker-room-music` until 2026-11-10), deployed from `backend/` |
 | Worker (front door) | `auxgoat`, deployed from `apex/` — **added 2026-08-08** |
 | Product URL | `https://hc.auxgoat.com` — **filtered on campus again as of 2026-08-08**; see "auxgoat.com is filtered" below |
-| Always-worked fallback | `https://lockerroom.finestkindfarms.com` — what the Pi points at. Keep it bound |
-| Fallback | `https://locker-room-music.mmvinton17.workers.dev` — unfiltered, and currently where the front door sends players |
+| Always-worked fallback | the legacy API hostname (second route in `backend/wrangler.toml`) — what the Pi points at. Keep it bound until `docs/LAUNCH.md` says otherwise |
+| Fallback | `https://auxgoat-hc.mmvinton17.workers.dev` — unfiltered, and currently where the front door sends players |
 | Front door | `https://auxgoat.mmvinton17.workers.dev` and `auxgoat.com` / `www` (the latter two filtered on campus) |
 | D1 database | `lockerroom` / `d8e68dc0-5eab-42a3-b54c-441b1f79627c`, region ENAM |
 | Cloudflare account | `7db3c13ee0073570030cac33d8c9f0dc` |
@@ -2005,9 +2023,9 @@ without and with a wrong device key, wrong team code 403, admin gate 401,
 **heartbeat with the real `DEVICE_KEY` 200** (proves the Pi's credential path
 and D1 writes), custom domain reachable.
 
-`finestkindfarms.com` was migrated from Namecheap DNS to Cloudflare to host
+The legacy test zone was migrated from Namecheap DNS to Cloudflare to host
 this. Its Private Email is being abandoned — the old records are preserved in
-`docs/dns-snapshot-finestkindfarms.md`, and the Namecheap subscription must be
+`docs/dns-snapshot-legacy-zone.md`, and the Namecheap subscription must be
 set to not auto-renew separately (DNS changes do not stop billing).
 
 ## The apex is its own Worker (2026-08-08)
@@ -2119,7 +2137,7 @@ confusion `check-code` exists to prevent.
 ### When IT unblocks the domain, flip one line
 
 `Team.url` in `apex/src/teams.ts` currently points at
-`https://locker-room-music.mmvinton17.workers.dev/` because the pretty
+`https://auxgoat-hc.mmvinton17.workers.dev/` because the pretty
 hostname is filtered on campus. Once IT recategorises the domain:
 
 ```ts
@@ -2435,7 +2453,7 @@ Audio output picks itself, arbitrated by `pi/scripts/audio-route.sh`:
 configured and connected, else the 3.5mm jack.** The Pi 4's jack has no detect
 pin, so the jack is the fallback by construction and cannot be sensed.
 
-Leave `api_base_url` at `lockerroom.finestkindfarms.com` — it has survived both
+Leave `api_base_url` at the legacy API hostname — it has survived both
 campus filter episodes untouched.
 
 **If another box is ever built, flash Raspberry Pi OS Trixie (Debian 13)
@@ -2802,7 +2820,7 @@ Back it up separately, off this laptop.
 mechanism that blocks Tailscale. Measured: DNS resolves correctly to the right
 Cloudflare IPs, TCP connects, then the TLS handshake dies with `no peer
 certificate available`. Meanwhile github.com and captive.apple.com return 200
-from the same machine, and `lockerroom.finestkindfarms.com` and the
+from the same machine, and the legacy API hostname and the
 `workers.dev` host both return 200.
 
 Almost certainly because the domain was registered that morning — filters
@@ -2818,7 +2836,7 @@ Against one Cloudflare IP (`104.21.96.77`), on the wired campus network:
 | `hc.auxgoat.com` | CONNECTED, then **no peer certificate available** |
 | `auxgoat.com` | same |
 | `example.com` | `subject=CN=example.com` |
-| `lockerroom.finestkindfarms.com` | `subject=CN=finestkindfarms.com` |
+| the legacy API hostname | `subject=CN=<the legacy zone>` |
 
 From a phone hotspot, minutes later, every one of those returns 200 with a
 valid `CN=auxgoat.com`. So the certificate is fine and Cloudflare is fine —
@@ -2831,7 +2849,7 @@ echo | openssl s_client -connect 104.21.96.77:443 -servername hc.auxgoat.com 2>&
 
 **Do not diagnose this as a deploy breaking something.** SNI rejection happens
 before a route or a Worker is consulted. If `workers.dev` and
-`finestkindfarms.com` still answer 200, the Worker is healthy by definition.
+the legacy test zone still answer 200, the Worker is healthy by definition.
 
 **The blast radius is the whole zone, not just the apex.** The team's own
 voting site is unreachable on campus too. That is why `Team.url` in
@@ -2847,7 +2865,7 @@ permits — which argues against a fresh subdomain of a newly-registered domain,
 since that is the exact pattern filters block on sight. Settle this before
 anything is printed.
 
-**The Pi has been reverted to `lockerroom.finestkindfarms.com`** and is beaconing
+**The Pi has been reverted to the legacy API hostname** and is beaconing
 normally. Keeping that hostname bound is what made the recovery a one-line
 config change instead of a trip to the school; do not remove it.
 
@@ -3309,7 +3327,7 @@ standard answers are blocked there, measured directly:
   port is blocked for both TCP and UDP, while TCP 443 to the *same* edge IPs is
   open. Every cloudflared protocol uses 7844, so there is no configuration that
   works. `cloudflared` is installed and fully configured on the Pi (tunnel
-  `lockerroom-pi`, `pi.finestkindfarms.com` CNAME already created) but the
+  `lockerroom-pi`, a CNAME on the legacy test zone already created) but the
   service is **disabled** — if IT ever opens 7844, enabling it is one command.
 - **Tailscale is blocked by SNI.** Proven at the TLS layer, not guessed: to the
   same IP and port, SNI `controlplane.tailscale.com` gets no handshake at all
@@ -3324,7 +3342,7 @@ standard answers are blocked there, measured directly:
   authenticates fine on campus with the same key:
 
   ```bash
-  git remote set-url origin ssh://git@ssh.github.com:443/MMV17/locker-room-music.git
+  git remote set-url origin ssh://git@ssh.github.com:443/MMV17/auxgoat.git
   ```
 
   Verified in both directions from campus wifi: port 22 times out, port 443
@@ -3443,7 +3461,7 @@ The pre-rename transcript is still at the old slug (same path minus `-nosync`).
 ## The code now has a second copy (2026-08-05)
 
 Leaving iCloud removed the only offsite copy this repo had, so the code went to
-GitHub: **`git@github.com:MMV17/locker-room-music.git`, private**. Both `main`
+GitHub: **`git@github.com:MMV17/auxgoat.git`, private**. Both `main`
 and `phase5-voting-site` are pushed.
 
 Commits are authored as `Mack Vinton <MMV17@users.noreply.github.com>`, set

@@ -1,9 +1,11 @@
 import { Hono } from "hono";
+import { readJson, badJson } from "./http";
 import type { Env } from "./types";
+import { getSetting, putSetting } from "./settings";
 
 export const theme = new Hono<{ Bindings: Env }>();
 
-export const DEFAULT_TEAM_NAME = "Locker Room";
+export const DEFAULT_TEAM_NAME = "AuxGoat";
 
 /*
  * THERE IS NO TEAM COLOUR ANY MORE.
@@ -22,22 +24,6 @@ export const DEFAULT_TEAM_NAME = "Locker Room";
  * property on every page, so an unvalidated string here was a stylesheet
  * injection into the whole site.
  */
-
-async function getSetting(env: Env, key: string): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(key)
-    .first<{ value: string }>();
-  return row?.value ?? null;
-}
-
-async function putSetting(env: Env, key: string, value: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(key, value, new Date().toISOString())
-    .run();
-}
 
 /**
  * Unauthenticated on purpose: the join screen renders before any session
@@ -64,7 +50,7 @@ theme.get("/api/theme", async (c) => {
  */
 theme.put("/api/admin/theme", async (c) => {
   type Body = { team_name?: string };
-  const body: Body = await c.req.json<Body>().catch(() => ({}) as Body);
+  const body: Body = (await readJson<Body>(c)) ?? {};
 
   if (body.team_name !== undefined) {
     const name = String(body.team_name).trim().slice(0, 60);

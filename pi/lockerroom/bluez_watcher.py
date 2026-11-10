@@ -77,6 +77,17 @@ class BluezWatcher:
         om_iface.on_interfaces_removed(self._on_interfaces_removed)
         log.info("bluez watcher started, tracking %d existing device(s)", len(self._device_paths))
 
+    def close(self) -> None:
+        """Drop the bus connection. For a start() that failed part-way: the
+        caller retries with a fresh watcher, and a half-started one left
+        connected would deliver every signal twice."""
+        if self._bus is not None:
+            try:
+                self._bus.disconnect()
+            except Exception:  # noqa: BLE001 - already gone is fine
+                pass
+            self._bus = None
+
     async def pause(self, device_path: str) -> None:
         """Pause a phone over AVRCP.
 

@@ -48,8 +48,8 @@ export interface Team {
    * The obvious derived form is wrong on the only network that matters. The
    * whole auxgoat.com zone is SNI-filtered on the school's wired network —
    * measured 2026-08-08: to the same Cloudflare IP, SNI `hc.auxgoat.com` gets
-   * "no peer certificate available" while `example.com` and
-   * `lockerroom.finestkindfarms.com` are served normally. A derived URL would
+   * "no peer certificate available" while `example.com` and a hostname on an
+   * unrelated zone are served normally. A derived URL would
    * hand someone a blocked destination from a front door that had just worked,
    * which is a worse failure than not having a front door.
    *
@@ -75,7 +75,7 @@ const TEAMS = new Map<string, Team>([
       slug: "hc",
       name: "Holy Cross",
       // The school's own hostname, restored 2026-08-10 after IT whitelisted the
-      // domain. It had been pointed at locker-room-music.mmvinton17.workers.dev
+      // domain. It had been pointed at the team Worker's workers.dev hostname
       // since 2026-08-08, because the whole auxgoat.com zone was SNI-filtered
       // and a pretty URL that does not load is worse than an ugly one that does.
       //
@@ -86,9 +86,9 @@ const TEAMS = new Map<string, Team>([
       //
       // www.auxgoat.com is still blocked and is deliberately not used anywhere.
       //
-      // IF IT REGRESSES, this is the one line to change, and there are two
-      // proven-unfiltered fallbacks: locker-room-music.mmvinton17.workers.dev,
-      // and lockerroom.finestkindfarms.com, which is what the Pi points at.
+      // IF IT REGRESSES, this is the one line to change, and the proven
+      // unfiltered fallback is the team Worker's own workers.dev hostname,
+      // https://auxgoat-hc.mmvinton17.workers.dev/ (see backend/wrangler.toml).
       url: "https://hc.auxgoat.com/",
     },
   ],
@@ -100,6 +100,16 @@ const TEAMS = new Map<string, Team>([
  * else. A synchronous signature would make it a change at every call site,
  * which is the friction that keeps a placeholder in place for a year.
  */
+/**
+ * Every origin /go can redirect a form submission to. The landing page's CSP
+ * form-action must list them all: Chrome applies form-action to the redirects
+ * that follow a form submit, so a school missing here would be blocked at the
+ * last hop. Derived from TEAMS so adding a school cannot forget it.
+ */
+export function teamOrigins(): string[] {
+  return [...new Set([...TEAMS.values()].map((t) => new URL(t.url).origin))];
+}
+
 export async function resolveTeam(_env: Env, code: string): Promise<Team | null> {
   return TEAMS.get(normalizeTeamCode(code)) ?? null;
 }

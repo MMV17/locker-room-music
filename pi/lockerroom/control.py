@@ -13,7 +13,7 @@ of thing - it asserts "alive right now", and replaying a four-hour-old one
 tells the server nothing true. Queuing them was also what made the outbox
 98.5% heartbeats (1,621 of 1,646 rows), so after an outage the Pi spent its
 first minutes back online replaying stale pings ahead of real plays. A missed
-beacon is simply skipped; the next one is 60 seconds away.
+beacon is simply skipped; the next one is seconds away.
 
 Commands are checked against ALLOWED here as well as on the server. The server
 is not trusted to be the only gate: if it were ever compromised or misdeployed,
@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from . import btscan, forgettarget, relaytarget
+from . import btscan, endpoints, forgettarget, relaytarget, software
 
 if TYPE_CHECKING:  # pragma: no cover
     # Import for typing only. config.py needs tomllib (3.11+), and importing
@@ -83,11 +83,28 @@ ALLOWED: dict[str, tuple[list[str], float]] = {
     # forgettarget.py. A disconnect plus a remove plus verification; 30s is
     # generous for all three.
     "forget-selected-phone": (["sudo", "/usr/local/bin/bt-forget.sh"], 30),
+    # Install the latest committed listener, over the air. STILL NO PARAMETER:
+    # what gets installed is the tip of the branch the box's own git clone
+    # tracks, and nothing the server sends can name a commit, a branch or a
+    # URL. `request` only checks and SCHEDULES - the work happens in a detached
+    # unit about twenty seconds later, outside this process's cgroup, so
+    # restarting the listener cannot kill the thing replacing it. It returns in
+    # a few seconds; the ceiling covers a slow fetch. See pi/scripts/auxgoat-update.
+    "update-software": (["sudo", "/usr/local/bin/auxgoat-update", "request"], 90),
 }
 
 SCAN_COMMAND = "scan-speakers"
 REPORT_COMMAND = "report-full"
 REPAIR_COMMAND = "run-repair"
+UPDATE_COMMAND = "update-software"
+
+# Commands that end this process before it can report. Their result is written
+# to disk BEFORE they run and sent on the first beacon after the restart -
+# otherwise "restart listener" sits in the command history as dispatched and
+# never completed, every single time.
+SELF_TERMINATING = {
+    "restart-listener": "the listener was restarted and is back",
+}
 
 # Commands whose real output is a document, not a line. Their body rides its own
 # beacon payload into `pi_reports` rather than `pi_commands.result`, which the
@@ -100,7 +117,14 @@ REPORT_COMMANDS = frozenset({REPORT_COMMAND, REPAIR_COMMAND})
 # and every lockerroom unit, which cuts the music outright. report-full is NOT
 # here on purpose - it is strictly read-only, so there is no reason a DJ should
 # have to stop playing before anyone is allowed to look at the box.
-MID_SONG_REFUSED = frozenset({SCAN_COMMAND, REPAIR_COMMAND})
+MID_SONG_REFUSED = frozenset({SCAN_COMMAND, REPAIR_COMMAND, UPDATE_COMMAND})
+# Refused under ANY open play, paused included: both restart things a paused
+# phone is still connected to. Only the scan was relaxed for a paused song.
+REFUSED_UNDER_ANY_PLAY = {
+    REPAIR_COMMAND: "refused: a song is playing - a repair restarts bluetooth and would cut it off",
+    UPDATE_COMMAND: "refused: a song is playing - an update restarts the speaker's software. "
+                    "Try again when the music has stopped",
+}
 
 # What one report may send. The server caps at 64 KiB too; this is the first
 # gate, so a wedged journal does not put a megabyte on the wire every time.
@@ -116,7 +140,13 @@ OUTPUT_STATE_PATH = Path("/run/lockerroom/audio-out")
 # Beacon cadence. Idle is the resting rate; active is while a song is playing;
 # attentive is for the few minutes after a command, when somebody is standing
 # at the admin screen waiting for something to happen.
-IDLE_INTERVAL_S = 60.0
+#
+# Idle was 60s until 2026-11. The box cannot be reached, so it polls, and the
+# first tap of anything on the Admin screen waited out a full idle interval
+# before the speaker even heard about it. 10s costs one request and three D1
+# writes per beacon (about 26k writes a day, inside the free 100k); do not go
+# below about 5s without re-checking that.
+IDLE_INTERVAL_S = 10.0
 ACTIVE_INTERVAL_S = 10.0
 ATTENTIVE_INTERVAL_S = 5.0
 ATTENTIVE_WINDOW_S = 180.0
@@ -213,11 +243,12 @@ def may_run(name: str, sessions) -> tuple[bool, str]:
     """
     if name not in MID_SONG_REFUSED:
         return True, ""
-    if name == REPAIR_COMMAND:
+    if name in REFUSED_UNDER_ANY_PLAY:
         # Stricter than a scan: a repair restarts bluetooth, which drops the
-        # phone even when its song is only paused.
+        # phone even when its song is only paused, and an update restarts the
+        # listener out from under an open play.
         if _open_play(sessions) is not None:
-            return False, "refused: a song is playing - a repair restarts bluetooth and would cut it off"
+            return False, REFUSED_UNDER_ANY_PLAY[name]
         return True, ""
     return may_scan(sessions)
 
@@ -282,7 +313,12 @@ def attentive_until(now: float | None = None) -> float:
 
 
 def next_interval(
-    attentive_deadline: float | None, playing: bool, now: float | None = None
+    attentive_deadline: float | None,
+    playing: bool,
+    now: float | None = None,
+    idle_s: float = IDLE_INTERVAL_S,
+    active_s: float = ACTIVE_INTERVAL_S,
+    attentive_s: float = ATTENTIVE_INTERVAL_S,
 ) -> float:
     """How long to wait before the next beacon.
 
@@ -292,8 +328,8 @@ def next_interval(
     """
     now = time.monotonic() if now is None else now
     if attentive_deadline is not None and now < attentive_deadline:
-        return ATTENTIVE_INTERVAL_S
-    return ACTIVE_INTERVAL_S if playing else IDLE_INTERVAL_S
+        return attentive_s
+    return active_s if playing else idle_s
 
 
 def should_report_now(pending: bool, beacon_ok: bool) -> bool:
@@ -411,6 +447,13 @@ async def beacon_loop(
     interval_s: float = IDLE_INTERVAL_S,
     active_interval_s: float = ACTIVE_INTERVAL_S,
     watch_interval_s: float = 1.0,
+    pool: endpoints.HostPool | None = None,
+    marker: software.HealthMarker | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    attentive_interval_s: float = ATTENTIVE_INTERVAL_S,
+    pending_path: Path = software.PENDING_PATH,
+    update_result_path: Path = software.UPDATE_RESULT_PATH,
+    update_reported_path: Path = software.UPDATE_REPORTED_PATH,
 ) -> None:
     """
     POST liveness, carry back the last result, pick up the next command.
@@ -432,31 +475,48 @@ async def beacon_loop(
 
     ATTENTIVE MODE. After a command is picked up the loop polls every few
     seconds for a few minutes, because somebody is standing at the admin screen
-    waiting on a round trip. Without it, choosing a speaker costs up to a full
-    idle interval before the Pi even hears about it and another before the
-    answer comes back — longer than a speaker stays in pairing mode.
+    waiting on a round trip.
 
-    The first press still waits out one idle interval, and nothing here can fix
-    that: no message can reach the Pi until it next checks in. The admin screen
-    solves it by ordering the instructions so the wait happens BEFORE the
-    speaker is put into pairing mode, not during it.
+    WHICH HOST. Every request goes to `pool.pick()`, and the answer is reported
+    back to the pool, so a hostname that is filtered or retired costs three
+    failed beacons and then the box moves on by itself. See endpoints.py.
+
+    A RESULT IS ONLY EVER DROPPED ONCE THE SERVER HAS IT. "The server has it"
+    means HTTP 200 with a JSON object saying `ok: true` - not merely a 200,
+    which a filter page can also produce. Until then the result stays pending,
+    and it is kept on disk so a listener restart does not lose it either.
     """
-    pending_result: dict | None = None
-    pending_scan: dict | None = None
-    pending_report: dict | None = None
+    if pool is None:
+        pool = endpoints.HostPool(
+            endpoints.build_urls(config.api_base_url, getattr(config, "api_fallback_urls", ()))
+        )
+    info = software.release_info()
+    if marker is None:
+        marker = software.HealthMarker(info["release_id"])
+    software_field = software.software_payload(info)
+
+    # Whatever the last run of this process never got to deliver.
+    pending = software.load_pending(pending_path)
+    if pending["result"] is not None:
+        log.info("carrying a command result over from before the restart")
     attentive_deadline: float | None = None
 
     async with httpx.AsyncClient(
-        base_url=config.api_base_url,
         headers={"X-Device-Key": config.device_key},
         timeout=15.0,
+        transport=transport,
     ) as client:
         while True:
             beacon_ok = False
+            marker.loop(sessions)
+            url = pool.pick()
             try:
                 payload = {
                     "speaker_name": config.speaker_name,
                     "at": datetime.now(timezone.utc).isoformat(),
+                    # Which code this is. Exactly these two keys - the Worker
+                    # validates the shape.
+                    "software": software_field,
                 }
                 # Tell the server the song is still live so it does not close
                 # the vote window on a paused track. See open_play_state().
@@ -475,12 +535,26 @@ async def beacon_loop(
                         payload["aux"] = sessions.aux_state()
                     except Exception:
                         log.exception("could not read aux state")
-                if pending_result is not None:
-                    payload["result"] = pending_result
-                if pending_scan is not None:
-                    payload["scan"] = pending_scan
-                if pending_report is not None:
-                    payload["report"] = pending_report
+                if pending["result"] is not None:
+                    payload["result"] = pending["result"]
+                if pending["scan"] is not None:
+                    payload["scan"] = pending["scan"]
+
+                # One report per beacon. A command's own report goes first;
+                # the outcome of an over-the-air update rides the next free
+                # beacon, once, and is remembered as sent only when the server
+                # has taken it.
+                update_id: str | None = None
+                if pending["report"] is not None:
+                    payload["report"] = pending["report"]
+                else:
+                    update = software.unreported_update(
+                        MAX_REPORT_CHARS, TRUNCATION_NOTICE,
+                        update_result_path, update_reported_path,
+                    )
+                    if update is not None:
+                        update_id, payload["report"] = update
+
                 # What the audio arbiter actually selected, so the admin screen
                 # can show USB / jack / relay rather than guessing from config.
                 output = read_output()
@@ -497,16 +571,19 @@ async def beacon_loop(
                         "last_error": relay.last_error,
                     }
 
-                resp = await client.post("/api/pi/beacon", json=payload)
+                resp = await client.post(url + "/api/pi/beacon", json=payload)
+                body = endpoints.json_object(resp)
 
-                if resp.status_code == 200:
+                if resp.status_code == 200 and body is not None and body.get("ok") is True:
                     beacon_ok = True
-                    # Only clear these once the server has actually taken them,
-                    # so a failed beacon does not lose the outcome.
-                    pending_result = None
-                    pending_scan = None
-                    pending_report = None
-                    body = resp.json() or {}
+                    pool.success(url)
+                    marker.good_beacon()
+                    # Only now: the server has actually taken them.
+                    if any(pending.values()):
+                        pending = {"result": None, "scan": None, "report": None}
+                        software.save_pending(pending, pending_path)
+                    if update_id is not None:
+                        software.mark_update_reported(update_id, update_reported_path)
 
                     # The chosen speaker rides the response as state, not as a
                     # parameterised command. See the module docstring and the
@@ -526,8 +603,8 @@ async def beacon_loop(
                     forgettarget.write(forgettarget.from_server(body.get("forget_device")))
 
                     command = body.get("command")
-                    if command:
-                        name = command.get("name", "")
+                    if isinstance(command, dict) and command:
+                        name = str(command.get("name", ""))
                         log.info("command received: %s (%s)", name, command.get("id"))
                         # Somebody is at the admin screen. Pay attention for a
                         # while, so the next round trip is seconds not minutes.
@@ -537,6 +614,13 @@ async def beacon_loop(
                         if not allowed:
                             ok, out, devices, report = False, why, None, None
                         else:
+                            if name in SELF_TERMINATING:
+                                # This command kills us. Leave the answer on
+                                # disk first; the next start delivers it.
+                                software.save_pending({"result": {
+                                    "id": command.get("id"), "ok": True,
+                                    "output": SELF_TERMINATING[name],
+                                }}, pending_path)
                             # reboot never gets to report back.
                             ok, out, devices = await asyncio.to_thread(run_command, name)
                             # A dump or a repair log is a document, not a line.
@@ -545,46 +629,60 @@ async def beacon_loop(
                             # report_payload() and migration 007.
                             out, report = report_payload(name, ok, out)
                         log.info("command %s -> ok=%s %s", name, ok, out[:200])
-                        pending_result = {
-                            "id": command.get("id"),
-                            "ok": ok,
-                            "output": out[:2000],
-                        }
-                        if devices is not None:
-                            pending_scan = {
+                        pending = {
+                            "result": {
+                                "id": command.get("id"),
+                                "ok": ok,
+                                "output": out[:2000],
+                            },
+                            "scan": {
                                 "at": datetime.now(timezone.utc).isoformat(),
                                 "devices": devices,
-                            }
-                        if report is not None:
-                            pending_report = report
+                            } if devices is not None else None,
+                            "report": report,
+                        }
+                        # On disk until the server has it: a watchdog that
+                        # restarts this process must not take the answer too.
+                        software.save_pending(pending, pending_path)
+                elif endpoints.not_our_worker(resp):
+                    # Something answered for this hostname and it was not us:
+                    # a filter page, a captive portal, a parked domain. Keep
+                    # everything pending and count it against the host.
+                    pool.failure(url, f"http {resp.status_code}, not our Worker")
+                    log.warning(
+                        "beacon to %s was answered by something that is not "
+                        "our Worker (http %d)", url, resp.status_code,
+                    )
                 else:
+                    if body is not None:
+                        pool.success(url)  # ours, and it said no (401, 5xx...)
                     log.warning("beacon rejected: http %d", resp.status_code)
 
             except httpx.HTTPError as exc:
                 # Expected whenever the network is down. Not an error worth a
                 # stack trace every minute - the next beacon is the retry.
-                log.debug("beacon failed: %s", exc)
+                pool.failure(url, type(exc).__name__)
+                log.debug("beacon to %s failed: %s", url, exc)
             except Exception:
                 log.exception("beacon loop failed unexpectedly")
 
             # Something to say, so say it now rather than sleeping on it. This
             # is half the latency of a command: the result used to wait out a
             # full cycle before being reported.
-            if should_report_now(
-                pending=pending_result is not None
-                or pending_scan is not None
-                or pending_report is not None,
-                beacon_ok=beacon_ok,
-            ):
+            if should_report_now(pending=any(pending.values()), beacon_ok=beacon_ok):
                 continue
 
             # Wait, but wake early if what the site shows has changed.
             before = play_signature(sessions)
-            if attentive_deadline is not None and time.monotonic() < attentive_deadline:
-                delay = ATTENTIVE_INTERVAL_S
-            else:
+            if attentive_deadline is not None and time.monotonic() >= attentive_deadline:
                 attentive_deadline = None
-                delay = active_interval_s if before is not None else interval_s
+            delay = next_interval(
+                attentive_deadline,
+                playing=before is not None,
+                idle_s=interval_s,
+                active_s=active_interval_s,
+                attentive_s=attentive_interval_s,
+            )
             waited = 0.0
             while waited < delay:
                 await asyncio.sleep(min(watch_interval_s, delay - waited))

@@ -4,7 +4,7 @@ Paste the block below into a fresh session.
 
 ---
 
-I'm working on the AuxGoat locker room music project at
+I'm working on the AuxGoat project at
 `~/Desktop/Home_Projects/locker-room-music.nosync`. Read `docs/STATE.md` first —
 it is the canonical record and is current as of 2026-08-31, including its
 "Pick up here" section, which was rewritten on 2026-08-31 and is now accurate.
@@ -23,7 +23,7 @@ Everything is deployed and live: migration 005 on prod D1, the Worker
 from the team app.
 
 Pushing on campus needs the 443 endpoint —
-`ssh://git@ssh.github.com:443/MMV17/locker-room-music.git` — which is already
+`ssh://git@ssh.github.com:443/MMV17/auxgoat.git` — which is already
 set as `origin`. Port 22 is blocked.
 
 **Branches, tidied 2026-09-07.** Two locals, `audio-output-routing` (checked

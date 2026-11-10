@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
-import { get } from "./../api";
+import { useEffect, useRef } from "react";
 import type { NowPlay, Results } from "./../api";
-import { Artwork, Spinner, formatScore, scoreClass } from "./../components";
+import { Artwork, formatScore, useEscape, useFocusTrap, scoreClass } from "./../components";
 import { ThumbDown, ThumbUp } from "./../icons";
 
 /**
@@ -41,37 +40,26 @@ export function markRevealed(playId: string): void {
  * this one transition to get proper attention and for animation elsewhere to
  * stay near zero — that is why this is a full takeover rather than a toast.
  */
-export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }) {
-  const [results, setResults] = useState<Results | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    get<Results>(`/api/plays/${play.id}/results`)
-      .then(setResults)
-      // 403 means the window had not actually closed yet — a clock skew race.
-      // Nothing useful to say about it; drop the reveal.
-      .catch(() => setFailed(true));
-  }, [play.id]);
-
-  useEffect(() => {
-    if (failed) onClose();
-  }, [failed, onClose]);
-
+export function Reveal({
+  play,
+  results,
+  onClose,
+}: {
+  play: NowPlay;
+  results: Results;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const done = useRef<HTMLButtonElement>(null);
   // Dismissable with Escape on the off chance someone is on a laptop.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  if (failed) return null;
+  useEscape(onClose);
+  // A takeover that never takes focus leaves a keyboard or screen-reader user
+  // on a button behind it. Results are already in hand when this mounts.
+  useFocusTrap(ref);
+  useEffect(() => done.current?.focus(), []);
 
   return (
-    <div className="reveal" role="dialog" aria-modal="true" aria-label="Song result">
-      {!results ? (
-        <Spinner />
-      ) : (
-        <>
+    <div ref={ref} className="reveal" role="dialog" aria-modal="true" aria-label="Song result">
           <p className="t-label">The room has spoken</p>
 
           <Artwork
@@ -81,7 +69,7 @@ export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }
           />
 
           <div>
-            <h1 className="t-title">{results.title}</h1>
+            <h2 className="t-title">{results.title}</h2>
             <p className="t-sub">{results.artist ?? "Unknown artist"}</p>
           </div>
 
@@ -92,14 +80,20 @@ export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }
               <p className={"reveal-score " + scoreClass(results.score)}>
                 {formatScore(results.score)}
               </p>
+              {/* True by construction: the score is (up - down) / (up + down + 5),
+                  shown x100 (scoring.ts, formatScore), so it always lies strictly
+                  between -100 and +100. */}
+              <p className="t-label">Score out of &plusmn;100</p>
               <div className="reveal-split">
                 <span className="tally is-up">
                   <ThumbUp />
                   {results.upvotes}
+                  <span className="sr-only"> up votes</span>
                 </span>
                 <span className="tally is-down">
                   <ThumbDown />
                   {results.downvotes}
+                  <span className="sr-only"> down votes</span>
                 </span>
               </div>
               <p className="t-sub">
@@ -112,11 +106,9 @@ export function Reveal({ play, onClose }: { play: NowPlay; onClose: () => void }
             <p className="t-label">Skipped early — not counted toward rankings</p>
           )}
 
-          <button className="btn is-primary" onClick={onClose}>
+          <button ref={done} className="btn is-primary" onClick={onClose}>
             Done
           </button>
-        </>
-      )}
     </div>
   );
 }

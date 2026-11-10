@@ -1,0 +1,26 @@
+# Finish or revert an interrupted over-the-air update, on every boot.
+#
+# Installs to /etc/systemd/system/auxgoat-update-recover.service
+#
+# A power cut can land anywhere in an update. This runs BEFORE the listener
+# starts and leaves /opt/lockerroom/lockerroom pointing at a complete, verified
+# release whatever state the last run died in - see `recover` in
+# pi/scripts/auxgoat-update.
+#
+# ORDERED Before= THE LISTENER, AND NEVER Required BY IT. The listener is the
+# control channel: if this unit is missing, fails or times out, the listener
+# must still start. Ordering alone gives "recover first when it can"; a
+# Requires= would turn a bug here into a box nobody can reach.
+[Unit]
+Description=AuxGoat update recovery (finish or revert an interrupted update)
+Before=lockerroom-listener.service lockerroom-netwatch.service
+ConditionPathExists=/usr/local/bin/auxgoat-update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/auxgoat-update recover
+# Hard ceiling, so a wedged SD card delays the listener by a minute at most.
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

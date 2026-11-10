@@ -190,6 +190,10 @@ echo "$NOW_RAW" | grep -q '"my_vote":1' \
 
 code=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' "$BASE/api/plays/$PLAY_ID/results")
 [ "$code" = "403" ] && ok "results are 403 while voting is open" || bad "results while open" "got $code"
+# ...and say when to ask again, so a client can retry instead of giving up.
+OPEN_BODY=$(curl -s -b "$JAR" "$BASE/api/plays/$PLAY_ID/results")
+echo "$OPEN_BODY" | grep -Eq '"closes_at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T' \
+  && ok "the 403 carries closes_at" || bad "closes_at in the 403" "$OPEN_BODY"
 
 echo "== vote changes and the unique constraint =="
 curl -s -b "$JAR" -X POST "$BASE/api/votes" -H 'content-type: application/json' \
@@ -390,25 +394,19 @@ R3=$(curl -s -b "$JAR" "$BASE/api/plays/$PLAY3/results")
 echo "$R3" | grep -q '"upvotes":0' \
   && ok "vote cast before claiming is voided by the claim" || bad "claim backfill void" "$R3"
 
-echo "== team colour =="
+echo "== team name =="
+# There is no team colour any more (see src/theme.ts): the palette is fixed,
+# so the name is the only thing an operator can set. The colour checks that
+# used to live here tested a validator that was deleted with it.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$BASE/api/admin/theme" \
-  -H 'content-type: application/json' -d '{"primary":"#862633"}')
+  -H 'content-type: application/json' -d '{"team_name":"Crusaders"}')
 [ "$code" = "401" ] && ok "theme write without admin password is rejected" || bad "theme auth" "got $code"
 
-for BADCOLOR in 'red' '#fff' '#f00; background:url(x)' 'javascript:alert(1)'; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$BASE/api/admin/theme" \
-    -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
-    -d "{\"primary\":\"$BADCOLOR\"}")
-  # This value is written into a CSS custom property on every page, so
-  # anything but a six-digit hex is a stylesheet injection.
-  [ "$code" = "400" ] && ok "theme rejects '$BADCOLOR'" || bad "theme rejects '$BADCOLOR'" "got $code"
-done
-
 curl -s -X PUT "$BASE/api/admin/theme" -H "X-Admin-Password: $ADMIN_PW" \
-  -H 'content-type: application/json' -d '{"primary":"#862633","team_name":"Crusaders"}' > /dev/null
+  -H 'content-type: application/json' -d '{"team_name":"Crusaders"}' > /dev/null
 THEME=$(curl -s "$BASE/api/theme")
-echo "$THEME" | grep -q '"primary":"#862633"' \
-  && ok "valid hex round-trips through the public endpoint" || bad "theme round-trip" "$THEME"
+echo "$THEME" | grep -q '"primary"' \
+  && bad "theme carries no colour" "$THEME" || ok "theme carries no colour"
 echo "$THEME" | grep -q '"team_name":"Crusaders"' \
   && ok "team name round-trips" || bad "team name" "$THEME"
 
@@ -739,6 +737,116 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "CF-Connecting-IP: 203.0.113.25
 [ "$code" = "200" ] \
   && ok "one address's lockout does not affect another" \
   || bad "throttle is not per-address" "got $code, want 200"
+
+echo "== speaker privacy =="
+# A scan sees every Bluetooth device in the room, teammates' phones included.
+# Players get audio-class devices only, and no raw MAC anywhere; the admin
+# screen keeps raw MACs (it needs them to forget a pairing).
+beacon '{"speaker_name":"AuxGoat","scan":{"devices":[{"mac":"AA:BB:CC:00:00:01","name":"E2E Speaker","cod":2360340},{"mac":"AA:BB:CC:00:00:02","name":"Someones iPhone","cod":5898764}]}}' > /dev/null
+SPK=$(curl -s -b "$JAR" "$BASE/api/speakers")
+echo "$SPK" | grep -q "E2E Speaker" && ok "players see the audio device" || bad "player speaker list" "$SPK"
+echo "$SPK" | grep -q "Someones iPhone" && bad "players see a phone" "$SPK" || ok "players do not see a phone from the scan"
+echo "$SPK" | grep -Eq '([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}' && bad "a MAC reaches players" "$SPK" || ok "no MAC-shaped string in the player response"
+ADM=$(curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/speakers")
+echo "$ADM" | grep -q "AA:BB:CC:00:00:02" && ok "the admin list keeps raw MACs and every device" || bad "admin speaker list" "$ADM"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X PUT "$BASE/api/speakers" \
+  -H 'content-type: application/json' -d '{}')
+# Refused either way: 403 without a connected phone, 400 for a body naming no
+# speaker. What must never happen is a 200 that switched the room to the cable.
+[ "$code" != "200" ] && ok "a speaker PUT naming nothing does not clear the selection" || bad "empty PUT" "got $code"
+
+echo "== hardening =="
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/roster")
+[ "$code" = "404" ] && ok "GET /api/roster is gone" || bad "roster" "got $code"
+
+LONG=$(printf 'x%.0s' $(seq 1 200))
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"$LONG\",\"last_name\":\"Long$SUFFIX\"}")
+[ "$code" = "400" ] && ok "signup refuses a name over 40 characters" || bad "long name" "got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" -H 'content-type: application/json' \
+  -d "{\"team_code\":\"$TEAM_CODE\",\"first_name\":\"Jersey\",\"last_name\":\"Bad$SUFFIX\",\"jersey_number\":\"abcdefgh\"}")
+[ "$code" = "400" ] && ok "signup refuses a jersey that is not 1-3 digits" || bad "bad jersey" "got $code"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/session" -H 'content-type: application/json' -d '{not json')
+[ "$code" = "400" ] && ok "malformed JSON is a 400, not a 500" || bad "malformed json" "got $code"
+
+BODY=$(curl -s -w ' %{http_code}' -X POST "$BASE/api/definitely-not-a-route")
+echo "$BODY" | grep -q '"error":"Not found"} 404' && ok "an unknown /api POST is a JSON 404" || bad "api POST 404" "$BODY"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/votes" \
+  -H 'Origin: https://evil.example' -H 'content-type: application/json' -d '{"play_id":"x","value":1}')
+[ "$code" = "403" ] && ok "a cross-origin write is refused" || bad "origin check" "got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/votes" \
+  -H "Origin: $BASE" -H 'content-type: application/json' -d '{"play_id":"no-such-play","value":1}')
+[ "$code" = "404" ] && ok "a same-origin write passes the origin check" || bad "same origin" "got $code"
+
+HDRS=$(curl -s -D - -o /dev/null -b "$JAR" "$BASE/api/me" | tr -d '\r')
+echo "$HDRS" | grep -qi '^x-content-type-options: nosniff' && echo "$HDRS" | grep -qi '^x-frame-options: DENY' \
+  && echo "$HDRS" | grep -qi "^content-security-policy: default-src 'none'" \
+  && ok "security headers on a Worker response" || bad "security headers" "$HDRS"
+echo "$HDRS" | grep -qi '^cache-control: private, no-store' && ok "authenticated JSON is private, no-store" || bad "no-store" "$HDRS"
+
+# Renaming a player onto somebody else's name and number is a 409 the admin
+# can act on, not a 500 out of the UNIQUE constraint.
+A_ID=$(curl -s -X POST "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d "{\"first_name\":\"Clash\",\"last_name\":\"A$SUFFIX\"}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+B_ID=$(curl -s -X POST "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
+  -d "{\"first_name\":\"Clash\",\"last_name\":\"B$SUFFIX\"}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BASE/api/admin/users/$B_ID" -H "X-Admin-Password: $ADMIN_PW" \
+  -H 'content-type: application/json' -d "{\"last_name\":\"A$SUFFIX\"}")
+[ "$code" = "409" ] && ok "an admin rename onto an existing identity is a 409" || bad "admin rename clash" "got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/admin/users" -H "X-Admin-Password: $ADMIN_PW" \
+  -H 'content-type: application/json' -d "{\"first_name\":\"Num\",\"last_name\":\"C$SUFFIX\",\"jersey_number\":\"1234\"}")
+[ "$code" = "400" ] && ok "admin create applies the same validation" || bad "admin create validation" "got $code"
+for id in "$A_ID" "$B_ID"; do
+  curl -s -o /dev/null -X DELETE "$BASE/api/admin/users/$id" -H "X-Admin-Password: $ADMIN_PW"
+done
+
+echo "== wireless update =="
+# A box that has never reported `software` is on the pre-updater listener, so
+# update-software queues run-repair (which installs the updater) instead.
+drain() {
+  for _ in 1 2 3; do
+    local r id
+    r=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
+    id=$(echo "$r" | sed -n 's/.*"command":{"id":"\([^"]*\)".*/\1/p')
+    [ -z "$id" ] && break
+    curl -s -o /dev/null -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' \
+      -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$id\",\"ok\":true,\"output\":\"drained by e2e\"}}"
+  done
+}
+drain
+BEFORE=$(curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/commands")
+UPD=$(curl -s -X POST "$BASE/api/admin/pi/commands" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' -d '{"command":"update-software"}')
+if echo "$BEFORE" | grep -q '"software":null'; then
+  echo "$UPD" | grep -q '"queued":"run-repair"' && echo "$UPD" | grep -q '"bootstrap":true' \
+    && ok "update on a never-reported box queues run-repair (bootstrap)" || bad "bootstrap" "$UPD"
+else
+  echo "$UPD" | grep -q '"queued":"update-software"' && ok "update on a reporting box queues update-software" || bad "update" "$UPD"
+fi
+drain
+# A beacon carrying the new `software` block (and the Pi's clock) is stored,
+# and unknown keys alongside it are ignored rather than rejected.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' \
+  -d "{\"speaker_name\":\"AuxGoat\",\"at\":\"$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"software\":{\"commit\":\"0123abcd\",\"installed_at\":\"2026-11-01T12:00:00Z\"},\"some_future_key\":{\"x\":1}}")
+[ "$code" = "200" ] && ok "a beacon with software, at and an unknown key is accepted" || bad "software beacon" "got $code"
+AFTER=$(curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/commands")
+echo "$AFTER" | grep -q '"software":{"commit":"0123abcd","installed_at":"2026-11-01T12:00:00Z"}' \
+  && ok "admin sees the reported software" || bad "software stored" "$AFTER"
+# wrangler dev rewrites the request URL to the first route's host, so the exact
+# name depends on how the Worker is run; that it is a hostname is the check.
+echo "$AFTER" | grep -Eq '"via_host":"[a-z0-9.-]+"' && ok "admin sees the check-in hostname" || bad "via_host" "$AFTER"
+echo "$AFTER" | grep -Eq '"clock_skew_ms":(59|60|61)[0-9]{4}' && ok "admin sees the clock skew (~10 min)" || bad "clock skew" "$AFTER"
+UPD=$(curl -s -X POST "$BASE/api/admin/pi/commands" -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' -d '{"name":"update-software"}')
+echo "$UPD" | grep -q '"queued":"update-software"' && echo "$UPD" | grep -q '"bootstrap":false' \
+  && ok "once software is reported, update-software is queued as itself" || bad "update after report" "$UPD"
+GOT=$(curl -s -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' -d '{"speaker_name":"AuxGoat"}')
+UPD_ID=$(echo "$GOT" | sed -n 's/.*"command":{"id":"\([^"]*\)","name":"update-software".*/\1/p')
+[ -n "$UPD_ID" ] && ok "the Pi is handed update-software" || bad "dispatch update-software" "$GOT"
+curl -s -o /dev/null -X POST "$BASE/api/pi/beacon" -H "X-Device-Key: $DEVICE_KEY" -H 'content-type: application/json' \
+  -d "{\"speaker_name\":\"AuxGoat\",\"result\":{\"id\":\"$UPD_ID\",\"ok\":true,\"output\":\"updated\"},\"report\":{\"kind\":\"update\",\"at\":\"2026-11-10T12:00:00Z\",\"body\":\"installed 0123abcd\",\"ok\":true}}"
+curl -s -H "X-Admin-Password: $ADMIN_PW" "$BASE/api/admin/pi/reports" | grep -q '"kind":"update"' \
+  && ok "an update report is stored" || bad "update report" "not listed"
 
 rm -f "$JAR"
 echo

@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { ApiError, get, post } from "./../api";
+import { useState } from "react";
+import { ApiError, errorMessage, post } from "./../api";
 import type { UnclaimedDevice } from "./../api";
-import { Empty, Spinner } from "./../components";
+import { Banner, Empty, LoadError, Spinner, useLoad } from "./../components";
 import { IconPhone } from "./../icons";
-import { useNavigate } from "./../router";
+import { goBack, setFlash, useNavigate } from "./../router";
 
 /**
  * Claiming a device is what turns anonymous plays into DJ credit. It is also
@@ -16,30 +16,26 @@ import { useNavigate } from "./../router";
  */
 export function Claim() {
   const navigate = useNavigate();
-  const [devices, setDevices] = useState<UnclaimedDevice[] | null>(null);
+  const list = useLoad<{ devices: UnclaimedDevice[] }>("/api/devices/unclaimed");
+  const devices = list.data?.devices ?? null;
   const [confirming, setConfirming] = useState<UnclaimedDevice | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const load = () =>
-    get<{ devices: UnclaimedDevice[] }>("/api/devices/unclaimed")
-      .then((r) => setDevices(r.devices))
-      .catch(() => setDevices([]));
-
-  useEffect(() => {
-    void load();
-  }, []);
 
   const claim = async (device: UnclaimedDevice) => {
     setBusy(true);
     setError(null);
     try {
       await post(`/api/devices/${device.mac_hash}/claim`);
+      setFlash("Claimed - your songs now count for you");
       navigate("/");
     } catch (e) {
-      if (e instanceof ApiError) setError(e.message);
+      // 401 is App's: it is already returning to Join.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setError(errorMessage(e, "Could not claim that phone. Try again."));
+      }
       setConfirming(null);
-      void load();
+      list.retry();
     } finally {
       setBusy(false);
     }
@@ -83,13 +79,18 @@ export function Claim() {
 
   return (
     <main className="screen">
-      <header className="screen-head">
-        <h1 className="t-display">Claim</h1>
+      <header className="set-head">
+        <button className="btn-quiet" onClick={() => goBack("/settings/account")}>
+          &lsaquo; Back
+        </button>
+        <h1 className="t-section">Claim your phone</h1>
       </header>
 
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
 
-      {!devices ? (
+      {list.error ? (
+        <LoadError message={list.error} onRetry={list.retry} />
+      ) : !devices ? (
         <Spinner />
       ) : devices.length === 0 ? (
         <Empty title="No unclaimed phones">
@@ -103,7 +104,7 @@ export function Claim() {
           <div className="rows">
             {devices.map((d) => (
               <button key={d.mac_hash} className="row" onClick={() => setConfirming(d)}>
-                <span className="jersey" style={{ background: "var(--hairline)", color: "var(--muted)" }}>
+                <span className="jersey" aria-hidden="true" style={{ background: "var(--hairline)", color: "var(--muted)" }}>
                   <IconPhone />
                 </span>
                 <span className="row-main">

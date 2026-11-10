@@ -19,6 +19,8 @@ import {
   RELAY_SPEAKER_NAME_KEY,
 } from "./piControl";
 import type { Env } from "./types";
+import { getSetting, putSetting, putSettingStmt } from "./settings";
+import { hashMac } from "./crypto";
 
 /** One device as the Pi's scan reported it. */
 export type ScannedDevice = {
@@ -126,22 +128,17 @@ export async function listDevices(env: Env): Promise<ScannedDevice[]> {
  * and the Pi would not be able to tell it from a malformed response.
  */
 export async function getSelection(env: Env): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(RELAY_SPEAKER_MAC_KEY)
-    .first<{ value: string }>();
-  if (!row) return null;
+  const value = await getSetting(env, RELAY_SPEAKER_MAC_KEY);
+  if (value === null) return null;
   // Anything stored that is not a MAC and not the empty string is treated as
   // "off" rather than passed on. The write path validates, so this only fires
   // on a hand-edited row - and sending junk down would just be refused by the
   // Pi anyway, silently.
-  return row.value === "" ? "" : (normaliseMac(row.value) ?? "");
+  return value === "" ? "" : (normaliseMac(value) ?? "");
 }
 
 export async function getSelectionName(env: Env): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(RELAY_SPEAKER_NAME_KEY)
-    .first<{ value: string }>();
-  return row?.value ?? null;
+  return getSetting(env, RELAY_SPEAKER_NAME_KEY);
 }
 
 /**
@@ -157,14 +154,8 @@ export async function setSelection(
 ): Promise<void> {
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    ).bind(RELAY_SPEAKER_MAC_KEY, mac ?? "", now),
-    env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    ).bind(RELAY_SPEAKER_NAME_KEY, name ?? "", now),
+    putSettingStmt(env, RELAY_SPEAKER_MAC_KEY, mac ?? "", now),
+    putSettingStmt(env, RELAY_SPEAKER_NAME_KEY, name ?? "", now),
   ]);
 }
 
@@ -179,14 +170,12 @@ export async function setSelection(
  * pending".
  */
 export async function getForgetTarget(env: Env): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(FORGET_DEVICE_MAC_KEY)
-    .first<{ value: string }>();
-  if (!row || row.value === "") return null;
+  const value = await getSetting(env, FORGET_DEVICE_MAC_KEY);
+  if (!value) return null;
   // Anything stored that is not a MAC is dropped rather than passed on. The
   // write path validates, so this only fires on a hand-edited row — and the
   // Pi would refuse it anyway, which is the point of validating twice.
-  return normaliseMac(row.value);
+  return normaliseMac(value);
 }
 
 /**
@@ -197,10 +186,77 @@ export async function getForgetTarget(env: Env): Promise<string | null> {
  * row here is harmless — nothing acts on it until somebody presses the button.
  */
 export async function setForgetTarget(env: Env, mac: string | null): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(FORGET_DEVICE_MAC_KEY, mac ?? "", new Date().toISOString())
-    .run();
+  await putSetting(env, FORGET_DEVICE_MAC_KEY, mac ?? "");
+}
+
+/* ------------------------------------------------------------------ *
+ * What a PLAYER may see of a scan
+ *
+ * A scan lists every Bluetooth device in range - teammates' phones and
+ * earbuds included - with its raw MAC and the name its owner gave it. The team
+ * speaker picker used to hand all of that to any signed-in player: a MAC is a
+ * stable identifier that follows a phone everywhere, and the name is usually
+ * somebody's own name. So players get only audio-class devices, and no raw MAC
+ * anywhere in the response. The Admin screen keeps raw MACs; it needs them to
+ * forget a pairing, and it is behind the password.
+ * ------------------------------------------------------------------ */
+
+/** Bluetooth major device class 0x04 is Audio/Video (speakers, headphones). */
+export function isAudioClass(cod: number | null | undefined): boolean {
+  return typeof cod === "number" && ((cod >> 8) & 0x1f) === 0x04;
+}
+
+/**
+ * The opaque id a player addresses a speaker by: the same salted hash every
+ * MAC is stored as (crypto.ts hashMac + MAC_SALT). Not reversible without the
+ * salt, stable across scans, and resolved back to a MAC only server-side.
+ */
+export function speakerId(mac: string, salt: string): Promise<string> {
+  return hashMac(mac, salt);
+}
+
+export type PlayerDevice = { id: string; name: string | null; cod: number | null; rssi: number | null };
+
+export async function playerDevices(devices: ScannedDevice[], salt: string): Promise<PlayerDevice[]> {
+  const out: PlayerDevice[] = [];
+  for (const d of devices) {
+    if (!isAudioClass(d.cod)) continue;
+    out.push({ id: await speakerId(d.mac, salt), name: d.name, cod: d.cod, rssi: d.rssi });
+  }
+  return out;
+}
+
+/** The scanned device a player's id names, if it is one they may choose. */
+export async function resolveSpeakerId(
+  devices: ScannedDevice[],
+  id: string,
+  salt: string,
+): Promise<ScannedDevice | null> {
+  for (const d of devices) {
+    if (isAudioClass(d.cod) && (await speakerId(d.mac, salt)) === id) return d;
+  }
+  return null;
+}
+
+const MAC_ANYWHERE = /(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/g;
+const MAC_ONE = /(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/;
+
+/** Free text with any MAC-shaped run replaced, for errors the Pi wrote. */
+export function scrubMacs(text: string | null | undefined): string | null {
+  if (text == null) return null;
+  return text.replace(MAC_ANYWHERE, "the speaker");
+}
+
+/**
+ * The output card as a player sees it. When relaying, the "card" IS the
+ * speaker's MAC (see the heartbeats schema), so it is withheld; the client
+ * names the speaker from selected_name instead.
+ */
+export function playerOutput(
+  kind: string | null | undefined,
+  card: string | null | undefined,
+): { kind: string; card: string | null } | null {
+  if (!kind) return null;
+  const safeCard = kind === "relay" || (card && MAC_ONE.test(card)) ? null : (card ?? null);
+  return { kind, card: safeCard };
 }

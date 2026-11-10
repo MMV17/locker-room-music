@@ -694,7 +694,7 @@ sudo nmcli connection modify HCGuest wifi.cloned-mac-address permanent
 sudo nano /etc/lockerroom/config.toml
 ```
 
-Leave `api_base_url` at `https://lockerroom.finestkindfarms.com`. It has
+Leave `api_base_url` at the legacy API hostname. It has
 survived both campus filter episodes untouched, which is more than
 `hc.auxgoat.com` can say.
 

@@ -1,0 +1,16 @@
+# Installs to /etc/systemd/system/auxgoat-nightly-restart.timer
+#
+# 04:30 local. NOT Persistent: a box that was off at 04:30 must not restart its
+# listener the moment it boots at 3pm with a practice under way. The box has no
+# clock battery, so "04:30" is only as good as its date - which is why the
+# script, not the schedule, is what refuses to interrupt music.
+[Unit]
+Description=AuxGoat nightly listener restart, about 04:30
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=300
+Persistent=false
+
+[Install]
+WantedBy=timers.target

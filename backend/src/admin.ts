@@ -1,7 +1,13 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
-import { normalize } from "./trackKey";
 import { PI_COMMANDS, isPiCommand, normaliseMac, OFFLINE_AFTER_MS } from "./piControl";
+import type { PiCommand } from "./piControl";
+import { getSetting } from "./settings";
+import { readSoftware, PI_SOFTWARE_KEY, PI_VIA_HOST_KEY, PI_CLOCK_SKEW_KEY } from "./beacon";
+import { hasOutstandingCommand, queueCommand } from "./piCommands";
+import { identityKey, identityProblem, isIdentityClash, textField } from "./roster";
+import { readJson, badJson } from "./http";
+import { nowIso } from "./util";
 import { listReports } from "./piReports";
 import {
   listDevices,
@@ -16,8 +22,6 @@ import { isVoteWindowOpen } from "./voteWindow";
 import type { PlayRow } from "./types";
 
 export const admin = new Hono<{ Bindings: Env }>();
-
-const nowIso = () => new Date().toISOString();
 
 /**
  * Where the covers stand, and a few stored cover URLs for the Admin screen to
@@ -81,9 +85,7 @@ admin.post("/api/admin/artwork/retry", async (c) => {
   // `all` redoes tracks that already have a cover too. Needed after the
   // matcher itself improves: "Imma Be" was state='found' pointing at a
   // compilation, which no amount of retrying the failures would have fixed.
-  const body = await c.req
-    .json<{ all?: boolean; offset?: number }>()
-    .catch((): { all?: boolean; offset?: number } => ({}));
+  const body = (await readJson<{ all?: boolean; offset?: number }>(c)) ?? {};
   const offset = Math.max(0, Math.floor(Number(body.offset) || 0));
   const where = body.all ? "" : "WHERE artwork_state IN ('none', 'pending')";
 
@@ -110,30 +112,36 @@ admin.post("/api/admin/artwork/retry", async (c) => {
   return c.json({ retried: results.length, found, remaining, next_offset: nextOffset, failures });
 });
 
-/* Roster CRUD */
+/* Roster CRUD. The identity key every writer shares lives in roster.ts. */
 
 /**
- * The roster identity key: normalize(first)|normalize(last)|normalize(jersey).
- *
- * UNIQUE in the schema, and it is what makes a re-signup — cleared cookies, a
- * new phone, a reinstalled browser — find an existing player instead of
- * creating a second row and splitting their play history. Every writer of it
- * calls THIS, which is why the old "must stay identical to" note is gone:
- * signup, the admin rename and PATCH /api/me all share it now.
+ * Each table is read ONCE and grouped, then joined. The correlated
+ * `(SELECT COUNT(*) FROM votes v WHERE v.user_id = u.id)` this replaces has no
+ * index on votes.user_id to use, so it scanned every vote once PER PLAYER:
+ * 7.4 million rows read per page load at 99,000 votes, more than the free
+ * plan's daily read budget in a single click.
  */
-export const identityKey = (first: string, last: string, jersey: string | null) =>
-  `${normalize(first)}|${normalize(last)}|${normalize(jersey ?? "")}`;
+export const ADMIN_USERS_SQL = `SELECT u.*, TRIM(u.first_name || ' ' || u.last_name) AS name,
+          COALESCE(pc.n, 0) AS plays,
+          COALESCE(vc.n, 0) AS votes
+     FROM users u
+     LEFT JOIN (SELECT user_id, COUNT(*) AS n FROM plays GROUP BY user_id) pc ON pc.user_id = u.id
+     LEFT JOIN (SELECT user_id, COUNT(*) AS n FROM votes GROUP BY user_id) vc ON vc.user_id = u.id
+    ORDER BY u.last_name, u.first_name`;
+
+/**
+ * Plays per phone, counted in one pass over plays rather than one pass per
+ * device: plays.device_hash has no index, so the old LEFT JOIN + GROUP BY
+ * scanned every play for every device.
+ */
+export const DEVICE_PLAY_COUNTS =
+  "SELECT device_hash, COUNT(*) AS n FROM plays WHERE device_hash IS NOT NULL GROUP BY device_hash";
 
 admin.get("/api/admin/users", async (c) => {
   // The play and vote counts are not decoration: deleting a player is
   // irreversible, and the confirm has to be able to say what is about to
   // happen to their history rather than asking for a blind yes.
-  const { results } = await c.env.DB.prepare(
-    `SELECT u.*, TRIM(u.first_name || ' ' || u.last_name) AS name,
-            (SELECT COUNT(*) FROM plays p WHERE p.user_id = u.id) AS plays,
-            (SELECT COUNT(*) FROM votes v WHERE v.user_id = u.id) AS votes
-       FROM users u ORDER BY u.last_name, u.first_name`,
-  ).all();
+  const { results } = await c.env.DB.prepare(ADMIN_USERS_SQL).all();
   return c.json({ users: results });
 });
 
@@ -142,17 +150,14 @@ admin.get("/api/admin/users", async (c) => {
  * a broken phone, a name the team code holder needs to fix.
  */
 admin.post("/api/admin/users", async (c) => {
-  const b = await c.req.json<{
-    first_name: string;
-    last_name: string;
-    jersey_number?: string;
-  }>();
-  const first = (b.first_name ?? "").trim();
-  const last = (b.last_name ?? "").trim();
-  if (!first || !last) {
-    return c.json({ error: "first_name and last_name are required" }, 400);
-  }
-  const jersey = (b.jersey_number ?? "").trim() || null;
+  const b = await readJson<{ first_name?: unknown; last_name?: unknown; jersey_number?: unknown }>(c);
+  if (!b) return badJson(c);
+  const first = textField(b.first_name);
+  const last = textField(b.last_name);
+  const jersey = textField(b.jersey_number) || null;
+  // The same rule signup and PATCH /api/me apply (roster.ts).
+  const problem = identityProblem(first, last, jersey);
+  if (problem) return c.json({ error: problem }, 400);
 
   const id = crypto.randomUUID();
   const r = await c.env.DB.prepare(
@@ -167,12 +172,13 @@ admin.post("/api/admin/users", async (c) => {
 });
 
 admin.patch("/api/admin/users/:id", async (c) => {
-  const b = await c.req.json<{
-    first_name?: string;
-    last_name?: string;
-    jersey_number?: string;
-    active?: boolean;
-  }>();
+  const b = await readJson<{
+    first_name?: unknown;
+    last_name?: unknown;
+    jersey_number?: unknown;
+    active?: unknown;
+  }>(c);
+  if (!b) return badJson(c);
   const id = c.req.param("id");
 
   const current = await c.env.DB.prepare(
@@ -186,26 +192,44 @@ admin.patch("/api/admin/users/:id", async (c) => {
   // If an admin fixes a misspelled name and the key keeps the old spelling,
   // that player's next sign-in matches nothing, creates a second row, and
   // their play history silently splits in two.
-  const first = b.first_name?.trim() || current.first_name;
-  const last = b.last_name?.trim() || current.last_name;
+  const first = textField(b.first_name) || current.first_name;
+  const last = textField(b.last_name) || current.last_name;
   const jersey =
-    b.jersey_number === undefined ? current.jersey_number : b.jersey_number.trim() || null;
+    b.jersey_number === undefined ? current.jersey_number : textField(b.jersey_number) || null;
+  const problem = identityProblem(first, last, jersey);
+  if (problem) return c.json({ error: problem }, 400);
 
-  const r = await c.env.DB.prepare(
-    `UPDATE users SET
-       first_name = ?, last_name = ?, jersey_number = ?, identity_key = ?,
-       active = COALESCE(?, active)
-     WHERE id = ?`,
-  )
-    .bind(
-      first,
-      last,
-      jersey,
-      identityKey(first, last, jersey),
-      b.active === undefined ? null : b.active ? 1 : 0,
-      id,
+  // A rename onto somebody else's name+number is a real outcome, and used to
+  // throw out of the UNIQUE constraint as a 500. Checked first so the message
+  // can name it; the catch settles a race between two saves.
+  const key = identityKey(first, last, jersey);
+  const clash = await c.env.DB.prepare("SELECT id FROM users WHERE identity_key = ? AND id != ?")
+    .bind(key, id)
+    .first<{ id: string }>();
+  const CLASH = { error: "Somebody on the roster already has that name and number." };
+  if (clash) return c.json(CLASH, 409);
+
+  let r: D1Result;
+  try {
+    r = await c.env.DB.prepare(
+      `UPDATE users SET
+         first_name = ?, last_name = ?, jersey_number = ?, identity_key = ?,
+         active = COALESCE(?, active)
+       WHERE id = ?`,
     )
-    .run();
+      .bind(
+        first,
+        last,
+        jersey,
+        key,
+        b.active === undefined ? null : b.active ? 1 : 0,
+        id,
+      )
+      .run();
+  } catch (e) {
+    if (isIdentityClash(e)) return c.json(CLASH, 409);
+    throw e;
+  }
   if (!r.meta.changes) return c.json({ error: "Unknown player" }, 404);
   return c.json({ ok: true });
 });
@@ -263,11 +287,10 @@ admin.get("/api/admin/devices", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT d.mac_hash, d.mac_hint, d.alias, d.first_seen, d.claimed_at,
             TRIM(u.first_name || ' ' || u.last_name) AS owner_name,
-            COUNT(p.id) AS plays
+            COALESCE(pc.n, 0) AS plays
      FROM devices d
      LEFT JOIN users u ON u.id = d.user_id
-     LEFT JOIN plays p ON p.device_hash = d.mac_hash
-     GROUP BY d.mac_hash
+     LEFT JOIN (${DEVICE_PLAY_COUNTS}) pc ON pc.device_hash = d.mac_hash
      ORDER BY plays DESC`,
   ).all();
   return c.json({ devices: results });
@@ -407,19 +430,38 @@ admin.post("/api/admin/votes/:id/void", async (c) => {
    sitting queued forever waiting for a Pi that will refuse it. */
 
 /**
- * A dispatched command that has not reported back within this long is treated
- * as finished for queueing purposes. `reboot` never reports - the Pi is gone
- * before it can - so without this the first reboot would block every command
- * that followed it.
+ * What actually goes on the queue for a requested command.
+ *
+ * `update-software` on a box that has never reported a `software` block is
+ * still running the pre-updater listener, which has no handler for it and
+ * would refuse it. `run-repair` runs the committed repair script, which
+ * installs the updater - so that is what is queued, and the response says so.
  */
-const STALE_DISPATCH_MS = 5 * 60_000;
+export function commandToQueue(requested: PiCommand, storedSoftware: string | null): PiCommand {
+  if (requested === "update-software" && readSoftware(storedSoftware) === null) return "run-repair";
+  return requested;
+}
 
 admin.get("/api/admin/pi/commands", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
-       FROM pi_commands ORDER BY created_at DESC LIMIT 20`,
-  ).all();
-  return c.json({ commands: results, allowed: PI_COMMANDS });
+  const [{ results }, software, via, skew] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
+         FROM pi_commands ORDER BY created_at DESC LIMIT 20`,
+    ).all(),
+    getSetting(c.env, PI_SOFTWARE_KEY),
+    getSetting(c.env, PI_VIA_HOST_KEY),
+    getSetting(c.env, PI_CLOCK_SKEW_KEY),
+  ]);
+  const skewMs = skew === null ? null : Number(skew);
+  return c.json({
+    commands: results,
+    allowed: PI_COMMANDS,
+    // What the box last said about itself. null = never reported: for
+    // `software` that means the pre-updater listener is still running.
+    software: readSoftware(software),
+    via_host: via,
+    clock_skew_ms: skewMs !== null && Number.isFinite(skewMs) ? skewMs : null,
+  });
 });
 
 /**
@@ -435,38 +477,28 @@ admin.get("/api/admin/pi/reports", async (c) => {
 });
 
 admin.post("/api/admin/pi/commands", async (c) => {
-  const b = await c.req.json<{ command?: string }>().catch(() => ({}) as any);
-  if (!isPiCommand(b.command)) {
+  const b = (await readJson<{ command?: unknown; name?: unknown }>(c)) ?? {};
+  // `command` is what the Admin screen has always sent; `name` is accepted too.
+  const requested = b.command ?? b.name;
+  if (!isPiCommand(requested)) {
     return c.json({ error: `Unknown command. Allowed: ${PI_COMMANDS.join(", ")}` }, 400);
   }
 
-  // One outstanding command at a time. Queueing three reboots because the
-  // first appeared to do nothing would reboot the Pi three times.
-  //
-  // "Outstanding" excludes commands dispatched long ago and never reported.
-  // Without that escape hatch a Pi that died mid-command would block the
-  // queue forever - and `reboot` does exactly that every single time, because
-  // the process is killed before it can report back. One reboot used to
-  // wedge remote control permanently.
-  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
-  const outstanding = await c.env.DB.prepare(
-    `SELECT id FROM pi_commands
-      WHERE completed_at IS NULL
-        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
-  )
-    .bind(staleCutoff)
-    .first<{ id: string }>();
-  if (outstanding) {
+  // One outstanding command at a time - see hasOutstandingCommand.
+  if (await hasOutstandingCommand(c.env)) {
     return c.json({ error: "A command is already queued or running" }, 409);
   }
 
-  const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
-  )
-    .bind(id, b.command, nowIso())
-    .run();
-  return c.json({ ok: true, id, command: b.command });
+  const queued = commandToQueue(requested, await getSetting(c.env, PI_SOFTWARE_KEY));
+  const id = await queueCommand(c.env, queued);
+  return c.json({
+    ok: true,
+    id,
+    command: queued,
+    queued,
+    // true when an update was asked for and run-repair went instead.
+    bootstrap: queued !== requested,
+  });
 });
 
 /* The relay speaker: what the box plays OUT through.
@@ -514,7 +546,7 @@ admin.get("/api/admin/pi/speakers", async (c) => {
 
 admin.put("/api/admin/pi/speakers", async (c) => {
   type Body = { mac?: string | null; name?: string | null };
-  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+  const b: Body = (await readJson<Body>(c)) ?? {};
 
   // null clears the selection: wired output. Stored as "" rather than by
   // deleting the row, because a deleted row means "never configured" and the
@@ -568,7 +600,7 @@ admin.put("/api/admin/pi/speakers", async (c) => {
  */
 admin.post("/api/admin/pi/forget", async (c) => {
   type Body = { mac?: string };
-  const b = await c.req.json<Body>().catch(() => ({}) as Body);
+  const b: Body = (await readJson<Body>(c)) ?? {};
 
   const mac = normaliseMac(b.mac);
   if (!mac) {
@@ -598,26 +630,13 @@ admin.post("/api/admin/pi/forget", async (c) => {
   // One outstanding command at a time, same rule and same stale-dispatch
   // escape hatch as /pi/commands. Checked BEFORE the target is written, so a
   // refused request does not leave a target pointing somewhere unexpected.
-  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
-  const outstanding = await c.env.DB.prepare(
-    `SELECT id FROM pi_commands
-      WHERE completed_at IS NULL
-        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
-  )
-    .bind(staleCutoff)
-    .first<{ id: string }>();
-  if (outstanding) {
+  if (await hasOutstandingCommand(c.env)) {
     return c.json({ error: "A command is already queued or running" }, 409);
   }
 
   await setForgetTarget(c.env, mac);
 
-  const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
-  )
-    .bind(id, "forget-selected-phone", nowIso())
-    .run();
+  const id = await queueCommand(c.env, "forget-selected-phone");
 
   return c.json({ ok: true, id, mac });
 });

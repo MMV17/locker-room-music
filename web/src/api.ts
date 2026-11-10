@@ -14,26 +14,76 @@ export class ApiError extends Error {
      * their code was wrong when it was not.
      */
     readonly code?: string,
+    /** The parsed error body, for the few callers that need more than the message. */
+    readonly body?: Record<string, unknown>,
   ) {
     super(message);
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    credentials: "same-origin",
-    ...init,
-    headers: {
-      ...(init.body ? { "content-type": "application/json" } : {}),
-      ...init.headers,
-    },
-  });
+/** The message to show for a failed call: the server's own words when it sent some. */
+export function errorMessage(e: unknown, fallback: string): string {
+  return e instanceof ApiError && e.status !== 0 ? e.message : fallback;
+}
 
-  const body = await res.json().catch(() => ({}) as Record<string, unknown>);
+/**
+ * Status 0 is ours, not the server's: the request never got an answer (no
+ * network, or REQUEST_TIMEOUT_MS ran out).
+ */
+export const isNetworkError = (e: unknown) => e instanceof ApiError && e.status === 0;
+
+/**
+ * A request on bad locker-room wifi can hang for a minute before the browser
+ * gives up, and a poll that hangs that long resolves after newer ones. Eight
+ * seconds is longer than any honest answer from the Worker takes.
+ */
+const REQUEST_TIMEOUT_MS = 8_000;
+
+/**
+ * Whoever wants to know that the session is gone (App, which returns to Join).
+ * Every route behind the player gate answers 401 the same way - signed out,
+ * deactivated, or idle 120+ days - so one listener here covers every screen.
+ * Admin does not go through request(): its 401 means a wrong admin password
+ * and must not sign the player out.
+ */
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const abort = new AbortController();
+  const timer = window.setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
+  const outer = init.signal;
+  if (outer) {
+    if (outer.aborted) abort.abort();
+    else outer.addEventListener("abort", () => abort.abort(), { once: true });
+  }
+
+  let res: Response;
+  let body: Record<string, unknown>;
+  try {
+    res = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      signal: abort.signal,
+      headers: {
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
+    body = await res.json().catch(() => ({}) as Record<string, unknown>);
+  } catch {
+    throw new ApiError(0, "Could not reach AuxGoat. Check your connection.", "network");
+  } finally {
+    window.clearTimeout(timer);
+  }
+
   if (!res.ok) {
-    const message = typeof (body as any).error === "string" ? (body as any).error : "Something went wrong";
-    const code = typeof (body as any).code === "string" ? (body as any).code : undefined;
-    throw new ApiError(res.status, message, code);
+    const message = typeof body.error === "string" ? body.error : "Something went wrong";
+    const code = typeof body.code === "string" ? body.code : undefined;
+    if (res.status === 401) onUnauthorized?.();
+    throw new ApiError(res.status, message, code, body);
   }
   return body as T;
 }
@@ -166,13 +216,16 @@ export interface Results {
   counted: boolean;
 }
 
-export interface RosterUser {
-  id: string;
-  /** Composed server-side from first_name + last_name. */
-  name: string;
-  first_name: string;
-  last_name: string;
-  jersey_number: string | null;
+/**
+ * The 403 body GET /api/plays/:id/results sends while that song's vote window
+ * is still open. `closes_at` (ISO) is when the window closes: retry the
+ * request a moment after it rather than giving up. With back-to-back songs
+ * this is the normal case - the next song starts inside the previous one's
+ * 30-second grace.
+ */
+export interface ResultsNotYet {
+  error: string;
+  closes_at: string;
 }
 
 export interface TrackEntry {

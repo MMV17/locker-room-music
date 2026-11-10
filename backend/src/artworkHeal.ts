@@ -22,6 +22,7 @@
  */
 import { lookupArtwork } from "./artwork";
 import type { Env } from "./types";
+import { getSetting, putSetting } from "./settings";
 
 /**
  * Same as the Admin retry. A lookup is up to 5 fetches (2 Deezer, iTunes,
@@ -50,36 +51,28 @@ export function nextHealOffset(offset: number, batchLen: number, found: number):
   return Math.max(0, offset + batchLen - found);
 }
 
+/**
+ * The cursor after `done` tracks of a batch, `found` of which healed (and so
+ * left the set). The mid-batch counterpart of nextHealOffset.
+ */
+export function healCursorAfter(offset: number, done: number, found: number): number {
+  return Math.max(0, offset + done - found);
+}
+
 /** Whether this run should rest: a full pass finished less than an hour ago. */
 export function isResting(restUntil: string | null | undefined, now = Date.now()): boolean {
   const t = restUntil ? Date.parse(restUntil) : NaN;
   return Number.isFinite(t) && now < t;
 }
 
-async function readSetting(env: Env, key: string): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(key)
-    .first<{ value: string }>();
-  return row?.value ?? null;
-}
-
-async function writeSetting(env: Env, key: string, value: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(key, value, new Date().toISOString())
-    .run();
-}
-
 export async function healArtwork(
   env: Env,
   now = Date.now(),
 ): Promise<{ tried: number; found: number; offset: number; next: number; resting?: boolean }> {
-  if (isResting(await readSetting(env, REST_KEY), now)) {
+  if (isResting(await getSetting(env, REST_KEY), now)) {
     return { tried: 0, found: 0, offset: 0, next: 0, resting: true };
   }
-  const offset = Math.max(0, Math.floor(Number(await readSetting(env, CURSOR_KEY)) || 0));
+  const offset = Math.max(0, Math.floor(Number(await getSetting(env, CURSOR_KEY)) || 0));
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, t.title, t.artist, t.album FROM tracks t
@@ -90,8 +83,14 @@ export async function healArtwork(
     .bind(HEAL_BATCH, offset)
     .all<{ id: string; title: string; artist: string | null; album: string | null }>();
 
+  // The cursor advances after EVERY track, not once at the end. It used to be
+  // written only after all eight lookups; an invocation killed part-way (CPU
+  // or wall-clock limit, a hung provider) never wrote it, so the next run
+  // retried the same batch, died the same way, and the heal stalled forever.
+  // Each provider fetch is also bounded at 5s now (artwork.ts).
   let found = 0;
-  for (const t of results) {
+  for (let i = 0; i < results.length; i++) {
+    const t = results[i];
     try {
       const r = await lookupArtwork(env, t.id, t.title, t.artist ?? "", t.album);
       if (r.url) found++;
@@ -99,13 +98,16 @@ export async function healArtwork(
       // One bad track must not stop the batch, or the cursor never moves.
       console.warn(`artwork heal: ${t.title} threw ${String(e)}`);
     }
+    if (i < results.length - 1) {
+      await putSetting(env, CURSOR_KEY, String(healCursorAfter(offset, i + 1, found)));
+    }
   }
 
   const next = nextHealOffset(offset, results.length, found);
-  await writeSetting(env, CURSOR_KEY, String(next));
+  await putSetting(env, CURSOR_KEY, String(next));
   // A short batch is the end of a pass. Rest before the next one.
   if (results.length < HEAL_BATCH) {
-    await writeSetting(env, REST_KEY, new Date(now + HEAL_REST_MS).toISOString());
+    await putSetting(env, REST_KEY, new Date(now + HEAL_REST_MS).toISOString());
   }
 
   return { tried: results.length, found, offset, next };

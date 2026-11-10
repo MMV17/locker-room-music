@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, get, post } from "./../api";
-import type { AuxState, MyDj, NowPlay, NowResponse } from "./../api";
-import { Artwork, Empty, Spinner, formatClock, formatWhen } from "./../components";
+import { ApiError, errorMessage, get, isNetworkError, post } from "./../api";
+import type { AuxState, MyDj, NowPlay, NowResponse, Results } from "./../api";
+import {
+  Artwork,
+  Banner,
+  Empty,
+  Spinner,
+  formatClock,
+  formatWhen,
+  useEscape,
+} from "./../components";
 import { IconCheck, IconSettings, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
-import { useNavigate } from "./../router";
+import { clearFlash, peekFlash, useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
 /**
@@ -29,66 +37,225 @@ import { Reveal, markRevealed, wasRevealed } from "./Reveal";
  */
 const POLL_MS = 7_500;
 
+/**
+ * Backoff for when there is nothing to vote on. The table above assumes a song
+ * is playing for the whole two hours, and most of a practice is not that:
+ * between songs nothing can change faster than someone pressing play, and with
+ * the speaker offline nothing can change at all until the box comes back.
+ * These are what keep 75 players inside the free plan; do not shorten them.
+ */
+const IDLE_POLL_MS = 20_000;
+const OFFLINE_POLL_MS = 60_000;
+
+function pollDelay(now: NowResponse | null): number {
+  if (!now || now.play) return POLL_MS;
+  return now.speaker_online ? IDLE_POLL_MS : OFFLINE_POLL_MS;
+}
+
+/**
+ * How long to keep asking for a finished song's results. With back-to-back
+ * songs the next one starts inside the previous one's 30s grace, so the first
+ * ask is normally refused with a `closes_at`; past four minutes the moment has
+ * gone and a verdict would land on a song nobody remembers.
+ */
+const REVEAL_GIVE_UP_MS = 4 * 60_000;
+/** Retry delay when the results request failed for a reason other than "not yet". */
+const REVEAL_RETRY_MS = 5_000;
+
+/** Consecutive failed polls before the screen admits it has lost the server. */
+const RECONNECT_AFTER = 2;
+
+const VOTE_FAILED = "Your vote didn\u2019t go through - tap again.";
+
 export function NowPlaying({ teamName }: { teamName: string }) {
   const navigate = useNavigate();
   const [now, setNow] = useState<NowResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [failures, setFailures] = useState(0);
   const [myDj, setMyDj] = useState<MyDj | null>(null);
-  const [revealFor, setRevealFor] = useState<NowPlay | null>(null);
+  const [reveal, setReveal] = useState<{ play: NowPlay; results: Results } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [voteFailed, setVoteFailed] = useState(false);
   const [speakerOpen, setSpeakerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Read out by the polite live region: the song changing, a vote landing.
+  const [announce, setAnnounce] = useState("");
+  const speakerBtn = useRef<HTMLButtonElement>(null);
+  const gearBtn = useRef<HTMLButtonElement>(null);
+  const lastPlayId = useRef<string | null | undefined>(undefined);
+  // A confirmation carried over from the previous screen (a claim).
+  const [flash, setFlashShown] = useState(peekFlash);
+  useEffect(() => {
+    clearFlash();
+    if (!flash) return;
+    const id = window.setTimeout(() => setFlashShown(null), 6_000);
+    return () => window.clearTimeout(id);
+  }, [flash]);
 
   // The play we last saw with an *open* window. The reveal fires on the
   // transition out of that, which is also why a cold open onto an
   // already-closed song correctly reveals nothing.
   const openPlay = useRef<NowPlay | null>(null);
+  // The latest applied /api/now, for the poll loop's backoff decision.
+  const nowRef = useRef<NowResponse | null>(null);
+  const alive = useRef(true);
+
+  // Polls can overlap (a visibility change, a slow response) and resolve out
+  // of order on bad wifi. Each request takes a number; a response older than
+  // the newest one already applied is dropped.
+  const issued = useRef(0);
+  const applied = useRef(0);
+
+  // While a vote is in flight - and for any poll that was already on the wire
+  // when it landed - the server's my_vote is older than the tap. This keeps
+  // the local choice on screen instead of flicking back.
+  const voteGuard = useRef<{ playId: string; value: 1 | -1; throughSeq: number } | null>(null);
+  const voting = useRef(false);
+  const queuedVote = useRef<{ playId: string; value: 1 | -1 } | null>(null);
+  const revertTo = useRef<1 | -1 | null>(null);
+
+  // The one play whose results we are waiting for. Replacing it is how a
+  // stale reveal is cancelled: only the song that just ended may reveal.
+  const revealTarget = useRef<string | null>(null);
+  const revealTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      revealTarget.current = null;
+      window.clearTimeout(revealTimer.current);
+    };
+  }, []);
+
+  /**
+   * Fetch a finished play's results, waiting out its vote window if the next
+   * song started before it closed. Marked revealed only once the results are
+   * actually in hand - marking it up front is why back-to-back songs never
+   * revealed at all.
+   */
+  const requestReveal = useCallback((target: NowPlay, firstWait: number) => {
+    window.clearTimeout(revealTimer.current);
+    revealTarget.current = target.id;
+    const giveUpAt = Date.now() + REVEAL_GIVE_UP_MS;
+    let refusals = 0;
+
+    const attempt = async () => {
+      if (!alive.current || revealTarget.current !== target.id) return;
+      try {
+        const results = await get<Results>(`/api/plays/${target.id}/results`);
+        if (!alive.current || revealTarget.current !== target.id) return;
+        revealTarget.current = null;
+        markRevealed(target.id);
+        setReveal({ play: target, results });
+      } catch (e) {
+        if (!alive.current || revealTarget.current !== target.id) return;
+        let wait: number | null = null;
+        const closesAt = e instanceof ApiError ? e.body?.closes_at : undefined;
+        if (e instanceof ApiError && e.status === 403 && typeof closesAt === "string") {
+          // A second past the close, but never a tight loop: a phone whose
+          // clock runs behind the server's would otherwise ask every second.
+          refusals += 1;
+          const floor = Math.min(30_000, 1_000 * 2 ** refusals);
+          wait = Math.max(floor, Date.parse(closesAt) + 1_000 - Date.now());
+        } else if (isNetworkError(e) || (e instanceof ApiError && e.status >= 500)) {
+          wait = REVEAL_RETRY_MS;
+        }
+        if (wait == null || Number.isNaN(wait) || Date.now() + wait > giveUpAt) {
+          revealTarget.current = null;
+          return;
+        }
+        revealTimer.current = window.setTimeout(attempt, wait);
+      }
+    };
+    if (firstWait > 0) revealTimer.current = window.setTimeout(attempt, firstWait);
+    else void attempt();
+  }, []);
 
   const load = useCallback(async () => {
+    const seq = ++issued.current;
     try {
-      const next = await get<NowResponse>("/api/now");
-      const prev = openPlay.current;
+      let next = await get<NowResponse>("/api/now");
+      if (!alive.current || seq < applied.current) return;
+      applied.current = seq;
 
+      const guard = voteGuard.current;
+      if (guard && next.play?.id === guard.playId && seq <= guard.throughSeq) {
+        next = { ...next, play: { ...next.play, my_vote: guard.value } };
+      }
+
+      const prev = openPlay.current;
       if (prev && (next.play?.id !== prev.id || next.play?.vote_window_open === false)) {
         openPlay.current = null;
         if (!wasRevealed(prev.id)) {
-          markRevealed(prev.id);
-          setRevealFor(prev);
+          // When the next song is already on, the previous one ended about
+          // when it started, and its window stays open for the grace after
+          // that. Asking before then is a guaranteed 403, so wait it out;
+          // the retry above still covers a clock that disagrees.
+          const opensAt = next.play && next.play.id !== prev.id
+            ? Date.parse(next.play.started_at) + VOTE_GRACE_MS + 1_000
+            : 0;
+          const wait = Math.min(VOTE_GRACE_MS + 5_000, Math.max(0, opensAt - Date.now()));
+          requestReveal(prev, Number.isNaN(wait) ? 0 : wait);
         }
       }
       if (next.play?.vote_window_open) openPlay.current = next.play;
 
-      setNow(next);
-      setError(null);
-    } catch (e) {
-      // A dropped poll is not worth a visible error; the room's wifi is bad
-      // and the next tick will very likely succeed.
-      if (e instanceof ApiError && e.status !== 401) setError(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      // Not on the first load: the h1 already says it, and a cold open
+      // should not talk over the page being read.
+      const id = next.play?.id ?? null;
+      if (lastPlayId.current !== undefined && id && id !== lastPlayId.current && next.play) {
+        setAnnounce(`Now playing ${next.play.title} by ${next.play.artist ?? "an unknown artist"}`);
+      }
+      lastPlayId.current = id;
 
-  /* Poll. Stops when the tab is backgrounded and when nothing is playing —
-     both required by spec 8, and between them they are the difference between
-     a few thousand requests a day and blowing the free tier before lunch. */
+      nowRef.current = next;
+      setNow(next);
+      setFailures(0);
+      setError(null);
+      setVoteFailed(false);
+    } catch (e) {
+      // A 401 is App's to handle: it returns to Join. Anything else is a
+      // dropped poll, counted so a run of them can say "Reconnecting".
+      if (!alive.current || (e instanceof ApiError && e.status === 401)) return;
+      setFailures((f) => f + 1);
+    }
+  }, [requestReveal]);
+
+  /* Poll. Stops when the tab is backgrounded and backs off when there is
+     nothing to vote on — both required by spec 8, and between them they are
+     the difference between a few thousand requests a day and blowing the free
+     tier before lunch. The next tick is chained off the settled request, never
+     scheduled alongside it, so a slow network cannot stack polls up. */
   useEffect(() => {
     let timer: number | undefined;
+    let inFlight = false;
+    let stopped = false;
 
-    const tick = () => {
-      if (document.hidden) return;
-      void load();
-      timer = window.setTimeout(tick, POLL_MS);
-    };
-
-    const onVisible = () => {
+    const tick = async () => {
       window.clearTimeout(timer);
-      if (!document.hidden) tick();
+      if (stopped || inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        await load();
+      } finally {
+        inFlight = false;
+        if (!stopped && !document.hidden) {
+          timer = window.setTimeout(tick, pollDelay(nowRef.current));
+        }
+      }
     };
 
-    tick();
+    // Back in the foreground: poll at once rather than waiting out a timer
+    // that may have been 60s long.
+    const onVisible = () => {
+      if (document.hidden) window.clearTimeout(timer);
+      else void tick();
+    };
+
+    void tick();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      stopped = true;
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -105,32 +272,87 @@ export function NowPlaying({ teamName }: { teamName: string }) {
       .catch(() => setMyDj(null));
   }, [iAmDj]);
 
-  const vote = async (value: 1 | -1) => {
-    if (!play) return;
-    const previous = play.my_vote;
-    // Optimistic: the control fills before the network confirms (spec 9.1).
-    setNow((s) => (s?.play ? { ...s, play: { ...s.play, my_vote: value } } : s));
-    try {
-      await post("/api/votes", { play_id: play.id, value });
-    } catch (e) {
-      setNow((s) => (s?.play ? { ...s, play: { ...s.play, my_vote: previous } } : s));
-      if (e instanceof ApiError && e.status === 409) {
-        // The window shut between the render and the tap. Show the locked
-        // state rather than an error — it is not the user's mistake.
-        setNow((s) => (s?.play ? { ...s, play: { ...s.play, vote_window_open: false } } : s));
-      } else if (e instanceof ApiError) {
-        setError(e.message);
+  const setMyVote = (playId: string, value: 1 | -1 | null) =>
+    setNow((s) => (s?.play?.id === playId ? { ...s, play: { ...s.play, my_vote: value } } : s));
+
+  /**
+   * Sends votes one at a time. Taps while one is in flight replace whatever is
+   * queued, so a nervous double-switch sends only the final choice - and the
+   * server never sees two POSTs racing each other to be the last word.
+   */
+  const flushVotes = async () => {
+    voting.current = true;
+    while (queuedVote.current) {
+      const { playId, value } = queuedVote.current;
+      queuedVote.current = null;
+      try {
+        await post("/api/votes", { play_id: playId, value });
+        revertTo.current = value;
+        // A tap that went back to this same choice while it was in flight
+        // has nothing left to say.
+        const q = queuedVote.current as { playId: string; value: 1 | -1 } | null;
+        if (q && q.playId === playId && q.value === value) queuedVote.current = null;
+        if (!queuedVote.current && alive.current) {
+          voteGuard.current = { playId, value, throughSeq: issued.current };
+          setAnnounce(`Vote counted: ${value === 1 ? "Fire" : "Nah"}`);
+          setVoteFailed(false);
+          setError(null);
+        }
+      } catch (e) {
+        if (queuedVote.current || !alive.current) continue; // a newer tap supersedes this one
+        voteGuard.current = null;
+        setMyVote(playId, revertTo.current);
+        if (e instanceof ApiError && e.status === 409) {
+          // The window shut between the render and the tap. Show the locked
+          // state rather than an error — it is not the user's mistake.
+          setNow((s) =>
+            s?.play?.id === playId ? { ...s, play: { ...s.play, vote_window_open: false } } : s,
+          );
+        } else if (e instanceof ApiError && e.status === 401) {
+          // App is already on its way back to Join.
+        } else if (isNetworkError(e) || (e instanceof ApiError && e.status >= 500)) {
+          setVoteFailed(true);
+        } else {
+          setError(errorMessage(e, VOTE_FAILED));
+        }
       }
     }
+    voting.current = false;
   };
 
-  if (loading) return <Spinner />;
+  const vote = (value: 1 | -1) => {
+    if (!play) return;
+    if (!voting.current) revertTo.current = play.my_vote;
+    // Optimistic: the control fills before the network confirms (spec 9.1).
+    setMyVote(play.id, value);
+    setVoteFailed(false);
+    voteGuard.current = { playId: play.id, value, throughSeq: Infinity };
+    queuedVote.current = { playId: play.id, value };
+    if (!voting.current) void flushVotes();
+  };
+
+  if (!now) {
+    return failures >= RECONNECT_AFTER ? (
+      <main className="screen np">
+        <Empty title={"Reconnecting\u2026"} heading>
+          Lost the connection to AuxGoat. This screen picks up again on its own.
+        </Empty>
+      </main>
+    ) : (
+      <Spinner />
+    );
+  }
 
   return (
     <>
-      {revealFor && <Reveal play={revealFor} onClose={() => setRevealFor(null)} />}
+      {reveal && (
+        <Reveal play={reveal.play} results={reveal.results} onClose={() => setReveal(null)} />
+      )}
 
       <main className="screen np">
+        <p className="sr-only" aria-live="polite">
+          {announce}
+        </p>
         <header className="np-head">
           {/* "Live" used to sit here as a word, and it was read as "music is
               playing". It never meant that: speaker_online is only whether the
@@ -145,6 +367,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               and what a long-press shows. */}
           <span className="np-speaker-wrap">
             <button
+              ref={speakerBtn}
               className={"np-speaker" + (now?.speaker_online ? " is-live" : "")}
               aria-label={`Speaker ${now?.speaker_online ? "online" : "offline"}. Details.`}
               aria-expanded={speakerOpen}
@@ -157,7 +380,10 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                 online={now?.speaker_online ?? false}
                 lastSeen={now?.speaker_last_seen ?? null}
                 aux={now?.aux ?? null}
-                onClose={() => setSpeakerOpen(false)}
+                onClose={() => {
+                  setSpeakerOpen(false);
+                  speakerBtn.current?.focus();
+                }}
               />
             )}
           </span>
@@ -167,6 +393,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               "settings". Identity moved into the Profile screen. */}
           <span className="np-gear-wrap">
             <button
+              ref={gearBtn}
               className="np-gear"
               aria-label={`Settings. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
               aria-expanded={menuOpen}
@@ -174,17 +401,34 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             >
               <IconSettings />
             </button>
-            {menuOpen && <SettingsMenu onClose={() => setMenuOpen(false)} />}
+            {menuOpen && (
+              <SettingsMenu
+                onClose={() => {
+                  setMenuOpen(false);
+                  gearBtn.current?.focus();
+                }}
+              />
+            )}
           </span>
         </header>
 
-        {error && <div className="banner is-bad">{error}</div>}
+        {failures >= RECONNECT_AFTER && (
+          <p className="t-label np-reconnecting" role="status">
+            Reconnecting&hellip;
+          </p>
+        )}
+        {flash && <Banner kind="ok">{flash}</Banner>}
+        {error && <Banner kind="bad">{error}</Banner>}
+        {voteFailed && <Banner kind="bad">{VOTE_FAILED}</Banner>}
         <WaitingBanner aux={now?.aux ?? null} />
 
         {!play ? (
           <NothingPlaying online={now?.speaker_online ?? false} aux={now?.aux ?? null} />
         ) : (
-          <>
+          /* .np-stage and .np-side are layout-transparent on a phone
+             (display: contents) and become the two columns on a wide,
+             tall screen. */
+          <div className="np-stage">
             {/* The artwork is the ONLY thing on this screen that gives. See
                 .np-artwrap — everything else has a job that does not
                 compress, so the art takes what is left and no more. */}
@@ -193,10 +437,11 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                 className="np-art"
                 src={play.artwork_url}
                 fallback={play.artwork_fallback}
-                alt={`Artwork for ${play.title}`}
+                alt=""
               />
             </div>
 
+            <div className="np-side">
             <div className="np-meta">
               <span className="np-eyebrow">
                 <span className="t-chrome np-eyebrow-label">Now playing</span>
@@ -271,9 +516,13 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                     {play.my_vote === 1 ? "Your vote" : "Fire"}
                   </span>
                 </span>
+                {play.my_vote == null && (
+                  <p className="vote-hint">Votes stay secret until the song ends</p>
+                )}
               </div>
             )}
-          </>
+            </div>
+          </div>
         )}
       </main>
     </>
@@ -290,7 +539,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
  */
 function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null }) {
   if (!online) {
-    return <Empty title="Speaker offline">Songs and votes resume when it reconnects.</Empty>;
+    return <Empty title="Speaker offline" heading>Songs and votes resume when it reconnects.</Empty>;
   }
 
   const holder = aux?.holder;
@@ -300,13 +549,13 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
     // two different sentences about one fact on the same screen — and the
     // "you can connect too" half is actively wrong for someone who already is.
     if (aux?.you_are_waiting) {
-      return <Empty title="Nothing playing">Nobody has pressed play yet.</Empty>;
+      return <Empty title="Nothing playing" heading>Nobody has pressed play yet.</Empty>;
     }
     // Roster name when the phone is claimed, Bluetooth name when it is not —
     // an unclaimed phone has nothing else, and naming it still beats silence.
     const who = holder.name ?? holder.alias ?? "Someone else";
     return (
-      <Empty title="Someone else has the aux">
+      <Empty title="Someone else has the aux" heading>
         {who} is connected. You can connect too — you&rsquo;ll be able to play once
         they&rsquo;re done.
       </Empty>
@@ -314,12 +563,15 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
   }
 
   if (holder?.is_you) {
-    return <Empty title="You have the aux">Press play on your phone.</Empty>;
+    return <Empty title="You have the aux" heading>Press play on your phone.</Empty>;
   }
 
   return (
-    <Empty title="Nothing playing">
-      Connect to <strong>AuxGoat</strong> over Bluetooth to DJ.
+    /* /api/now does not report the speaker's Bluetooth name, so this names
+       the one the box is set up with. */
+    <Empty title="Nothing playing" heading>
+      Want to DJ? Open Bluetooth on your phone, connect to the speaker called{" "}
+      <strong>AuxGoat</strong>, then press play. Everyone here votes on each song.
     </Empty>
   );
 }
@@ -382,27 +634,27 @@ function WaitingBanner({ aux }: { aux: AuxState | null }) {
   // did for the whole length of the grace before free_in_ms existed.
   if (left === 0) {
     return (
-      <div className="banner is-info">
+      <Banner kind="info">
         The aux is free — press play and it&rsquo;s yours.
-      </div>
+      </Banner>
     );
   }
 
   // Their song is over and the clock is running.
   if (left != null) {
     return (
-      <div className="banner is-info">
+      <Banner kind="info">
         {who} has the aux — yours in {Math.ceil(left / 1000)}s.
-      </div>
+      </Banner>
     );
   }
 
   // A song is open. No deadline exists, so promise nothing but the rule.
   return (
-    <div className="banner is-info">
+    <Banner kind="info">
       You&rsquo;re connected, but {who} has the aux. Press play once
       they&rsquo;re done and it&rsquo;s yours.
-    </div>
+    </Banner>
   );
 }
 
@@ -420,6 +672,7 @@ function SettingsMenu({ onClose }: { onClose: () => void }) {
     onClose();
     navigate(to);
   };
+  useEscape(onClose);
   const items: [string, string, string][] = [
     ["/settings/profile", "Profile", "Your name and number"],
     ["/settings/speaker", "Speaker & connection", "What the box plays through"],
@@ -428,9 +681,11 @@ function SettingsMenu({ onClose }: { onClose: () => void }) {
   return (
     <>
       <button className="pop-scrim" aria-label="Close" onClick={onClose} />
-      <div className="pop is-right" role="menu" aria-label="Settings">
+      {/* A labelled group of buttons, not role="menu": a menu promises
+          arrow-key navigation, and this has none. */}
+      <div className="pop is-right" role="group" aria-label="Settings">
         {items.map(([to, label, sub]) => (
-          <button key={to} className="pop-item" role="menuitem" onClick={() => go(to)}>
+          <button key={to} className="pop-item" onClick={() => go(to)}>
             <span>
               {label}
               <span className="pop-item-sub">{sub}</span>
@@ -470,6 +725,7 @@ function SpeakerPopover({
   onClose: () => void;
 }) {
   const holder = aux?.holder ?? null;
+  useEscape(onClose);
   return (
     <>
       {/* Catches the next tap anywhere. A popover you cannot dismiss by
@@ -514,7 +770,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
   if (play.dj) {
     return (
       <span className="dj-chip">
-        <span className="jersey is-sm">{play.dj.jersey_number || play.dj.name[0]}</span>
+        <span className="jersey is-sm" aria-hidden="true">{play.dj.jersey_number || play.dj.name[0]}</span>
         <span className="stack">
           {/* Leads rather than trails. A bare "DJ" under a name read as a job
               title — it never said what the chip is actually telling you,
@@ -532,19 +788,20 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
   }
 
   if (play.device_unclaimed && play.device) {
+    // The same full-width, left-aligned row as a claimed DJ, with the claim
+    // action at its end rather than a centred stub and a button underneath -
+    // which also hands the artwork back a whole row.
     return (
-      <span className="stack" style={{ alignItems: "center", gap: 6 }}>
-        <span className="dj-chip is-unclaimed">
-          <span className="jersey is-sm">?</span>
-          <span className="stack">
-            <span className="t-chrome dj-chip-label">Now on aux</span>
-            <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
-            {/* The hint is what lets someone recognise their own phone in a
-                room where four are connected. Worth the third line here. */}
-            <span className="dj-chip-sub">Unclaimed · {play.device.mac_hint}</span>
-          </span>
+      <span className="dj-chip is-unclaimed">
+        <span className="jersey is-sm" aria-hidden="true">?</span>
+        <span className="stack dj-chip-who">
+          <span className="t-chrome dj-chip-label">Now on aux</span>
+          <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
+          {/* The hint is what lets someone recognise their own phone in a
+              room where four are connected. Worth the third line here. */}
+          <span className="dj-chip-sub">Unclaimed · {play.device.mac_hint}</span>
         </span>
-        <button className="btn-quiet" onClick={onClaim}>
+        <button className="btn-quiet dj-chip-action" onClick={onClaim}>
           Whose phone is this?
         </button>
       </span>
@@ -553,7 +810,7 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
 
   return (
     <span className="dj-chip is-unclaimed">
-      <span className="jersey is-sm">?</span>
+      <span className="jersey is-sm" aria-hidden="true">?</span>
       <span className="stack">
         <span className="t-chrome dj-chip-label">Now on aux</span>
         <span className="dj-chip-name">Unknown phone</span>
@@ -646,7 +903,6 @@ function useElapsed(play: NowPlay): number {
       1000,
     );
     return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // played_ms_age_ms is included deliberately: it changes on every poll, so
     // the bar re-anchors to the Pi's reading each time instead of drifting on
     // the client's own clock for the life of the song.
@@ -736,6 +992,8 @@ function Progress({ play }: { play: NowPlay }) {
       <span
         className="np-bar"
         role="progressbar"
+        aria-label="Song progress"
+        aria-valuetext={`${formatClock(shown)} of ${formatClock(duration)}`}
         aria-valuemin={0}
         aria-valuemax={Math.round(duration / 1000)}
         aria-valuenow={Math.round(shown / 1000)}

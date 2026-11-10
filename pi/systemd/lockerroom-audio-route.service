@@ -13,7 +13,7 @@
 # The script is idempotent and exits without touching anything when the
 # selection has not changed, so running it twice costs nothing.
 [Unit]
-Description=Route lockerroom audio to USB if present, else the analog jack
+Description=Route AuxGoat audio to USB if present, else the analog jack
 # The analog card must exist before there is anything to choose between.
 After=sound.target
 Wants=sound.target

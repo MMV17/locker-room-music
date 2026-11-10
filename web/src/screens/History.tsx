@@ -1,13 +1,13 @@
-import { useEffect, useState } from "react";
-import { get } from "./../api";
 import type { HistoryEntry } from "./../api";
 import {
   Artwork,
   Empty,
+  LoadError,
   Spinner,
   formatScore,
   formatWhen,
   scoreClass,
+  useLoad,
 } from "./../components";
 
 /**
@@ -15,13 +15,8 @@ import {
  * is still open, so nothing here can leak a live tally.
  */
 export function History() {
-  const [plays, setPlays] = useState<HistoryEntry[] | null>(null);
-
-  useEffect(() => {
-    get<{ plays: HistoryEntry[] }>("/api/history")
-      .then((r) => setPlays(r.plays))
-      .catch(() => setPlays([]));
-  }, []);
+  const { data, error, retry } = useLoad<{ plays: HistoryEntry[] }>("/api/history");
+  const plays = data?.plays ?? null;
 
   return (
     <main className="screen">
@@ -29,7 +24,9 @@ export function History() {
         <h1 className="t-display">History</h1>
       </header>
 
-      {!plays ? (
+      {error ? (
+        <LoadError message={error} onRetry={retry} />
+      ) : !plays ? (
         <Spinner />
       ) : plays.length === 0 ? (
         <Empty title="Nothing played yet">

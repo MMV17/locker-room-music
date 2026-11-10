@@ -10,7 +10,10 @@
 # listener is the control channel and replacing it can lock everyone out of the
 # box mid-repair. run-repair.sh snapshots that directory before this runs and
 # restores it afterwards if it changed, so an accident here is caught — but do
-# not lean on that. Listener code changes go over serial or the cable.
+# not lean on that. Listener code changes go through auxgoat-update, which this
+# script may INSTALL and ASK, and which does the work itself, later, in its own
+# unit, with a trial and an automatic way back. See the two "software update"
+# blocks below.
 #
 # KEEP IT IDEMPOTENT. Nobody watches this run. Pressing it twice must be safe,
 # and every step should be a no-op on a healthy box.
@@ -33,14 +36,83 @@ set -uo pipefail   # not -e: fix what can be fixed and report the rest.
 # for, arriving by a different road - not replacing the listener, but
 # restarting it out from under itself. Restarting bluetooth is handled
 # separately and deliberately at the bottom of this script.
-UNITS="bt-agent keep-discoverable lockerroom-btwatch \
-lockerroom-netwatch lockerroom-audio-route bluealsa bluealsa-aplay"
+UNITS="bt-agent keep-discoverable lockerroom-audio-route bluealsa bluealsa-aplay"
+
+# The two watchdogs are ENABLED every time but only started when they are not
+# already running. Restarting a healthy watchdog throws away what it has
+# counted - netwatch's run of failed probes, btwatch's recovery backoff - so a
+# repair pressed during an outage used to reset the very ladders that were
+# about to act on it.
+WATCHDOGS="lockerroom-btwatch lockerroom-netwatch"
+
+# Over-the-air listener updates, triggered from THIS script.
+#
+#   off        never
+#   bootstrap  only while the box is on code installed by cable, i.e. while its
+#              listener has no "update software" command of its own yet. This
+#              is how the updater reaches a box for the very first time: the
+#              OLD run-repair.sh, already installed, runs this file.
+#   always     every repair also asks for an update. The rescue path, for a
+#              listener whose own update command is broken - flip it in a
+#              commit, press "run repair", flip it back.
+OTA_VIA_REPAIR="bootstrap"
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+BIN_DIR="${AUXGOAT_BIN_DIR:-/usr/local/bin}"
+UNIT_DIR="${AUXGOAT_UNIT_DIR:-/etc/systemd/system}"
+UPDATER="$BIN_DIR/auxgoat-update"
 
 # lockerroom-listener is NOT in that list either, for the direct version of the
 # same reason. `restart-listener` is its own allowlisted command for when that
 # is genuinely what you want.
 
 echo "repair: $(date -Is 2>/dev/null)"
+echo
+
+# ---------------------------------------------------------------------------
+# Software update, part 1 of 2: make sure the updater itself is installed.
+#
+# NOTHING HERE TOUCHES THE LISTENER PACKAGE, and that is what lets it run
+# under the run-repair.sh that is already on the box - its integrity guard
+# sees the package unchanged and passes. Three files go OUTSIDE the package:
+# the updater and its two units. Installing them changes nothing about what is
+# running; it only makes an update possible.
+#
+# Written by rename, never in place (a script being rewritten while it runs is
+# read half old and half new), and only when the bytes differ, so pressing
+# repair twice is a no-op.
+# ---------------------------------------------------------------------------
+echo "===== software update: installer ====="
+put() {  # put <src> <dest> <mode> -> prints "installed" only when it changed something
+  local src="$1" dest="$2" mode="$3" tmp
+  [ -f "$src" ] || { echo "  missing from the repo: $src"; return 1; }
+  cmp -s "$src" "$dest" 2>/dev/null && return 0
+  mkdir -p "$(dirname "$dest")" 2>/dev/null
+  tmp="$(mktemp "$dest.tmp.XXXXXX" 2>/dev/null)" || { echo "  cannot write $dest"; return 1; }
+  if cp "$src" "$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$dest"; then
+    echo "  installed $dest"
+  else
+    rm -f "$tmp"; echo "  FAILED to install $dest"; return 1
+  fi
+}
+UPDATER_OK=0
+if [ -n "$REPO_DIR" ] && command -v python3 >/dev/null 2>&1 \
+   && timeout 20 python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' \
+        "$REPO_DIR/pi/scripts/auxgoat-update" 2>/dev/null; then
+  put "$REPO_DIR/pi/scripts/auxgoat-update" "$UPDATER" 755 && UPDATER_OK=1
+  # The recovery unit must exist BEFORE the first update ever switches code:
+  # it is what finishes or reverts an update that a power cut interrupted.
+  put "$REPO_DIR/pi/systemd/auxgoat-update-recover.service" "$UNIT_DIR/auxgoat-update-recover.service" 644 || UPDATER_OK=0
+  put "$REPO_DIR/pi/systemd/auxgoat-update-verify.service" "$UNIT_DIR/auxgoat-update-verify.service" 644 || UPDATER_OK=0
+  timeout 30 systemctl daemon-reload 2>&1 | sed 's/^/  /'
+  timeout 20 systemctl enable auxgoat-update-recover.service auxgoat-update-verify.service >/dev/null 2>&1 \
+    || { echo "  could not enable the update units"; UPDATER_OK=0; }
+else
+  echo "  the updater in this repo does not compile, or python3 is missing - not installing it"
+fi
+if [ -x "$UPDATER" ]; then
+  timeout 20 "$UPDATER" status 2>&1 | sed 's/^/  /'
+fi
 echo
 
 # ---------------------------------------------------------------------------
@@ -88,6 +160,54 @@ for u in $UNITS; do
     "$(systemctl is-active "$u" 2>/dev/null || echo unknown)" \
     "$(systemctl is-enabled "$u" 2>/dev/null || echo unknown)"
 done
+for u in $WATCHDOGS; do
+  state="$(systemctl is-active "$u" 2>/dev/null || echo unknown)"
+  printf '%-26s was %-10s %s\n' "$u" "$state" "$(systemctl is-enabled "$u" 2>/dev/null || echo unknown)"
+  if ! systemctl cat "$u" >/dev/null 2>&1; then
+    echo "    (no such unit on this box — skipped)"
+    continue
+  fi
+  timeout 20 systemctl enable "$u" >/dev/null 2>&1 || echo "    enable failed"
+  if [ "$state" = "active" ]; then
+    echo "    already running - left alone, so it keeps what it has counted"
+  else
+    timeout 30 systemctl restart "$u" >/dev/null 2>&1 || echo "    start failed"
+    printf '    now %s\n' "$(systemctl is-active "$u" 2>/dev/null || echo unknown)"
+  fi
+done
+echo
+
+# ---------------------------------------------------------------------------
+# 1b. The wired profile must never take DNS or the default route.
+#
+# On 2026-08-31 a plugged-in ethernet cable put a dead resolver FIRST in
+# /etc/resolv.conf. Every lookup failed in 7ms, every probe read as dead wifi,
+# and the watchdog counted toward a reboot for a fault the cable caused. It was
+# fixed that night by hand, on that card only. This asserts the same three
+# settings on every wired profile, every time, so a rebuilt box has them too.
+#
+# `modify` only - never `up`. Bouncing the wired link would cut off whoever is
+# plugged into it, and the settings apply the next time the cable goes in.
+# ---------------------------------------------------------------------------
+echo "===== wired network profile ====="
+if command -v nmcli >/dev/null 2>&1; then
+  timeout 15 nmcli -t -f NAME,TYPE connection show 2>/dev/null | while IFS= read -r line; do
+    [ "${line##*:}" = "802-3-ethernet" ] || continue
+    name="${line%:*}"
+    name="${name//\\:/:}"   # nmcli -t escapes a colon inside a field
+    cur="$(timeout 10 nmcli -g ipv4.ignore-auto-dns,ipv6.ignore-auto-dns,ipv4.never-default \
+             connection show "$name" 2>/dev/null | tr '\n' ' ')"
+    if [ "$cur" = "yes yes yes " ]; then
+      echo "  $name: already cannot take DNS or the default route"
+    else
+      timeout 15 nmcli connection modify "$name" ipv4.ignore-auto-dns yes \
+        ipv6.ignore-auto-dns yes ipv4.never-default yes 2>&1 | sed 's/^/    /'
+      echo "  $name: set (was: ${cur:-unreadable}) - applies when the cable is next plugged in"
+    fi
+  done
+else
+  echo "  nmcli is not installed"
+fi
 echo
 
 # ---------------------------------------------------------------------------
@@ -142,7 +262,7 @@ echo
 echo "===== bluetooth service (last resort) ====="
 STILL_DOWN=0
 if command -v hciconfig >/dev/null 2>&1; then
-  hciconfig hci0 2>/dev/null | grep -q "UP RUNNING" || STILL_DOWN=1
+  timeout 10 hciconfig hci0 2>/dev/null | grep -q "UP RUNNING" || STILL_DOWN=1
 else
   timeout 10 bluetoothctl show 2>/dev/null | grep -q "Powered: yes" || STILL_DOWN=1
 fi
@@ -161,6 +281,37 @@ if [ "$STILL_DOWN" = "1" ]; then
 else
   echo "  adapter is up - leaving bluetooth.service alone."
   echo "  (restarting it would restart the listener too, via Requires=)"
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# Software update, part 2 of 2: ask for one. LAST, so a slow fetch can never
+# eat the time the repairs above needed.
+#
+# This only ASKS. `request` checks that the commit is newer than what is
+# installed, on the branch this clone tracks, and (when the box has an
+# allowed_signers file) signed - then schedules the work in a separate systemd
+# unit that starts after this repair has finished and reported. Nothing about
+# the running listener changes while this script is alive.
+# ---------------------------------------------------------------------------
+echo "===== software update: request ====="
+WANT=0
+case "$OTA_VIA_REPAIR" in
+  always) WANT=1 ;;
+  bootstrap)
+    if [ "$UPDATER_OK" = "1" ] && [ "$(timeout 15 "$UPDATER" status --field commit 2>/dev/null)" = "unknown" ]; then
+      WANT=1
+    else
+      echo "  not requested here: this box updates from the Admin screen (update software)"
+    fi ;;
+  *) echo "  not requested here (OTA_VIA_REPAIR=$OTA_VIA_REPAIR)" ;;
+esac
+if [ "$WANT" = "1" ] && [ "$UPDATER_OK" = "1" ]; then
+  timeout 75 "$UPDATER" request --via-repair 2>&1 | sed 's/^/  /'
+  echo "  If that says 'scheduled': the speaker restarts its software in about a"
+  echo "  minute. Press 'run repair' again afterwards to read the outcome here."
+elif [ "$WANT" = "1" ]; then
+  echo "  the updater could not be installed (see the top of this report)"
 fi
 echo
 

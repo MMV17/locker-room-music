@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------ *
- * Locker Room — design tokens
+ * AuxGoat — design tokens
  *
  * Light, airy, one accent. The accent is the team colour and it appears in
  * very few places: the active tab underline, the jersey badge, a selected
@@ -88,6 +88,10 @@
   --shadow-lift: inset 0 1px 0 rgba(248, 242, 233, 0.09), 0 16px 40px rgba(0, 0, 0, 0.7);
 
   --safe-b: env(safe-area-inset-bottom, 0px);
+
+  /* One dark theme. Tells the browser too, so its own scrollbars, form
+     controls and autofill are dark rather than white boxes on black. */
+  color-scheme: dark;
 }
 
 
@@ -109,10 +113,40 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
-  /* The vote controls are the only interactive target that matters; nothing
-     here should be selectable-draggable under a wet thumb. */
+}
+
+/* The controls a wet thumb hammers must not start a text selection. Scoped to
+   them: on the whole body it also stopped anyone copying a song title or an
+   admin diagnostic. */
+.vote,
+.nav,
+.btn {
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* ------------------------------------------------------------------ *
+ * Focus. One visible ring for every control, in the accent (6.59:1 on
+ * --page, so it clears the 3:1 non-text minimum). :focus-visible keeps it
+ * off taps and on keyboard and switch access, where it is the only cue.
+ * :where() keeps the specificity at zero so a component can adjust it.
+ * ------------------------------------------------------------------ */
+:where(button, a, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+
+/* Hidden from the eye, read by a screen reader. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 button {
@@ -206,7 +240,8 @@ input {
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: none;
-  opacity: 0.75;
+  /* A colour, not an opacity: opacity on --muted text dropped it below 4.5:1. */
+  color: var(--muted);
 }
 
 .num {
@@ -449,12 +484,14 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
+/* The -ink tokens: --up/--down are FILLS, and as text on black they measured
+   4.11:1 and ~4.2:1. */
 .row-score.is-pos {
-  color: var(--up);
+  color: var(--up-ink);
 }
 
 .row-score.is-neg {
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .row-score.is-flat {
@@ -585,6 +622,13 @@ input {
   color: var(--up);
 }
 
+/* Quiet on purpose: two dropped polls on locker-room wifi is ordinary, and the
+   last good reading stays on screen underneath it. */
+.np-reconnecting {
+  margin: 0;
+  color: var(--muted);
+}
+
 /* THE ARTWORK IS THE ONLY THING THAT GIVES, and it is sized by the space left
    over rather than by a guess at the viewport.
 
@@ -640,7 +684,7 @@ input {
 
 .np-eyebrow-label {
   flex: none;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.2em;
   color: var(--gold);
 }
@@ -701,6 +745,20 @@ input {
   font-size: 12px;
   color: var(--muted);
   font-weight: 400;
+}
+
+/* Takes the row's spare width so a long phone name ellipsises before the
+   claim button is squeezed. */
+.dj-chip-who {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.dj-chip-action {
+  flex: none;
+  max-width: 40%;
+  text-align: right;
 }
 
 .dj-chip.is-unclaimed .jersey {
@@ -765,7 +823,9 @@ input {
 
 .votes {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
+  row-gap: 8px;
   justify-content: center;
   /* Breathing room above the thumbs, on purpose. They are the only controls
      on the screen and everything above them is information — the gap is what
@@ -798,6 +858,11 @@ input {
 
 .vote:active {
   transform: scale(0.94);
+}
+
+/* Clear of the selected state's 5px ring, so focus never reads as a vote. */
+.vote:focus-visible {
+  outline-offset: 6px;
 }
 
 .vote svg {
@@ -854,12 +919,22 @@ input {
 /* The caption under each thumb — the third signal, and the only one that
    says in words which way you voted. */
 .vote-cap {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 
 .vote-cap.is-mine {
   color: var(--ink);
+}
+
+/* Spans the whole .votes row under the two thumbs (it wraps onto its own
+   line). Only while you have not voted: after that, "Your vote" says it. */
+.vote-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .vote-pick {
@@ -962,16 +1037,12 @@ input {
    like the down vote — this is a deadline, not a brand moment. */
 .vote-window .vw-time.is-soon .vw-clock,
 .vote-window .vw-time.is-soon .t-label {
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .vote-window.is-paused .vw-icon {
   border-left-color: var(--ink-2);
   border-right-color: var(--ink-2);
-}
-
-.vote-window.is-shut {
-  opacity: 0.75;
 }
 
 .vote-locked {
@@ -1134,7 +1205,7 @@ input {
 }
 
 .btn.is-danger {
-  color: var(--down);
+  color: var(--down-ink);
 }
 
 .btn.is-block {
@@ -1148,6 +1219,8 @@ input {
 .btn:disabled {
   background: var(--hairline);
   color: var(--muted);
+  /* .btn.is-primary's gold edge would otherwise survive on an inert button. */
+  border-color: var(--hairline);
   box-shadow: none;
   cursor: not-allowed;
 }
@@ -1158,14 +1231,30 @@ input {
   color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
-  padding: 8px;
+  /* 44px is the minimum touch target; these measured 36px on Admin, where
+     several of them delete things. */
+  min-height: 44px;
+  padding: 8px 12px;
 }
 
 /* Void and Delete. The admin rows already asked for this class; without the
    rule they rendered in the same grey as Restore, so the destructive action
    and the harmless one looked identical right up until the confirm. */
 .btn-quiet.is-danger {
-  color: var(--down);
+  color: var(--down-ink);
+}
+
+/* A row's buttons, kept together. The 8px keeps a destructive button from
+   sitting flush against its harmless neighbour (Deactivate | Delete). */
+.row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* A deactivated player, a voided play: present but out of play. */
+.row-title.is-inactive {
+  color: var(--muted);
 }
 
 /* Same reasoning as .btn:disabled — a destructive control that is inert must
@@ -1198,6 +1287,11 @@ input {
 
 .input:focus {
   border-color: var(--gold);
+}
+
+/* The border change alone is a 1px shift; keyboard focus gets a halo too. */
+.input:focus-visible {
+  box-shadow: 0 0 0 3px var(--gold-soft);
 }
 
 .input.is-code {
@@ -1318,7 +1412,7 @@ input {
   /* Enough to sit the card forward without hiding which screen you are on —
      the dialog names a player or a count, and the list behind it is the
      context for that. */
-  background: rgba(20, 23, 28, 0.45);
+  background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(2px);
 }
 
@@ -1398,17 +1492,6 @@ input {
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
-}
-
-/* The header strip above a dump: what it is, when it was collected, and
-   whether the command that produced it succeeded. */
-.dump-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 16px;
 }
 
 .dump-when {
@@ -1597,7 +1680,7 @@ input {
 }
 
 .pop-state {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--ink);
 }
 
@@ -1672,7 +1755,7 @@ input {
 }
 
 .prof-sub {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--gold);
 }
 
@@ -1757,6 +1840,98 @@ input {
 }
 
 /* ------------------------------------------------------------------ *
+ * Now Playing fits the viewport.
+ *
+ * .np-artwrap was meant to be the one row that gives, but .screen.np had no
+ * bounded height, so it never had anything to give up: the thumbs were laid
+ * out behind the fixed nav (thumb bottom 645px vs nav top 587px at 375x667).
+ * Bounding the screen to the viewport hands the art exactly what is left.
+ * Below 560px of height it scrolls instead - see the short-screen block.
+ * ------------------------------------------------------------------ */
+@media (min-height: 560px) {
+  .screen.np {
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .np-artwrap {
+    flex: 1 1 0;
+  }
+
+  .np-art {
+    width: auto;
+    height: 100%;
+    max-width: min(84vw, 326px);
+    max-height: min(84vw, 326px);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Desktop and tablet.
+ *
+ * Below 900px nothing here applies and the phone layout is untouched. Above
+ * it, the lists get a wider column and a little more air, and Now Playing -
+ * when there is also the height for it - puts the artwork beside the song
+ * instead of shrinking it to fit a phone column stretched across a monitor.
+ * ------------------------------------------------------------------ */
+
+/* Layout-transparent by default: their children are laid out by .np as if
+   the wrappers were not there, which is what keeps the phone pixel-identical. */
+.np-stage,
+.np-side {
+  display: contents;
+}
+
+@media (min-width: 900px) {
+  .screen {
+    max-width: 720px;
+  }
+
+  .screen.np {
+    max-width: 480px;
+  }
+
+  .row {
+    padding: 16px 20px;
+  }
+}
+
+@media (min-width: 900px) and (min-height: 700px) {
+  .screen.np {
+    max-width: 960px;
+  }
+
+  /* The flexible row of the column becomes a row of two columns. */
+  .np-stage {
+    display: flex;
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    gap: 48px;
+    align-items: center;
+  }
+
+  .np-stage > .np-artwrap {
+    flex: 1 1 0;
+    height: 100%;
+  }
+
+  .np-stage .np-art {
+    max-width: min(100%, 440px);
+    max-height: min(100%, 440px);
+  }
+
+  .np-side {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Short-screen overrides.
  *
  * THESE MUST STAY LAST. They were written at the top of the file, above
@@ -1794,7 +1969,8 @@ input {
      this is a ceiling for a small screen rather than a second guess at the
      height — which is what the old 27svh term was. */
   .np-art {
-    width: min(64vw, 240px);
+    max-width: min(64vw, 240px);
+    max-height: min(64vw, 240px);
   }
 
   .t-title {

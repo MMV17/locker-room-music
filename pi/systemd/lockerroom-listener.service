@@ -1,5 +1,5 @@
 [Unit]
-Description=Locker Room Music listener (BlueZ D-Bus -> outbox -> Worker)
+Description=AuxGoat listener (BlueZ D-Bus -> outbox -> Worker)
 After=bluetooth.service network-online.target
 Wants=network-online.target
 Requires=bluetooth.service

@@ -2,20 +2,31 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Must match PAGE_CSP in backend/src/security.ts (a test checks). The
+         Worker sends the same policy as a header, plus frame-ancestors, on
+         everything it renders; this tag covers the files the assets runtime
+         serves without invoking the Worker, `/` included. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    />
     <!-- viewport-fit=cover so the bottom nav can sit above the home indicator -->
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="theme-color" content="#000000" />
+    <!-- Home-screen identity, cut from docs/AUXGOAT logo.png (the goat on its
+         black field; the wordmark is unreadable at icon sizes). -->
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180.png" sizes="180x180" />
+    <link rel="manifest" href="/site.webmanifest" />
     <!-- No zoom-on-focus for the team code and admin fields: iOS zooms any
          input under 16px, and it does not zoom back out. -->
     <meta name="format-detection" content="telephone=no" />
-    <!-- The product's name, not the project's. "Locker Room" is what this
-         repo is called and what the speaker advertises over Bluetooth; the
-         thing a player has open in a tab is AuxGoat. Deliberately not the
-         team name — that is operator-set at runtime and this file is static,
-         and a tab reading "Crusaders" tells nobody what the site is. -->
+    <!-- The product's name. Deliberately not the team name — that is
+         operator-set at runtime and this file is static, and a tab reading
+         "Crusaders" tells nobody what the site is. -->
     <title>AuxGoat</title>
   </head>
   <body>

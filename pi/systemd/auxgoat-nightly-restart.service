@@ -1,0 +1,19 @@
+# Restart the listener once a night, when nobody is in the room.
+#
+# Installs to /etc/systemd/system/auxgoat-nightly-restart.service
+#
+# INTERIM COVER, and honest about it. Two faults in the Bluetooth watcher only
+# show after days of uptime and need hardware to fix properly: it never drops
+# the D-Bus match rule for a phone that has gone (the system bus allows a
+# connection 512), and it keeps session state for a bluetoothd that restarted
+# underneath it. A restart clears both. Until those are fixed on a bench, this
+# keeps a box that nobody visits from slowly going deaf to new phones.
+#
+# The script refuses while music is playing or an update is on trial.
+[Unit]
+Description=AuxGoat nightly listener restart (skipped while music plays or an update is on trial)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/auxgoat-nightly-restart.sh
+TimeoutStartSec=120

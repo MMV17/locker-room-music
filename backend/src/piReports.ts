@@ -12,7 +12,8 @@
 import type { Env } from "./types";
 
 /** The command names whose output is stored here. */
-export const REPORT_KINDS = ["report-full", "run-repair"] as const;
+// "update" is the log of an `update-software` run (install, trial, rollback).
+export const REPORT_KINDS = ["report-full", "run-repair", "update"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 /**
@@ -72,7 +73,11 @@ export function parseReport(raw: unknown): PiReport | null {
     kind: r.kind,
     // The Pi's clock, when it is sane. Falling back to ours is better than
     // refusing the report: a box with a bad clock is still a box worth seeing.
-    collected_at: typeof r.at === "string" && r.at !== "" ? r.at : new Date().toISOString(),
+    // An `at` that does not parse is replaced, not stored: it is sorted on.
+    collected_at:
+      typeof r.at === "string" && r.at.length <= 64 && Number.isFinite(Date.parse(r.at))
+        ? r.at
+        : new Date().toISOString(),
     body,
     // Absent means "assume it worked" only because a report that arrived at all
     // ran far enough to produce one. `false` has to be explicit.

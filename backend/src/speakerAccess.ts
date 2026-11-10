@@ -20,6 +20,23 @@
  */
 import { OFFLINE_AFTER_MS } from "./piControl";
 import type { Env } from "./types";
+import { liveOpenPlay, LIVE_PLAY_CANDIDATES } from "./voteWindow";
+import type { VoteWindowPlay } from "./voteWindow";
+
+type LivePlay = VoteWindowPlay & {
+  device_hash: string | null;
+  play_status: string | null;
+  keepalive_at: string | null;
+};
+
+/** The live open play among the newest few, or null. See liveOpenPlay. */
+export async function newestLivePlay(env: Env, now: number = Date.now()): Promise<LivePlay | null> {
+  const { results } = await env.DB.prepare(
+    `SELECT device_hash, play_status, started_at, ended_at, duration_ms, keepalive_at, voided
+       FROM plays ORDER BY started_at DESC LIMIT ${LIVE_PLAY_CANDIDATES}`,
+  ).all<LivePlay>();
+  return liveOpenPlay(results ?? [], now);
+}
 
 export type Permission = {
   allowed: boolean;
@@ -104,10 +121,10 @@ export async function mayChangeSpeaker(env: Env, userId: string): Promise<Permis
   //
   // Your OWN song is fine: if you are the one playing, the speaker is yours to
   // point wherever you like.
-  const openPlay = await env.DB.prepare(
-    `SELECT device_hash FROM plays
-      WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
-  ).first<{ device_hash: string | null }>();
+  //
+  // Only a play that is actually LIVE counts (liveOpenPlay): an orphan the Pi
+  // never closed used to lock everybody out of this control for good.
+  const openPlay = await newestLivePlay(env);
 
   if (openPlay?.device_hash) {
     const isMine = await env.DB.prepare(

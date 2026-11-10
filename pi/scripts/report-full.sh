@@ -71,6 +71,32 @@ done
 # ---------------------------------------------------------------------------
 # The adapter. This section is the reason the script exists.
 # ---------------------------------------------------------------------------
+# The over-the-air update units. Listed separately: recover is a oneshot that
+# runs at boot and then reads "inactive", verify exits as soon as there is no
+# update on trial, and the timer only fires at night - so for all three,
+# inactive is the healthy answer and ENABLED is the column that matters.
+printf '%-34s %-13s %s\n' "UPDATE UNIT (inactive is normal)" "ACTIVE" "ENABLED"
+for u in auxgoat-update-recover auxgoat-update-verify auxgoat-nightly-restart.timer; do
+  act="$(systemctl is-active "$u" 2>/dev/null)"; [ -n "$act" ] || act=unknown
+  ena="$(systemctl is-enabled "$u" 2>/dev/null)"; [ -n "$ena" ] || ena=unknown
+  printf '%-34s %-13s %s\n' "$u" "$act" "$ena"
+done
+
+section "SOFTWARE"
+# Which code is running, and what the last over-the-air update did. If the
+# last update was rolled back, the reason is here.
+if [ -x /usr/local/bin/auxgoat-update ]; then
+  run 20 /usr/local/bin/auxgoat-update status
+else
+  echo "(auxgoat-update is not installed - this box has not had its first"
+  echo " over-the-air update. Listener code on it was installed by cable.)"
+fi
+echo
+echo "--- clock (this box has no battery clock) ---"
+echo "READ THIS: 'System clock synchronized: no' with a date that is wrong means"
+echo "  NTP is not reaching the box. Far enough behind and HTTPS itself fails."
+run 10 timedatectl
+
 section "BLUETOOTH ADAPTER"
 # RFKILL FIRST, because it outranks everything below it. A soft-blocked radio
 # reports hci0 DOWN and "Powered: no" no matter how many times bluetooth,
@@ -109,6 +135,26 @@ else
 fi
 echo
 run 10 bluetoothctl show
+
+section "BLUETOOTH CONNECTIONS"
+# For "it gets spotty with more than one phone connected": how many links are
+# up, and which of them are actually carrying audio.
+if command -v hcitool >/dev/null 2>&1; then
+  run 10 hcitool con
+else
+  run 10 bluetoothctl devices Connected
+fi
+if command -v bluealsa-cli >/dev/null 2>&1; then
+  echo
+  echo "--- bluealsa PCMs (one per phone that has an audio stream open) ---"
+  run 10 bluealsa-cli list-pcms
+fi
+echo
+echo "--- who was routed to the speaker, and who streamed while waiting ---"
+echo "READ THIS: 'waiting phone XX:XX is streaming' means a phone that did NOT"
+echo "  have the aux was sending audio into the same radio as the DJ's phone."
+echo "  Lots of those lines around a spotty patch is the answer to why."
+run 10 sh -c "grep -h 'is streaming\|speaker routed to' /var/log/lockerroom/listener.log.1 /var/log/lockerroom/listener.log 2>/dev/null | tail -n 40"
 
 # ---------------------------------------------------------------------------
 # Audio. audio-check.sh already walks the whole path and is read-only.

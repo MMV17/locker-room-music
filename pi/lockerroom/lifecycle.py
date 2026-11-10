@@ -91,6 +91,8 @@ PAUSE_COOLDOWN = timedelta(seconds=10)
 # nothing needs re-pointing urgently — a phone that just connected is not
 # playing yet.
 AUX_SETTLE = timedelta(seconds=6)
+# At most one "waiting phone is streaming" log line per phone per this long.
+STREAM_NOTE_INTERVAL = timedelta(seconds=60)
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -182,6 +184,9 @@ class Session:
     # When this phone was last paused for playing without the aux. See
     # PAUSE_COOLDOWN — None means "free to pause".
     last_paused_at: datetime | None = None
+    # When this phone was last logged as streaming without the aux. See
+    # _note_waiting_stream — diagnostics only.
+    last_stream_note_at: datetime | None = None
 
 
 class NullAux:
@@ -779,7 +784,10 @@ class SessionManager:
         # A2DP transport goes idle a beat after every pause, and closing
         # here would defeat the 60s resume grace entirely.
         session = self._sessions.get(device_path)
-        if session is None or session.current_play is None:
+        if session is None:
+            return
+        self._note_waiting_stream(session, state)
+        if session.current_play is None:
             return
         play = session.current_play
 
@@ -805,6 +813,37 @@ class SessionManager:
         # between. Give AVRCP a few seconds to have its say, then decide.
         play.transport_timer = asyncio.create_task(
             self._transport_idle_watchdog(session, play, now())
+        )
+
+    def _note_waiting_stream(self, session: Session, state: str) -> None:
+        """Log when a phone that is NOT on the aux is streaming anyway.
+
+        DIAGNOSTICS ONLY - this changes no behaviour. The open question behind
+        "Bluetooth gets spotty with more than one phone connected" is whether
+        waiting phones keep sending A2DP into the one radio the DJ's stream
+        arrives on. Not routing a phone is not the same as it not
+        transmitting, and until now nothing recorded which was happening.
+        `report full` greps for this line, so the answer can be read from the
+        Admin screen during a real session instead of guessed at.
+
+        Rate-limited per phone, so a phone fighting the pause does not write a
+        line every time it resumes.
+        """
+        if state not in ("active", "pending"):
+            return
+        moment = now()
+        holder = self._holder(moment)
+        if holder is None or holder is session:
+            return
+        if (
+            session.last_stream_note_at is not None
+            and moment - session.last_stream_note_at < STREAM_NOTE_INTERVAL
+        ):
+            return
+        session.last_stream_note_at = moment
+        log.info(
+            "waiting phone %s is streaming (transport %s) while %s holds the aux",
+            session.mac[-5:], state, holder.mac[-5:],
         )
 
     @staticmethod
@@ -839,13 +878,17 @@ class SessionManager:
         async with self._lock:
             if play.closed or play.create_payload is None:
                 return
-            play.created = True
             await self._store.enqueue(
                 outbox_id=f"play-create-{play.id}",
                 method="POST",
                 endpoint="/api/plays",
                 payload=play.create_payload,
             )
+            # Only AFTER the row is safely written. Set before it, a failed
+            # write (disk full, damaged database) left a play that believed it
+            # had been created: its close was then queued alone, answered 404
+            # by the server for ever, and never went away.
+            play.created = True
 
     async def _duration_watchdog(self, session: Session, play: Play, duration_ms: int) -> None:
         """Close a song once it has actually PLAYED its duration.

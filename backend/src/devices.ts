@@ -1,7 +1,17 @@
 import { Hono } from "hono";
-import type { Env } from "./types";
+import type { AppEnv } from "./types";
 
-export const devices = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
+export const devices = new Hono<AppEnv>();
+
+/** Play counts pre-aggregated in one pass; see DEVICE_PLAY_COUNTS in admin.ts. */
+export const UNCLAIMED_DEVICES_SQL = `SELECT d.mac_hash, d.mac_hint, d.alias, d.first_seen,
+          COALESCE(pc.n, 0) AS plays
+     FROM devices d
+     LEFT JOIN (SELECT device_hash, COUNT(*) AS n FROM plays
+                 WHERE device_hash IS NOT NULL GROUP BY device_hash) pc
+       ON pc.device_hash = d.mac_hash
+    WHERE d.user_id IS NULL
+    ORDER BY plays DESC`;
 
 /**
  * Devices seen playing that nobody has claimed yet. The mac_hint (last two
@@ -9,13 +19,7 @@ export const devices = new Hono<{ Bindings: Env; Variables: { userId: string } }
  */
 devices.get("/api/devices/unclaimed", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT d.mac_hash, d.mac_hint, d.alias, d.first_seen,
-            COUNT(p.id) AS plays
-     FROM devices d
-     LEFT JOIN plays p ON p.device_hash = d.mac_hash
-     WHERE d.user_id IS NULL
-     GROUP BY d.mac_hash
-     ORDER BY plays DESC`,
+    UNCLAIMED_DEVICES_SQL,
   ).all();
   return c.json({ devices: results });
 });

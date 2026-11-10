@@ -1,21 +1,20 @@
 {
-  "name": "locker-room-backend",
+  "name": "auxgoat-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "bash scripts/deploy.sh",
     "test": "vitest run",
     "db:local": "wrangler d1 execute lockerroom --local --file=./schema.sql",
     "db:remote": "wrangler d1 execute lockerroom --remote --file=./schema.sql",
     "predeploy": "find public -name '.DS_Store' -delete 2>/dev/null || true"
   },
   "dependencies": {
-    "hono": "^4.6.14"
+    "hono": "^4.13.17"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.5.40",
     "@cloudflare/workers-types": "^4.20241218.0",
     "typescript": "^5.7.2",
     "vitest": "2.1.8",

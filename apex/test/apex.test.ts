@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/types";
+import { TOKENS } from "../src/page";
+import { teamOrigins } from "../src/teams";
 
 /**
  * The Worker is driven directly with absolute URLs.
@@ -300,5 +302,86 @@ describe("everything else", () => {
       const res = await get(`https://auxgoat.com${path}`);
       expect([302, 404]).toContain(res.status);
     }
+  });
+});
+
+describe("security headers", () => {
+  const paths = ["https://auxgoat.com/", "https://auxgoat.com/go?code=crusaders", "https://auxgoat.com/go?code=nope",
+    "https://auxgoat.com/api/x", "https://auxgoat.com/elsewhere", "https://www.auxgoat.com/"];
+
+  it("sends nosniff, a referrer policy and frame denial on every response", async () => {
+    for (const url of paths) {
+      const res = await get(url);
+      expect(res.headers.get("x-content-type-options"), url).toBe("nosniff");
+      expect(res.headers.get("referrer-policy"), url).toBe("strict-origin-when-cross-origin");
+      expect(res.headers.get("x-frame-options"), url).toBe("DENY");
+    }
+  });
+
+  it("puts a script-free CSP on the landing page", async () => {
+    const csp = (await get("https://auxgoat.com/")).headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).not.toMatch(/script-src/);
+  });
+
+  it("lets the form reach every origin /go redirects to", async () => {
+    // Chrome applies form-action to the redirect after a form submit, so the
+    // school's own origin must be listed or the last hop is blocked.
+    const csp = (await get("https://auxgoat.com/")).headers.get("content-security-policy") ?? "";
+    const formAction = csp.split("; ").find((d) => d.startsWith("form-action")) ?? "";
+    expect(formAction).toContain("'self'");
+    for (const origin of teamOrigins()) expect(formAction.split(" ")).toContain(origin);
+    const to = new URL((await get("https://auxgoat.com/go?code=crusaders")).headers.get("location")!);
+    expect(formAction.split(" ")).toContain(to.origin);
+  });
+
+  it("does not put a page CSP on a JSON 404", async () => {
+    expect((await get("https://auxgoat.com/api/x")).headers.get("content-security-policy")).toBeNull();
+  });
+});
+
+describe("landing page palette", () => {
+  // WCAG 2.x relative luminance and contrast ratio.
+  const lum = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: string, b: string) => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const T = TOKENS;
+
+  it.each([
+    ["wordmark on page", T.ink, T.page],
+    ["tagline on page", T.ink2, T.page],
+    ["hint on page", T.muted, T.page],
+    ["label on surface", T.muted, T.surface],
+    ["typed code on the input", T.ink, T.page],
+    ["error on surface", T.error, T.surface],
+    ["error on page", T.error, T.page],
+    ["button text on bronze", T.onGold, T.gold],
+    ["inert button text", T.muted, T.hairline],
+  ])("%s clears 4.5:1", (_name, fg, bg) => {
+    expect(ratio(fg, bg)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each([
+    ["input edge on the input", T.control, T.page],
+    ["input edge on the card", T.control, T.surface],
+    ["focus edge on the card", T.gold, T.surface],
+  ])("%s clears 3:1", (_name, fg, bg) => {
+    expect(ratio(fg, bg)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("matches the black app it hands off to", async () => {
+    const body = await (await get("https://auxgoat.com/")).text();
+    expect(body).toContain('<meta name="theme-color" content="#000000">');
+    expect(body).toContain(`--page: ${T.page}`);
+    expect(body).toContain('rel="apple-touch-icon"');
   });
 });

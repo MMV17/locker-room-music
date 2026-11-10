@@ -1,4 +1,4 @@
--- Locker Room Music schema (spec section 6.1).
+-- AuxGoat schema (spec section 6.1).
 
 -- Players sign themselves up (team code + first name, last name, number).
 -- There is no admin-curated roster: the team code is the only gate, which is

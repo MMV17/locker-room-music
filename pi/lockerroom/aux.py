@@ -31,6 +31,8 @@ import logging
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from .proc import communicate as _communicate
+
 log = logging.getLogger("lockerroom.aux")
 
 ENV_PATH = Path("/run/lockerroom/aux.env")
@@ -51,7 +53,7 @@ async def _systemctl_restart() -> None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    out, _ = await asyncio.wait_for(proc.communicate(), timeout=RESTART_TIMEOUT_S)
+    out, _ = await _communicate(proc, RESTART_TIMEOUT_S)
     if proc.returncode != 0:
         raise RuntimeError(
             f"{' '.join(RESTART_ARGV)} exited {proc.returncode}: "

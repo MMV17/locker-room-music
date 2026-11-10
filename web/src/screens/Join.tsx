@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, post } from "./../api";
-import { navigate } from "./../router";
-import { Spinner } from "./../components";
+import { Banner, Spinner } from "./../components";
 import { handedTeamCode } from "./../handoff";
 
 /**
@@ -73,7 +72,8 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
         last_name: last.trim(),
         jersey_number: jersey.trim() || null,
       });
-      navigate("/", true);
+      // Stay on whatever path brought them here: a link to /claim should land
+      // on Claim once they are in, not on Now Playing.
       onJoined();
     } catch (err) {
       // Branch on `code`, not the status. This endpoint returns 403 both for a
@@ -97,11 +97,20 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
   return (
     <main className="screen" style={{ paddingTop: 48, paddingBottom: 32 }}>
       <p className="t-label">{teamName}</p>
-      <h1 className="t-display" style={{ margin: "6px 0 26px" }}>
+      <h1 className="t-display" style={{ margin: step === "code" ? "6px 0 8px" : "6px 0 26px" }}>
         {step === "code" ? "Join" : "Who are you?"}
       </h1>
+      {/* What this is, before anything is asked of them - a new player arrives
+          here from a link with no idea. Only on the code step: the second
+          half is about the code. */}
+      {step === "code" && (
+        <p className="t-sub" style={{ margin: "0 0 24px" }}>
+          Vote on whatever&rsquo;s playing on the locker room speaker. Get the team code
+          from your coach.
+        </p>
+      )}
 
-      {error && <div className="banner is-bad">{error}</div>}
+      {error && <Banner kind="bad">{error}</Banner>}
 
       {verifying ? (
         // The code came from the front door and is being checked. Showing the
@@ -111,6 +120,7 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
         </div>
       ) : step === "code" ? (
         <form
+          data-hold-reload
           onSubmit={async (e) => {
             e.preventDefault();
             if (!code.trim() || busy) return;
@@ -154,7 +164,11 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
           </button>
         </form>
       ) : (
-        <form onSubmit={join}>
+        <form data-hold-reload onSubmit={join}>
+          {/* The checked code lives in this step too, so a new build waits for
+              the sign-in to finish rather than dropping the player back to
+              the code (staleBuild.ts reads every input in the form). */}
+          <input type="hidden" value={code} />
           <label className="field">
             <span className="t-label">First name</span>
             <input
@@ -204,7 +218,7 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
           </label>
 
           <button className="btn is-primary is-block" disabled={!ready || busy}>
-            {busy ? "Signing in…" : "Start rating"}
+            {busy ? "Signing in…" : "Start voting"}
           </button>
 
           <div className="center">

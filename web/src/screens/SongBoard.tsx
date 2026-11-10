@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
-import { get } from "./../api";
+import { useState } from "react";
 import type { TrackEntry } from "./../api";
-import { Artwork, Empty, Spinner, Tabs, formatScore, scoreClass } from "./../components";
+import { Artwork, Empty, LoadError, Spinner, Tabs, useLoad, formatScore, scoreClass } from "./../components";
 
 type Window = "season" | "month" | "week";
 
@@ -17,16 +16,9 @@ const WINDOWS: { value: Window; label: string }[] = [
  */
 export function SongBoard() {
   const [window_, setWindow] = useState<Window>("season");
-  const [data, setData] = useState<{ top: TrackEntry[]; bottom: TrackEntry[] } | null>(null);
-
-  useEffect(() => {
-    setData(null);
-    get<{ top: TrackEntry[]; bottom: TrackEntry[] }>(
-      `/api/leaderboard/tracks?window=${window_}`,
-    )
-      .then(setData)
-      .catch(() => setData({ top: [], bottom: [] }));
-  }, [window_]);
+  const { data, error, retry } = useLoad<{ top: TrackEntry[]; bottom: TrackEntry[] }>(
+    `/api/leaderboard/tracks?window=${window_}`,
+  );
 
   return (
     <main className="screen">
@@ -36,7 +28,9 @@ export function SongBoard() {
 
       <Tabs value={window_} options={WINDOWS} onChange={setWindow} />
 
-      {!data ? (
+      {error ? (
+        <LoadError message={error} onRetry={retry} />
+      ) : !data ? (
         <Spinner />
       ) : data.top.length === 0 ? (
         <Empty title="No songs rated yet">Ratings appear after the first song plays.</Empty>

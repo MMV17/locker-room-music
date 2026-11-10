@@ -6,8 +6,10 @@
 set -uo pipefail
 
 while true; do
-  bluetoothctl power on >/dev/null 2>&1
-  bluetoothctl discoverable on >/dev/null 2>&1
-  bluetoothctl pairable on >/dev/null 2>&1
+  # Bounded: bluetoothctl waits for ever on a bluetoothd that is not answering,
+  # and this loop must still be turning when it comes back.
+  timeout 10 bluetoothctl power on >/dev/null 2>&1
+  timeout 10 bluetoothctl discoverable on >/dev/null 2>&1
+  timeout 10 bluetoothctl pairable on >/dev/null 2>&1
   sleep 5
 done

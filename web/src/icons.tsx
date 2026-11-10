@@ -75,18 +75,6 @@ export const IconHistory = ({ className }: P) => (
 
 /* Utility */
 
-export const IconBack = ({ className }: P) => (
-  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-    <path {...stroke} d="M15 5l-7 7 7 7" />
-  </svg>
-);
-
-export const IconClose = ({ className }: P) => (
-  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-    <path {...stroke} d="M6 6l12 12M18 6L6 18" />
-  </svg>
-);
-
 export const IconPhone = ({ className }: P) => (
   <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
     <rect {...stroke} x="6.5" y="2.5" width="11" height="19" rx="2.5" />
@@ -116,11 +104,5 @@ export const IconSpeaker = ({ className, muted }: P & { muted?: boolean }) => (
     ) : (
       <path {...stroke} d="M15.5 9.2a4 4 0 0 1 0 5.6M18.4 6.8a8 8 0 0 1 0 10.4" />
     )}
-  </svg>
-);
-
-export const IconRefresh = ({ className }: P) => (
-  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-    <path {...stroke} d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5" />
   </svg>
 );

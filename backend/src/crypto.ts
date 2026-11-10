@@ -57,11 +57,24 @@ export function normalizeTeamCode(code: string): string {
   return code.trim().toUpperCase();
 }
 
-/** Constant-time-ish comparison, to avoid leaking secrets by timing. */
-export function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
+/**
+ * Compare a presented secret with the real one without leaking it by timing.
+ *
+ * Both sides are hashed first and the two 32-byte digests compared in constant
+ * time. The old version returned early on a LENGTH mismatch, which told a
+ * guesser the secret's length for free; digests are always the same length,
+ * and the loop always runs all 32 bytes.
+ */
+export async function safeEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [da, db] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(a)),
+    crypto.subtle.digest("SHA-256", enc.encode(b)),
+  ]);
+  const x = new Uint8Array(da);
+  const y = new Uint8Array(db);
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
   return diff === 0;
 }
 

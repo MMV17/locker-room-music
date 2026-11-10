@@ -201,7 +201,7 @@ def test_no_temp_file_is_ever_left_behind(tmp_path, cards):
     """The write is temp-then-rename so a crash cannot leave a truncated
     config. Nothing should survive the run either way."""
     make_cards(tmp_path / "asound", cards)
-    r = run(tmp_path)
+    run(tmp_path)
     leftovers = list(tmp_path.glob("asound.conf.tmp.*"))
     assert leftovers == []
 

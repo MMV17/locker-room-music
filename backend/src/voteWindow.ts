@@ -111,3 +111,76 @@ export function presentablePlay(play: PlayRow | null, now: number = Date.now()):
   if (!play) return null;
   return isVoteWindowOpen(play, now) ? play : null;
 }
+
+/**
+ * The latest moment this play's window could possibly have been open, judged
+ * from what is stored rather than from "now".
+ *
+ * voteWindowClosesAt() asks "is the keepalive fresh NOW?", which is the right
+ * question for a live screen and the wrong one for a sweep: a song paused for
+ * two hours whose Pi died three minutes ago has a stale keepalive, so it falls
+ * back to wall-clock time and looks closed for two hours. Here the keepalive
+ * always counts, so that play reads as closed from (keepalive + 150s + 30s).
+ */
+export function lastPossibleClose(play: VoteWindowPlay): number {
+  if (play.ended_at) return Date.parse(play.ended_at) + VOTE_GRACE_MS;
+  const wallClock = Date.parse(play.started_at) + (play.duration_ms ?? 0) + VOTE_GRACE_MS;
+  if (!play.keepalive_at) return wallClock;
+  return Math.max(wallClock, Date.parse(play.keepalive_at) + KEEPALIVE_STALE_MS + VOTE_GRACE_MS);
+}
+
+/**
+ * How far in the future a play may claim to have started.
+ *
+ * The Pi has no clock battery. A play stamped well ahead of the server's
+ * clock is a clock fault, and since `/api/now` takes the NEWEST play, one such
+ * row would sit on top of the real current song for as long as the error
+ * lasts.
+ */
+export const FUTURE_START_TOLERANCE_MS = 60_000;
+
+/** How many of the newest plays `/api/now` reads to find its candidate. */
+export const NOW_CANDIDATES = 5;
+
+/**
+ * The `/api/now` candidate among the newest plays (newest first).
+ *
+ * Picked in code from a fixed handful of rows, not with `WHERE voided = 0`
+ * in SQL: after "Clear history" voids every play, that WHERE walked the whole
+ * table on every 7.5s poll looking for a row that did not exist. Five rows
+ * always covers the play still on the speaker, which void-all spares.
+ */
+export function nowCandidate<T extends Pick<PlayRow, "started_at" | "voided">>(
+  rows: T[],
+  now: number = Date.now(),
+): T | null {
+  for (const r of rows) {
+    if (r.voided) continue;
+    const t = Date.parse(r.started_at);
+    if (Number.isFinite(t) && t - now > FUTURE_START_TOLERANCE_MS) continue;
+    return r;
+  }
+  return null;
+}
+
+/** How many of the newest plays the "is a song playing?" checks look at. */
+export const LIVE_PLAY_CANDIDATES = 20;
+
+/**
+ * The open play that is actually LIVE, among the newest plays (newest first):
+ * not closed by the Pi, and still inside its vote window.
+ *
+ * `ended_at IS NULL` alone is not "playing". A play the Pi forgot to close (a
+ * listener restart mid-song) stays open forever, and one such orphan made the
+ * speaker picker say "Someone's song is playing" to everybody, permanently.
+ */
+export function liveOpenPlay<T extends VoteWindowPlay>(
+  rows: T[],
+  now: number = Date.now(),
+): T | null {
+  for (const r of rows) {
+    if (r.ended_at || r.voided) continue;
+    if (isVoteWindowOpen(r, now)) return r;
+  }
+  return null;
+}

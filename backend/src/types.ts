@@ -29,12 +29,8 @@ export interface PlayRow {
   play_status?: string | null;
 }
 
-export interface TrackRow {
-  id: string;
-  track_key: string;
-  title: string;
-  artist: string | null;
-  album: string | null;
-  artwork_url: string | null;
-  artwork_state: string;
-}
+/**
+ * The Hono environment every route module shares: the bindings above, plus
+ * the signed-in player's id that requireSession puts on the context.
+ */
+export type AppEnv = { Bindings: Env; Variables: { userId: string } };

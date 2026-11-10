@@ -21,6 +21,9 @@ set -uo pipefail
 TARGET_FILE="${LOCKERROOM_FORGET_TARGET:-/run/lockerroom/forget-target}"
 RELAY_FILE="${LOCKERROOM_RELAY_TARGET:-/run/lockerroom/relay-target}"
 BTCTL="${BTCTL:-bluetoothctl}"
+# EVERY call below is wrapped in `timeout`. bluetoothctl waits for as long as
+# bluetoothd does not answer, and a forget that hangs holds the control channel
+# for its whole budget. pi/tests/test_script_timeouts.py holds this.
 
 MAC="$(head -1 "$TARGET_FILE" 2>/dev/null | tr -d '[:space:]')"
 
@@ -52,13 +55,13 @@ fi
 # there ends in the right state, so this is not an error — but "forgotten" for
 # a device this box never knew would send the next reader looking for a bug
 # that is not here.
-if ! $BTCTL devices Paired 2>/dev/null | grep -qi "$MAC"; then
+if ! timeout 10 $BTCTL devices Paired 2>/dev/null | grep -qi "$MAC"; then
   echo "not paired: $MAC is not bonded to this box, so there is nothing to forget"
   rm -f "$TARGET_FILE"
   exit 0
 fi
 
-NAME="$($BTCTL info "$MAC" 2>/dev/null | sed -n 's/^\s*Alias:\s*//p' | head -1)"
+NAME="$(timeout 10 $BTCTL info "$MAC" 2>/dev/null | sed -n 's/^\s*Alias:\s*//p' | head -1)"
 echo "forgetting ${NAME:-$MAC} ($MAC)"
 
 # Disconnect first so the removal is not racing a live ACL link.
@@ -71,7 +74,7 @@ sleep 1
 # link keys on disk reproduces the exact symptom this is meant to cure. Found
 # worth checking on 2026-09-21.
 STILL_LISTED=0
-$BTCTL devices Paired 2>/dev/null | grep -qi "$MAC" && STILL_LISTED=1
+timeout 10 $BTCTL devices Paired 2>/dev/null | grep -qi "$MAC" && STILL_LISTED=1
 KEYS_LEFT=0
 ls /var/lib/bluetooth/*/"${MAC^^}" >/dev/null 2>&1 && KEYS_LEFT=1
 ls /var/lib/bluetooth/*/"${MAC,,}" >/dev/null 2>&1 && KEYS_LEFT=1
@@ -87,5 +90,5 @@ fi
 rm -f "$TARGET_FILE"
 
 echo "forgotten. ${NAME:-$MAC} can pair again now."
-$BTCTL show 2>/dev/null | grep -iE 'discoverable:|pairable:' | sed 's/^/  /'
+timeout 10 $BTCTL show 2>/dev/null | grep -iE 'discoverable:|pairable:' | sed 's/^/  /'
 exit 0

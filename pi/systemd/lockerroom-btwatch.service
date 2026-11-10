@@ -6,9 +6,14 @@
 # and why a wedged controller is invisible to `systemctl status` — every unit
 # stays active while the radio answers nothing.
 [Unit]
-Description=Locker Room Music Bluetooth controller watchdog
+Description=AuxGoat Bluetooth controller watchdog
 After=bluetooth.service
 Wants=bluetooth.service
+# No start rate limit. The default (5 starts in 10s) turns a few fast failures
+# into a unit systemd refuses to start again until someone runs reset-failed -
+# and nobody can, on a box with no way in. Restart= below keeps trying for ever
+# instead. In [Unit], not [Service]: it is silently ignored under [Service].
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

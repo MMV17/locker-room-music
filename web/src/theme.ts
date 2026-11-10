@@ -12,7 +12,7 @@
  * just not coloured. See the token block at the top of styles.css.
  *
  * The cache stays. The name paints on the first frame from localStorage
- * rather than flashing "Locker Room" while the fetch is in flight.
+ * rather than flashing "AuxGoat" while the fetch is in flight.
  */
 
 export interface Theme {
@@ -20,7 +20,7 @@ export interface Theme {
 }
 
 export const FALLBACK_THEME: Theme = {
-  team_name: "Locker Room",
+  team_name: "AuxGoat",
 };
 
 const CACHE_KEY = "lr_theme";

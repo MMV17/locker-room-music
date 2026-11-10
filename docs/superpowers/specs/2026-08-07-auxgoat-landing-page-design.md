@@ -27,7 +27,7 @@ Scope is deliberately one screen. No marketing copy, no pricing, no signup, no
 ### It gets its own Worker — `apex/`
 
 **This reverses the original decision in this spec, and the reversal was forced
-by production.** The first version kept the apex on the `locker-room-music`
+by production.** The first version kept the apex on the team
 Worker to avoid a second deploy target. That cannot work, for a reason worth
 writing down because it is invisible until deployed:
 
@@ -59,7 +59,7 @@ gets answered with HTML.
 So the apex is its own Worker, `auxgoat-apex`, in `apex/`:
 
 ```
-backend/   locker-room-music   hc.auxgoat.com, lockerroom.finestkindfarms.com
+backend/   auxgoat-hc          hc.auxgoat.com, the legacy API hostname
 apex/      auxgoat-apex        auxgoat.com, www.auxgoat.com
 ```
 
@@ -247,7 +247,7 @@ a first-timer does once and gives up on.
 `/go` now hands the code to the destination in the **URL fragment**:
 
 ```
-https://locker-room-music.mmvinton17.workers.dev/#code=CRUSADERS
+https://auxgoat-hc.mmvinton17.workers.dev/#code=CRUSADERS
 ```
 
 **A fragment, never a query string, and that is a privacy decision.** A
@@ -432,7 +432,7 @@ Measured 2026-08-08, mid-deploy. To the same Cloudflare IP:
 | `hc.auxgoat.com` | CONNECTED, then **no peer certificate available** |
 | `auxgoat.com` | same |
 | `example.com` | `subject=CN=example.com` |
-| `lockerroom.finestkindfarms.com` | `subject=CN=finestkindfarms.com` |
+| the legacy API hostname | `subject=CN=<the legacy zone>` |
 
 The **entire `auxgoat.com` zone** is refused at the TLS layer on the school's
 wired network — not just the apex, the team's own site too. The same hostnames
@@ -441,7 +441,7 @@ block STATE.md recorded on 2026-08-04 and marked lapsed on 08-05, returned.
 
 It is unrelated to any deploy: SNI rejection happens before a route or Worker
 is consulted, and the same Worker served 200 on `workers.dev` and
-`lockerroom.finestkindfarms.com` throughout.
+the legacy API hostname throughout.
 
 Two consequences for this design:
 
@@ -449,7 +449,7 @@ Two consequences for this design:
 `https://${slug}.auxgoat.com/`, derived. Derived is wrong here — it would hand
 a player a blocked destination from a front door that had just worked, which is
 worse than no front door. Holy Cross points at
-`https://locker-room-music.mmvinton17.workers.dev/` until the filter lapses,
+`https://auxgoat-hc.mmvinton17.workers.dev/` until the filter lapses,
 and moving it back is one line.
 
 **The workers.dev hostname is the real front door for now**, which is why the

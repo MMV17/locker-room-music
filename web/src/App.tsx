@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ApiError, get } from "./api";
+import { ApiError, get, setUnauthorizedHandler } from "./api";
 import type { NowResponse } from "./api";
-import { Nav, Spinner } from "./components";
+import { Empty, Nav, Spinner } from "./components";
 import { useRoute } from "./router";
 import { cacheTheme, cachedTheme } from "./theme";
 import type { Theme } from "./theme";
@@ -13,6 +13,25 @@ import { Join } from "./screens/Join";
 import { NowPlaying } from "./screens/NowPlaying";
 import { AccountScreen, ProfileScreen, SpeakerScreen } from "./screens/Settings";
 import { SongBoard } from "./screens/SongBoard";
+
+const TITLES: Record<string, string> = {
+  "/join": "Join",
+  "/songs": "Songs",
+  "/djs": "DJs",
+  "/history": "History",
+  "/claim": "Claim your phone",
+  "/admin": "Admin",
+  "/settings": "Profile",
+  "/settings/profile": "Profile",
+  "/settings/speaker": "Speaker & connection",
+  "/settings/account": "Account",
+};
+
+function useDocumentTitle(route: string) {
+  useEffect(() => {
+    document.title = `${TITLES[route] ?? "Now playing"} \u00b7 AuxGoat`;
+  }, [route]);
+}
 
 export function App() {
   const route = useRoute();
@@ -34,17 +53,61 @@ export function App() {
 
   // One probe to find out whether we have a session. Every screen behind the
   // gate 401s identically, so asking once here beats asking on each.
+  //
+  // Only a 401 means "signed out". Anything else - no network, a timeout, a
+  // 500 - says nothing about the session, so it is retried with backoff
+  // rather than guessed: guessing "signed in" stranded a brand-new player on
+  // a dead Now Playing, and guessing "signed out" would send a signed-in one
+  // back through the team code.
+  const [probeFailures, setProbeFailures] = useState(0);
   useEffect(() => {
-    get<NowResponse>("/api/now")
-      .then(() => setSignedIn(true))
-      .catch((e) => setSignedIn(!(e instanceof ApiError && e.status === 401)));
+    let cancelled = false;
+    let timer: number | undefined;
+    let attempt = 0;
+    const probe = () => {
+      get<NowResponse>("/api/now")
+        .then(() => !cancelled && setSignedIn(true))
+        .catch((e) => {
+          if (cancelled) return;
+          if (e instanceof ApiError && e.status === 401) {
+            setSignedIn(false);
+            return;
+          }
+          attempt += 1;
+          setProbeFailures(attempt);
+          timer = window.setTimeout(probe, Math.min(30_000, 1_000 * 2 ** (attempt - 1)));
+        });
+    };
+    probe();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
+
+  // A session can also end mid-use: signed out on another tab, deactivated by
+  // a coach, or idle past 120 days. Any 401 from any screen lands back on Join.
+  useEffect(() => {
+    setUnauthorizedHandler(() => setSignedIn(false));
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  useDocumentTitle(signedIn === false && route !== "/admin" ? "/join" : route);
 
   // Admin is gated by its own password, not by the team session — a coach
   // setting up the roster has no reason to have joined as a player first.
   if (route === "/admin") return <Admin teamName={theme.team_name} />;
 
-  if (signedIn === null) return <Spinner />;
+  if (signedIn === null) {
+    return probeFailures === 0 ? (
+      <Spinner />
+    ) : (
+      <main className="screen">
+        <h1 className="sr-only">AuxGoat</h1>
+        <Empty title="Can't reach AuxGoat">Check your connection. Retrying&hellip;</Empty>
+      </main>
+    );
+  }
   if (!signedIn) return <Join teamName={theme.team_name} onJoined={() => setSignedIn(true)} />;
 
   return (
