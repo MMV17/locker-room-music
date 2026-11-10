@@ -491,6 +491,48 @@ class TestPowerCuts:
         assert box.live_behavior() == "legacy"
         box.assert_sound()
 
+    @pytest.mark.parametrize("point", APPLY_CRASH_POINTS)
+    def test_an_unexpected_error_during_apply_never_needs_a_reboot(self, box, point):
+        """Not a power cut: an OSError (a full disk, a failing card) with the
+        box still running. `recover` only runs at boot, so apply itself must
+        leave a whole package and either nothing in progress or a trial that
+        `verify` has been handed."""
+        sha = box.push(package("healthy"), "v2")
+        failed = box.apply(sha, AUXGOAT_UPDATE_RAISE_AT=point)
+        assert failed.returncode == 1, f"{point} was never reached: {failed.stdout[-400:]}"
+
+        box.assert_sound()
+        state = box.state()["state"]
+        if point in ("flipped", "listener-restarted"):
+            # The new release is live, so it must be on the air and judged.
+            assert state == "trial"
+            assert box.live_behavior() == "healthy"
+            log = box.systemctl_log()
+            assert "restart lockerroom-listener" in log
+            assert "start --no-block auxgoat-update-verify.service" in log
+            assert box.update("verify").returncode == 0
+        else:
+            assert state == "idle", f"left in {state} with nothing looking after it"
+            assert box.live_behavior() == "legacy"
+            assert box.result()["outcome"] == "failed"
+            # Not wedged: the same update goes through, with no reboot between.
+            assert box.apply(sha).returncode == 0, box.result()
+            assert box.update("verify").returncode == 0
+        assert box.result()["outcome"] == "committed"
+        assert box.live_behavior() == "healthy"
+        box.assert_sound()
+
+    def test_a_trial_is_still_judged_when_the_journal_cannot_be_written(self, box):
+        """A disk that filled up during a trial. The rollback itself needs no
+        space, so being unable to save a counter must not stop it happening."""
+        sha = box.push(package("silent"), "runs but never beacons")
+        assert box.apply(sha).returncode == 0
+        box.reboot()   # recover clears the restart baseline; verify must re-take it
+        assert box.state()["state"] == "trial"
+        box.update("verify", AUXGOAT_UPDATE_DISK_FULL="1")
+        assert box.live_behavior() == "legacy"
+        box.assert_sound()
+
     def test_every_crash_point_is_listed(self):
         found = set(re.findall(r'crash_point\("([^"]+)"\)', UPDATER.read_text()))
         assert found == set(APPLY_CRASH_POINTS) | set(VERIFY_CRASH_POINTS)

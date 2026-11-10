@@ -199,6 +199,8 @@ def crash_point(name: str) -> None:
     """Fault injection: die here, as a power cut would. Tests only."""
     if E("AUXGOAT_UPDATE_CRASH_AT") == name:
         os.kill(os.getpid(), signal.SIGKILL)
+    if E("AUXGOAT_UPDATE_RAISE_AT") == name:
+        raise OSError(5, f"injected I/O error at {name}")
 
 
 def boottime() -> float:
@@ -245,6 +247,8 @@ def fsync_dir(path: Path) -> None:
 
 
 def write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
+    if E("AUXGOAT_UPDATE_DISK_FULL"):  # fault injection, tests only
+        raise OSError(28, "No space left on device (injected)")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     try:
@@ -1017,6 +1021,30 @@ def cmd_apply(args: argparse.Namespace) -> int:
             return 0
         finish("refused", str(exc), st)
         return 1
+    except Exception as exc:  # noqa: BLE001 - see the comment
+        # Not a refusal: something broke underneath this run (a full disk, a
+        # failing card). `recover` only runs at boot, and nobody can reboot
+        # this box on request - so whatever step it was, do not leave with the
+        # journal saying an update is under way and nothing looking after it.
+        what = f"{type(exc).__name__}: {exc}"
+        say(f"!! apply failed unexpectedly: {what}")
+        told = dict(st)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+        try:
+            st = ensure_consistent(load_state())
+        except Exception as exc2:  # noqa: BLE001 - still hand over below
+            say(f"!! and could not tidy up after it: {type(exc2).__name__}: {exc2}")
+            st = load_state()
+        if st.get("state") == "trial":
+            # The switch was journaled and the new release is live. Finish the
+            # hand-over: put the listener on it and let `verify` judge it.
+            run(["systemctl", "restart", LISTENER], 90)
+            run(["systemctl", "start", "--no-block", VERIFY_UNIT], 30)
+        else:
+            finish("failed", f"unexpected error ({what[:200]}) - still running "
+                   f"{live_release() or 'the installed code'}", told)
+        return 1
     finally:
         lock.release()
 
@@ -1227,6 +1255,7 @@ def cmd_verify(_args: argparse.Namespace) -> int:
     net_since: float | None = None
     last_probe = -1e9
     last_checkpoint = seg_start
+    baseline: int | None = None
     loops = 0
 
     while True:
@@ -1242,8 +1271,15 @@ def cmd_verify(_args: argparse.Namespace) -> int:
 
         show = listener_show()
         if st.get("baseline_restarts") is None:
-            st["baseline_restarts"] = show["NRestarts"]
-            save_state(st)
+            # Kept in memory too: on a full disk the save fails, and neither
+            # that nor a counter re-read as "none" on every pass may stop a
+            # rollback that itself needs no space.
+            baseline = show["NRestarts"] if baseline is None else baseline
+            st["baseline_restarts"] = baseline
+            try:
+                save_state(st)
+            except OSError:
+                pass
         if show["MainPID"] != pid:
             pid, pid_since = show["MainPID"], now
 
@@ -1274,8 +1310,11 @@ def cmd_verify(_args: argparse.Namespace) -> int:
             return 1
         if now - last_checkpoint >= 300:
             st["trial_uptime_s"] = uptime
-            last_checkpoint = now
-            save_state(st)
+            try:
+                save_state(st)
+                last_checkpoint = now
+            except OSError:
+                pass  # keep counting from the last checkpoint that was saved
 
         if VERIFY_MAX_LOOPS and loops >= VERIFY_MAX_LOOPS:
             return 3
