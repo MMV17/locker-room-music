@@ -80,6 +80,10 @@ export function Reveal({
               <p className={"reveal-score " + scoreClass(results.score)}>
                 {formatScore(results.score)}
               </p>
+              {/* True by construction: the score is (up - down) / (up + down + 5),
+                  shown x100 (scoring.ts, formatScore), so it always lies strictly
+                  between -100 and +100. */}
+              <p className="t-label">Score out of &plusmn;100</p>
               <div className="reveal-split">
                 <span className="tally is-up">
                   <ThumbUp />
