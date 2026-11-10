@@ -616,3 +616,35 @@ class TestTheShippedUnits:
         # The only rmtree of the live path is inside the repair branch, where
         # it has already been judged unusable and a verified release is ready.
         assert text.count("shutil.rmtree(PKG") == 1
+
+
+class TestTheRealTree:
+    """The release this repo would ship must be able to install ITSELF."""
+
+    def test_the_working_tree_passes_its_own_gates_and_commits(self, box):
+        for part in ("lockerroom", "scripts", "systemd"):
+            dest = box.author / "pi" / part
+            shutil.rmtree(dest)
+            shutil.copytree(PI / part, dest, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy(PI / "requirements.txt", box.author / "pi" / "requirements.txt")
+        (box.author / "pi" / "lockerroom" / "behavior.txt").write_text("healthy\n")
+        (box.etc / "config.toml").write_text(
+            'api_base_url = "https://example.invalid"\ndevice_key = "k"\n'
+            f'db_path = "{box.tmp}/x.db"\nlog_path = "{box.tmp}/x.log"\n')
+        sha = box.push({}, "the real tree")
+
+        applied = box.apply(sha)
+        assert applied.returncode == 0, box.result().get("reason")
+        assert box.update("verify").returncode == 0, box.result()
+        assert box.result()["outcome"] == "committed"
+
+        # The real scripts and units landed; the two forbidden ones did not.
+        for name in ("auxgoat-update", "run-repair.sh", "btwatch.sh", "report-full.sh"):
+            assert (box.bin / name).stat().st_mode & 0o111, name
+        assert (box.units / "auxgoat-update-recover.service").exists()
+        assert (box.units / "auxgoat-update-verify.service").exists()
+        assert not (box.units / "lockerroom-listener.service").exists()
+        assert not list(box.units.rglob("*aplay*"))
+        assert "enable auxgoat-update-recover.service" in box.systemctl_log()
+        # And the probe list came from the real endpoints module.
+        assert box.update("status", "--field", "state").stdout.strip() == "idle"

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from .macaddr import normalise as _normalise_mac
+from .proc import communicate as _communicate
 
 log = logging.getLogger("lockerroom.relay")
 
@@ -51,7 +52,9 @@ async def _bluetoothctl(*args: str, timeout: float = CONNECT_TIMEOUT_S) -> str:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    # Kills the child on timeout: bluetoothctl waits for ever on a daemon that
+    # is not answering, and this is retried every 30 seconds. See proc.py.
+    out, _ = await _communicate(proc, timeout)
     return (out or b"").decode(errors="replace")
 
 
@@ -102,7 +105,7 @@ async def _run_audio_route() -> None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    out, _ = await asyncio.wait_for(proc.communicate(), timeout=ROUTE_TIMEOUT_S)
+    out, _ = await _communicate(proc, ROUTE_TIMEOUT_S)
     if proc.returncode != 0:
         raise RuntimeError(
             f"audio-route.sh exited {proc.returncode}: "

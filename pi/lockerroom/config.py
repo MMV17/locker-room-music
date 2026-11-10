@@ -21,6 +21,9 @@ class Config:
     # behaves exactly as it did before the relay existed. That is the safety
     # property the whole feature rests on.
     relay_speaker_mac: str | None = None
+    # Extra hosts to try, in order, when api_base_url stops answering. Tried
+    # before the built-in fallbacks. See endpoints.py.
+    api_fallback_urls: tuple[str, ...] = ()
 
 
 def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
@@ -41,4 +44,12 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
             (raw.get("relay") or {}).get("speaker_mac"),
             field="[relay] speaker_mac",
         ),
+        # Tolerant on purpose, unlike the relay MAC above: this list exists to
+        # keep the box reachable, so a malformed entry is dropped (and logged
+        # by endpoints.build_urls) rather than stopping the listener.
+        api_fallback_urls=tuple(
+            u for u in (raw.get("api_fallback_urls") or []) if isinstance(u, str)
+        )
+        if isinstance(raw.get("api_fallback_urls"), list)
+        else (),
     )

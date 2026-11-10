@@ -40,6 +40,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import endpoints
+
 # Actions the ladder can take. Strings rather than an enum so they read plainly
 # in the log, which is the only place anyone will ever see them.
 NONE = "none"
@@ -54,6 +56,11 @@ HEALTHY = "healthy"
 OFFLINE = "offline"              # neither path works — the real outage
 ROUTE_TRAP = "route-trap"        # wifi fine, default route dead (the cable)
 WIFI_DEGRADED = "wifi-degraded"  # default route fine, wifi dead
+# Added 2026-11. The link works and NAMES do not: a dead or poisoned resolver.
+# On 2026-08-31 a plugged-in cable did exactly this (see "The ethernet cable
+# POISONS DNS" in docs/STATE.md) and every probe here failed in 7ms, which
+# read as OFFLINE and counted toward a reboot that could not have helped.
+DNS_BROKEN = "dns-broken"
 
 STATE_PATH = Path("/var/lib/lockerroom/netwatch-state.json")
 
@@ -61,6 +68,14 @@ STATE_PATH = Path("/var/lib/lockerroom/netwatch-state.json")
 # is already behind Cloudflare, so a Cloudflare-wide incident must not be able
 # to make both probes fail at once and trigger a reboot.
 NEUTRAL_URL = "http://captive.apple.com/hotspot-detect.html"
+
+# An address, not a name, so it needs no resolver. Asked ONLY when every named
+# probe has failed, to tell "no link" from "no DNS". Measured from the campus
+# wifi on 2026-08-31: `curl --interface wlan0 https://1.1.1.1/` answered in
+# 90ms while every hostname on the box failed.
+IP_PROBE_URL = "https://1.1.1.1/"
+
+ASOUND_ROOT = Path("/proc/asound")
 
 
 @dataclass(frozen=True)
@@ -149,12 +164,25 @@ def probe_url(url: str, interface: str | None, timeout: float) -> bool:
     return rc == 0
 
 
-def _egress_via(api_base_url: str, cfg: WatchConfig, interface: str | None) -> bool:
+def _hosts(api: str | list[str] | tuple[str, ...]) -> list[str]:
+    """One host or the whole pool; callers may pass either."""
+    return [api] if isinstance(api, str) else list(api)
+
+
+def _egress_via(
+    api_base_url: str | list[str], cfg: WatchConfig, interface: str | None
+) -> bool:
     """
-    Healthy if EITHER target answers over this path.
+    Healthy if ANY api host, or the neutral host, answers over this path.
 
     Cheap path first: the Worker is the thing we actually care about, so when
     it answers we ask nothing else.
+
+    ANY, not the first. The box has a list of hostnames now (endpoints.py), so
+    that one of them can be filtered or retired without anyone visiting the
+    locker room. If this probed only the configured one, retiring it would
+    look like a dead network and walk the box up the ladder to a reboot every
+    six hours, for ever, over a hostname that was switched off on purpose.
 
     Both probes MUST keep the neutral-host fallback, and this is why they share
     one implementation. If the default-route probe checked only the Worker, a
@@ -162,17 +190,37 @@ def _egress_via(api_base_url: str, cfg: WatchConfig, interface: str | None) -> b
     watchdog would respond by deleting the box's default route over somebody
     else's outage.
     """
-    if probe_url(api_base_url, interface, cfg.timeout_s):
-        return True
+    for url in _hosts(api_base_url):
+        if probe_url(url, interface, cfg.timeout_s):
+            return True
     return probe_url(NEUTRAL_URL, interface, cfg.timeout_s)
 
 
-def has_egress(api_base_url: str, cfg: WatchConfig) -> bool:
+def link_alive(cfg: WatchConfig) -> bool:
+    """Whether the wifi can reach an ADDRESS, with no name lookup involved."""
+    return probe_url(IP_PROBE_URL, cfg.interface, cfg.timeout_s)
+
+
+def pcm_running(root: Path = ASOUND_ROOT) -> bool:
+    """Whether any ALSA playback stream is running, i.e. the room has music."""
+    try:
+        for status in Path(root).glob("card*/pcm*p/sub*/status"):
+            try:
+                if "state: RUNNING" in status.read_text():
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return False
+
+
+def has_egress(api_base_url: str | list[str], cfg: WatchConfig) -> bool:
     """Egress over the wifi interface specifically."""
     return _egress_via(api_base_url, cfg, cfg.interface)
 
 
-def has_default_route_egress(api_base_url: str, cfg: WatchConfig) -> bool:
+def has_default_route_egress(api_base_url: str | list[str], cfg: WatchConfig) -> bool:
     """
     Egress over the default route — the path the beacon and the outbox use.
 
@@ -309,6 +357,14 @@ def act(action: str, cfg: WatchConfig, now: float, state: dict) -> dict:
     elif action == RESTART_NM:
         do_restart_nm()
     elif action == REBOOT:
+        if pcm_running():
+            # Bluetooth audio does not need the internet. Rebooting now would
+            # cut the music in the room to fix a link the room is not using -
+            # and would not count against the rate limit either, so the next
+            # quiet moment still gets its attempt.
+            logging.warning("netwatch: reboot deferred — music is playing")
+            do_bounce(cfg)
+            return state
         if can_reboot(state.get("last_reboot_ts"), now, cfg.min_reboot_interval_s):
             state["last_reboot_ts"] = now
             write_state(state)
@@ -323,7 +379,7 @@ def act(action: str, cfg: WatchConfig, now: float, state: dict) -> dict:
     return state
 
 
-def watch_loop(api_base_url: str, cfg: WatchConfig) -> None:
+def watch_loop(api_base_url: str | list[str], cfg: WatchConfig) -> None:
     if not cfg.enabled:
         logging.info("netwatch: disabled by config, exiting")
         return
@@ -332,11 +388,15 @@ def watch_loop(api_base_url: str, cfg: WatchConfig) -> None:
     fails = 0
     logging.info(
         "netwatch: watching %s on %s (probe %.0fs, bounce@%d restart@%d reboot@%d)",
-        api_base_url, cfg.interface, cfg.probe_interval_s,
+        ", ".join(_hosts(api_base_url)), cfg.interface, cfg.probe_interval_s,
         cfg.bounce_after, cfg.restart_nm_after, cfg.reboot_after,
     )
 
+    all_hosts = _hosts(api_base_url)
     while True:
+        # Whichever host the listener last reached goes first, so a healthy
+        # box on a fallback host still makes one probe a minute, not several.
+        api_base_url = endpoints.last_good_first(all_hosts)
         wifi_ok = has_egress(api_base_url, cfg)
 
         # Only worth asking when a route exists that ISN'T wifi. With no cable
@@ -349,6 +409,12 @@ def watch_loop(api_base_url: str, cfg: WatchConfig) -> None:
             default_ok = wifi_ok
 
         situation = classify(wifi_ok, default_ok)
+        if situation == OFFLINE and link_alive(cfg):
+            # Names fail, an address answers. `permitted` only lets the reboot
+            # rung through for OFFLINE, so this can bounce the connection and
+            # restart NetworkManager (either may fetch a working resolver) but
+            # can never power-cycle a speaker whose link is fine.
+            situation = DNS_BROKEN
 
         if situation == HEALTHY:
             if fails:
@@ -414,8 +480,9 @@ def main() -> None:
     with open(DEFAULT_CONFIG_PATH, "rb") as f:
         raw = tomllib.load(f)
 
-    api_base_url = raw["api_base_url"].rstrip("/")
-    watch_loop(api_base_url, config_from_toml(raw))
+    # The whole pool, not just the configured host - see _egress_via.
+    hosts = endpoints.configured_urls(DEFAULT_CONFIG_PATH)
+    watch_loop(hosts, config_from_toml(raw))
 
 
 if __name__ == "__main__":

@@ -795,7 +795,9 @@ def run_gates(staging: Path) -> None:
     gate("every module imports under the listener's python", [VENV_PY, "-c", IMPORT_ALL], staging)
     gate("netwatch imports under the system python",
          [SYS_PY, "-c", "import lockerroom.netwatch, lockerroom.endpoints"], staging)
-    gate("selftest", [VENV_PY, "-m", "lockerroom.selftest"], staging)
+    # Against the box's REAL config: the classic way new code fails is needing
+    # a key that the config already on the box does not have.
+    gate("selftest", [VENV_PY, "-m", "lockerroom.selftest", str(ETC / "config.toml")], staging)
 
     req = staging / "requirements.txt"
     rc, out = run([VENV_PY, "-m", "pip", "install", "--no-index", "--dry-run",
