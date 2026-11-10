@@ -36,7 +36,7 @@ import { speakerRoutes } from "./speakerRoutes";
 import { serveArt } from "./artProxy";
 import { healArtwork } from "./artworkHeal";
 
-const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
+export const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
 /**
  * There is deliberately no bare-domain handling here any more.
