@@ -11,7 +11,7 @@ import {
   useEscape,
 } from "./../components";
 import { IconCheck, IconSettings, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
-import { useNavigate } from "./../router";
+import { clearFlash, peekFlash, useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
 /**
@@ -82,6 +82,14 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   const speakerBtn = useRef<HTMLButtonElement>(null);
   const gearBtn = useRef<HTMLButtonElement>(null);
   const lastPlayId = useRef<string | null | undefined>(undefined);
+  // A confirmation carried over from the previous screen (a claim).
+  const [flash, setFlashShown] = useState(peekFlash);
+  useEffect(() => {
+    clearFlash();
+    if (!flash) return;
+    const id = window.setTimeout(() => setFlashShown(null), 6_000);
+    return () => window.clearTimeout(id);
+  }, [flash]);
 
   // The play we last saw with an *open* window. The reveal fires on the
   // transition out of that, which is also why a cold open onto an
@@ -409,6 +417,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             Reconnecting&hellip;
           </p>
         )}
+        {flash && <Banner kind="ok">{flash}</Banner>}
         {error && <Banner kind="bad">{error}</Banner>}
         {voteFailed && <Banner kind="bad">{VOTE_FAILED}</Banner>}
         <WaitingBanner aux={now?.aux ?? null} />
@@ -503,6 +512,9 @@ export function NowPlaying({ teamName }: { teamName: string }) {
                     {play.my_vote === 1 ? "Your vote" : "Fire"}
                   </span>
                 </span>
+                {play.my_vote == null && (
+                  <p className="vote-hint">Votes stay secret until the song ends</p>
+                )}
               </div>
             )}
           </>
@@ -550,8 +562,11 @@ function NothingPlaying({ online, aux }: { online: boolean; aux: AuxState | null
   }
 
   return (
+    /* /api/now does not report the speaker's Bluetooth name, so this names
+       the one the box is set up with. */
     <Empty title="Nothing playing" heading>
-      Connect to <strong>AuxGoat</strong> over Bluetooth to DJ.
+      Want to DJ? Open Bluetooth on your phone, connect to the speaker called{" "}
+      <strong>AuxGoat</strong>, then press play. Everyone here votes on each song.
     </Empty>
   );
 }
@@ -768,19 +783,20 @@ function DjChip({ play, onClaim }: { play: NowPlay; onClaim: () => void }) {
   }
 
   if (play.device_unclaimed && play.device) {
+    // The same full-width, left-aligned row as a claimed DJ, with the claim
+    // action at its end rather than a centred stub and a button underneath -
+    // which also hands the artwork back a whole row.
     return (
-      <span className="stack" style={{ alignItems: "center", gap: 6 }}>
-        <span className="dj-chip is-unclaimed">
-          <span className="jersey is-sm" aria-hidden="true">?</span>
-          <span className="stack">
-            <span className="t-chrome dj-chip-label">Now on aux</span>
-            <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
-            {/* The hint is what lets someone recognise their own phone in a
-                room where four are connected. Worth the third line here. */}
-            <span className="dj-chip-sub">Unclaimed · {play.device.mac_hint}</span>
-          </span>
+      <span className="dj-chip is-unclaimed">
+        <span className="jersey is-sm" aria-hidden="true">?</span>
+        <span className="stack dj-chip-who">
+          <span className="t-chrome dj-chip-label">Now on aux</span>
+          <span className="dj-chip-name">{play.device.alias ?? "Unknown phone"}</span>
+          {/* The hint is what lets someone recognise their own phone in a
+              room where four are connected. Worth the third line here. */}
+          <span className="dj-chip-sub">Unclaimed · {play.device.mac_hint}</span>
         </span>
-        <button className="btn-quiet" onClick={onClaim}>
+        <button className="btn-quiet dj-chip-action" onClick={onClaim}>
           Whose phone is this?
         </button>
       </span>

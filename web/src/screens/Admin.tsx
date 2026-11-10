@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError } from "./../api";
+import { ApiError, errorMessage } from "./../api";
 import { Banner, Fold as Section, Spinner, artworkSrc, formatWhen, useConfirm } from "./../components";
 import { useNavigate } from "./../router";
 import { cacheTheme } from "./../theme";
@@ -312,17 +312,30 @@ function Roster({ call }: { call: Call }) {
       setLast("");
       setJersey("");
       load();
-    } catch {
-      setError("That player already exists.");
+    } catch (e) {
+      // Only a 409 is a duplicate. A 400 carries the server's reason (an
+      // invalid name or number); anything else is just a failure.
+      setError(
+        e instanceof ApiError && e.status === 409
+          ? "That player already exists."
+          : e instanceof ApiError && e.status === 400
+            ? e.message
+            : "Could not add that player.",
+      );
     }
   };
 
   const toggle = async (u: AdminUser) => {
-    await call(`/api/admin/users/${u.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ active: !u.active }),
-    });
-    load();
+    setError(null);
+    try {
+      await call(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: !u.active }),
+      });
+      load();
+    } catch (e) {
+      setError(errorMessage(e, u.active ? "Could not deactivate that player" : "Could not restore that player"));
+    }
   };
 
   // Deactivate is still the right tool for someone who left the team — it
@@ -443,8 +456,13 @@ function Devices({ call }: { call: Call }) {
   useEffect(load, [load]);
 
   const unclaim = async (d: AdminDevice) => {
-    await call(`/api/admin/devices/${d.mac_hash}/unclaim`, { method: "POST" });
-    load();
+    setError(null);
+    try {
+      await call(`/api/admin/devices/${d.mac_hash}/unclaim`, { method: "POST" });
+      load();
+    } catch (e) {
+      setError(errorMessage(e, "Could not un-claim that phone"));
+    }
   };
 
   // For clearing out noise: a visitor's phone, a laptop that paired once. The
@@ -633,11 +651,32 @@ function Pairings({ call }: { call: Call }) {
   );
 }
 
+/**
+ * The words a coach sees for each command, on the buttons and in the history
+ * alike. The history used to print the protocol name ("run repair") for a
+ * button that says "Try to fix it".
+ */
+const COMMAND_LABELS: Record<string, string> = {
+  "report-full": "Check it",
+  "run-repair": "Try to fix it",
+  "restart-listener": "Restart the app",
+  reboot: "Reboot the box",
+  "update-software": "Update speaker software",
+  "scan-speakers": "Scan for speakers",
+  "report-status": "Quick check",
+  "forget-selected-phone": "Forget the selected phone",
+};
+
+function commandLabel(cmd: string): string {
+  return COMMAND_LABELS[cmd] ?? cmd.replace(/-/g, " ");
+}
+
 function Plays({ call }: { call: Call }) {
   const { confirm, dialog } = useConfirm();
   const [plays, setPlays] = useState<AdminPlay[] | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(() => {
     call<{ plays: AdminPlay[]; total: number }>("/api/admin/plays")
@@ -658,8 +697,14 @@ function Plays({ call }: { call: Call }) {
       danger: true,
     });
     if (!ok) return;
-    await call(`/api/admin/plays/${p.id}/void`, { method: "POST" });
-    load();
+    setError(null);
+    setNote(null);
+    try {
+      await call(`/api/admin/plays/${p.id}/void`, { method: "POST" });
+      load();
+    } catch (e) {
+      setError(errorMessage(e, "Could not void that song"));
+    }
   };
 
   // For the end of a test run or the start of a season. The leaderboards are
@@ -678,13 +723,16 @@ function Plays({ call }: { call: Call }) {
     });
     if (!ok) return;
     setError(null);
+    setNote(null);
     try {
       const r = await call<{ voided: number; spared: number }>(
         "/api/admin/plays/void-all",
         { method: "POST" },
       );
+      // A success with a footnote, not an error: the open song is spared on
+      // purpose.
       if (r.spared) {
-        setError(
+        setNote(
           `Cleared ${r.voided}. The song on the speaker right now was left alone — clear again once it finishes.`,
         );
       }
@@ -712,6 +760,7 @@ function Plays({ call }: { call: Call }) {
     >
       {dialog}
       {error && <Banner kind="bad">{error}</Banner>}
+      {note && <Banner kind="info">{note}</Banner>}
       {!plays ? (
         <Spinner />
       ) : plays.length === 0 ? (
@@ -1201,10 +1250,10 @@ function Speaker({ call }: { call: Call }) {
    * thoroughness is a choice nobody wants to make while a speaker is dead.
    */
   const ACTIONS: { cmd: string; label: string; sub: string; danger?: boolean }[] = [
-    { cmd: "report-full", label: "Check it", sub: "Full diagnostic. Safe while music is playing." },
-    { cmd: "run-repair", label: "Try to fix it", sub: "Restarts Bluetooth and the services. Stops the music." , danger: true },
-    { cmd: "restart-listener", label: "Restart the app", sub: "Just the listener. Usually enough.", danger: true },
-    { cmd: "reboot", label: "Reboot the box", sub: "Last resort. About a minute offline.", danger: true },
+    { cmd: "report-full", label: COMMAND_LABELS["report-full"], sub: "Full diagnostic. Safe while music is playing." },
+    { cmd: "run-repair", label: COMMAND_LABELS["run-repair"], sub: "Restarts Bluetooth and the services. Stops the music." , danger: true },
+    { cmd: "restart-listener", label: COMMAND_LABELS["restart-listener"], sub: "Just the listener. Usually enough.", danger: true },
+    { cmd: "reboot", label: COMMAND_LABELS["reboot"], sub: "Last resort. About a minute offline.", danger: true },
   ];
 
   const send = async (cmd: string, label: string) => {
@@ -1400,7 +1449,7 @@ function Speaker({ call }: { call: Call }) {
               <div key={c.id} className="row is-expandable">
                 <div className="row-head">
                   <span className="row-main">
-                    <span className="row-title">{c.command.replace(/-/g, " ")}</span>
+                    <span className="row-title">{commandLabel(c.command)}</span>
                     <span className="row-sub">
                       {label(c)} · {formatWhen(c.created_at)}
                       {summary ? ` · ${summary}` : ""}

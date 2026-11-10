@@ -747,6 +747,20 @@ input {
   font-weight: 400;
 }
 
+/* Takes the row's spare width so a long phone name ellipsises before the
+   claim button is squeezed. */
+.dj-chip-who {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.dj-chip-action {
+  flex: none;
+  max-width: 40%;
+  text-align: right;
+}
+
 .dj-chip.is-unclaimed .jersey {
   background: var(--hairline);
   color: var(--muted);
@@ -809,7 +823,9 @@ input {
 
 .votes {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
+  row-gap: 8px;
   justify-content: center;
   /* Breathing room above the thumbs, on purpose. They are the only controls
      on the screen and everything above them is information — the gap is what
@@ -909,6 +925,16 @@ input {
 
 .vote-cap.is-mine {
   color: var(--ink);
+}
+
+/* Spans the whole .votes row under the two thumbs (it wraps onto its own
+   line). Only while you have not voted: after that, "Your vote" says it. */
+.vote-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .vote-pick {

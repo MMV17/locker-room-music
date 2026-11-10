@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { ApiError, post } from "./../api";
-import { navigate } from "./../router";
 import { Banner, Spinner } from "./../components";
 import { handedTeamCode } from "./../handoff";
 
@@ -73,7 +72,8 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
         last_name: last.trim(),
         jersey_number: jersey.trim() || null,
       });
-      navigate("/", true);
+      // Stay on whatever path brought them here: a link to /claim should land
+      // on Claim once they are in, not on Now Playing.
       onJoined();
     } catch (err) {
       // Branch on `code`, not the status. This endpoint returns 403 both for a
@@ -97,9 +97,18 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
   return (
     <main className="screen" style={{ paddingTop: 48, paddingBottom: 32 }}>
       <p className="t-label">{teamName}</p>
-      <h1 className="t-display" style={{ margin: "6px 0 26px" }}>
+      <h1 className="t-display" style={{ margin: step === "code" ? "6px 0 8px" : "6px 0 26px" }}>
         {step === "code" ? "Join" : "Who are you?"}
       </h1>
+      {/* What this is, before anything is asked of them - a new player arrives
+          here from a link with no idea. Only on the code step: the second
+          half is about the code. */}
+      {step === "code" && (
+        <p className="t-sub" style={{ margin: "0 0 24px" }}>
+          Vote on whatever&rsquo;s playing on the locker room speaker. Get the team code
+          from your coach.
+        </p>
+      )}
 
       {error && <Banner kind="bad">{error}</Banner>}
 
@@ -209,7 +218,7 @@ export function Join({ teamName, onJoined }: { teamName: string; onJoined: () =>
           </label>
 
           <button className="btn is-primary is-block" disabled={!ready || busy}>
-            {busy ? "Signing in…" : "Start rating"}
+            {busy ? "Signing in…" : "Start voting"}
           </button>
 
           <div className="center">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, patch, signOut } from "./../api";
 import { Banner } from "./../components";
-import { useNavigate } from "./../router";
+import { goBack, useNavigate } from "./../router";
 import { SpeakerSection } from "./SpeakerSection";
 
 export interface Me {
@@ -29,11 +29,10 @@ function SettingsFrame({
   title: string;
   children: React.ReactNode;
 }) {
-  const navigate = useNavigate();
   return (
     <main className="screen set">
       <header className="set-head">
-        <button className="btn-quiet" onClick={() => navigate("/")}>
+        <button className="btn-quiet" onClick={() => goBack("/")}>
           &lsaquo; Back
         </button>
         <h1 className="t-section">{title}</h1>
@@ -94,7 +93,7 @@ export function AccountScreen({ onSignedOut }: { onSignedOut: () => void }) {
             <span className="row-sub">Get credit for the songs you play</span>
           </span>
           <button className="btn" onClick={() => navigate("/claim")}>
-            Open
+            Claim
           </button>
         </div>
         <div className="row">
@@ -106,9 +105,8 @@ export function AccountScreen({ onSignedOut }: { onSignedOut: () => void }) {
         </div>
       </div>
       <p className="t-sub" style={{ marginTop: 10 }}>
-        There is no password yet &mdash; the team code is the only gate. Anyone who
-        has it can sign in under any name, which is the trade this made to avoid
-        a hand-maintained roster.
+        There&rsquo;s no password - anyone with the team code can sign in. If
+        someone signs in as you, tell your coach.
       </p>
     </SettingsFrame>
   );
@@ -224,7 +222,7 @@ function SignOutButton({
         }
       }}
     >
-      {busy ? "Signing out…" : "Change"}
+      {busy ? "Signing out…" : "Sign out"}
     </button>
   );
 }

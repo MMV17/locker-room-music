@@ -3,7 +3,7 @@ import { ApiError, errorMessage, post } from "./../api";
 import type { UnclaimedDevice } from "./../api";
 import { Banner, Empty, LoadError, Spinner, useLoad } from "./../components";
 import { IconPhone } from "./../icons";
-import { useNavigate } from "./../router";
+import { goBack, setFlash, useNavigate } from "./../router";
 
 /**
  * Claiming a device is what turns anonymous plays into DJ credit. It is also
@@ -27,6 +27,7 @@ export function Claim() {
     setError(null);
     try {
       await post(`/api/devices/${device.mac_hash}/claim`);
+      setFlash("Claimed - your songs now count for you");
       navigate("/");
     } catch (e) {
       // 401 is App's: it is already returning to Join.
@@ -78,8 +79,11 @@ export function Claim() {
 
   return (
     <main className="screen">
-      <header className="screen-head">
-        <h1 className="t-display">Claim</h1>
+      <header className="set-head">
+        <button className="btn-quiet" onClick={() => goBack("/settings/account")}>
+          &lsaquo; Back
+        </button>
+        <h1 className="t-section">Claim your phone</h1>
       </header>
 
       {error && <Banner kind="bad">{error}</Banner>}
