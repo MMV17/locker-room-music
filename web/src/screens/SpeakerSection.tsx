@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { get, post, put, ApiError } from "./../api";
+import { errorMessage, get, post, put } from "./../api";
 import { Banner, Spinner } from "./../components";
 
 /**
@@ -95,7 +95,7 @@ export function SpeakerSection() {
       await post("/api/speakers/scan");
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Couldn't start a scan");
+      setError(errorMessage(e, "Couldn't start a scan"));
     } finally {
       setBusy(false);
     }
@@ -108,7 +108,7 @@ export function SpeakerSection() {
       await put("/api/speakers", { id });
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Couldn't change the speaker");
+      setError(errorMessage(e, "Couldn't change the speaker"));
     } finally {
       setBusy(false);
     }

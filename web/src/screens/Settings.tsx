@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, get, patch, signOut } from "./../api";
+import { errorMessage, get, patch, signOut } from "./../api";
 import { Banner } from "./../components";
 import { goBack, useNavigate } from "./../router";
 import { SpeakerSection } from "./SpeakerSection";
@@ -154,7 +154,7 @@ function ProfileForm({ me, onSaved }: { me: Me | null; onSaved: (m: Me) => void 
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not save that");
+      setError(errorMessage(e, "Could not save that"));
     } finally {
       setBusy(false);
     }

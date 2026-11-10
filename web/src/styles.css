@@ -1045,10 +1045,6 @@ input {
   border-right-color: var(--ink-2);
 }
 
-.vote-window.is-shut {
-  opacity: 0.75;
-}
-
 .vote-locked {
   padding: 24px 0 8px;
 }
@@ -1496,17 +1492,6 @@ input {
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
-}
-
-/* The header strip above a dump: what it is, when it was collected, and
-   whether the command that produced it succeeded. */
-.dump-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 16px;
 }
 
 .dump-when {

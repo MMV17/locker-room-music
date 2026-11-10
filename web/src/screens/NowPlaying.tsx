@@ -903,7 +903,6 @@ function useElapsed(play: NowPlay): number {
       1000,
     );
     return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // played_ms_age_ms is included deliberately: it changes on every poll, so
     // the bar re-anchors to the Pi's reading each time instead of drifting on
     // the client's own clock for the life of the song.
