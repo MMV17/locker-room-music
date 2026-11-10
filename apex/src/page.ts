@@ -41,6 +41,28 @@ export function escapeAttr(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * The app's palette, so the front door matches the black app it hands off to
+ * instead of a pale page that flashes to black on arrival. Same values as
+ * web/src/styles.css. Every text/background pairing on this page is checked
+ * against WCAG AA in test/apex.test.ts from this object, not from a comment.
+ */
+export const TOKENS = {
+  page: "#000000",
+  surface: "#121214",
+  ink: "#F8F2E9",
+  ink2: "#B3AEA8",
+  muted: "#9A9690",
+  hairline: "#232221",
+  /** Outlined control edge: 3.40:1 on page, 3.03:1 on surface (WCAG 1.4.11). */
+  control: "#63615D",
+  error: "#f42f2f",
+  gold: "#A98C5C",
+  onGold: "#12100C",
+} as const;
+
+const T = TOKENS;
+
 const CSS = `
 @font-face {
   font-family: "Outfit Variable";
@@ -54,15 +76,18 @@ const CSS = `
 }
 
 :root {
-  --page: #edf0f5;
-  --surface: #ffffff;
-  --ink: #14171c;
-  --ink-2: #4a515c;
-  --muted: #8a93a0;
-  --hairline: #e4e8ee;
-  --error: #dc2626;
-  --shadow: 0 8px 28px rgba(20, 23, 28, 0.07), 0 2px 6px rgba(20, 23, 28, 0.04);
+  --page: ${T.page};
+  --surface: ${T.surface};
+  --ink: ${T.ink};
+  --ink-2: ${T.ink2};
+  --muted: ${T.muted};
+  --hairline: ${T.hairline};
+  --control: ${T.control};
+  --error: ${T.error};
+  --gold: ${T.gold};
+  --on-gold: ${T.onGold};
   --safe-b: env(safe-area-inset-bottom, 0px);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -84,10 +109,8 @@ body {
 
 .wrap { width: 100%; max-width: 400px; text-align: center; }
 
-/* There is deliberately no logo. The AuxGoat mark is cream and gold on solid
-   black, 87% of the artwork is that black field, and it cannot sit on a pale
-   page — it was tried in the app header and rejected. The wordmark in type
-   carries this instead, and is the most obviously adjustable thing here. */
+/* The wordmark in type, not the logo image: one less request on campus wifi,
+   and it is the most obviously adjustable thing here. */
 .mark {
   margin: 0;
   font-size: clamp(44px, 13vw, 60px);
@@ -98,11 +121,12 @@ body {
 
 .tagline { margin: 10px 0 0; color: var(--ink-2); font-size: 17px; text-wrap: balance; }
 
+/* A hairline, not a drop shadow: on black a shadow is invisible. */
 .form {
   margin-top: 32px;
   background: var(--surface);
+  border: 1px solid var(--hairline);
   border-radius: 20px;
-  box-shadow: var(--shadow);
   padding: 22px 20px;
   text-align: left;
 }
@@ -129,18 +153,18 @@ body {
   text-transform: uppercase;
   color: var(--ink);
   background: var(--page);
-  border: 1px solid var(--hairline);
+  /* --control, not --hairline: the field's edge is how you find it. */
+  border: 1px solid var(--control);
   border-radius: 12px;
   padding: 14px 16px;
   outline: none;
 }
 
-.input:focus { border-color: var(--ink); background: var(--surface); }
+.input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(169, 140, 92, 0.25); }
 
 .error { margin: 12px 0 0; color: var(--error); font-size: 14px; font-weight: 500; }
 
-/* Filled with --ink, not a team colour. There is no team at the apex, so the
-   page carries no accent at all rather than borrowing one school's. */
+/* The app's bronze, not a team colour: there is no team at the apex. */
 .btn {
   display: block;
   width: 100%;
@@ -148,17 +172,18 @@ body {
   font: inherit;
   font-size: 17px;
   font-weight: 600;
-  color: var(--surface);
-  background: var(--ink);
+  color: var(--on-gold);
+  background: var(--gold);
   border: 0;
   border-radius: 12px;
   padding: 15px 16px;
   min-height: 52px;
   cursor: pointer;
-  box-shadow: var(--shadow);
 }
 
 .btn:active { transform: translateY(1px); }
+
+.btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 
 /* The "required" attribute already stops an empty submission natively. This
    only makes the button look the way it behaves. It stays clickable so the
@@ -169,7 +194,6 @@ body {
 .form:has(.input:invalid) .btn {
   background: var(--hairline);
   color: var(--muted);
-  box-shadow: none;
   cursor: not-allowed;
 }
 
@@ -198,7 +222,9 @@ export function renderLanding(rejected: string | null, message?: string): string
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#EDF0F5">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon-180.png" sizes="180x180">
 <meta name="format-detection" content="telephone=no">
 <meta name="description" content="AuxGoat — vote on what&rsquo;s playing in your locker room. Enter your team code to find your team.">
 <title>AuxGoat</title>

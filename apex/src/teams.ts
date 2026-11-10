@@ -100,6 +100,16 @@ const TEAMS = new Map<string, Team>([
  * else. A synchronous signature would make it a change at every call site,
  * which is the friction that keeps a placeholder in place for a year.
  */
+/**
+ * Every origin /go can redirect a form submission to. The landing page's CSP
+ * form-action must list them all: Chrome applies form-action to the redirects
+ * that follow a form submit, so a school missing here would be blocked at the
+ * last hop. Derived from TEAMS so adding a school cannot forget it.
+ */
+export function teamOrigins(): string[] {
+  return [...new Set([...TEAMS.values()].map((t) => new URL(t.url).origin))];
+}
+
 export async function resolveTeam(_env: Env, code: string): Promise<Team | null> {
   return TEAMS.get(normalizeTeamCode(code)) ?? null;
 }

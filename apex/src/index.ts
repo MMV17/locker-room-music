@@ -17,12 +17,44 @@
  */
 
 import type { Env } from "./types";
-import { resolveTeam } from "./teams";
+import { resolveTeam, teamOrigins } from "./teams";
 import { renderLanding } from "./page";
 import { normalizeTeamCode } from "../../backend/src/crypto";
 
 const APEX = "auxgoat.com";
 const WWW = `www.${APEX}`;
+
+/**
+ * The landing page's policy. No scripts at all; inline CSS only; images and
+ * the font from here; the form may go to /go here and to every school /go
+ * redirects to (see teamOrigins).
+ */
+export function landingCsp(): string {
+  return [
+    "default-src 'none'",
+    "style-src 'unsafe-inline'",
+    "img-src 'self'",
+    "font-src 'self'",
+    "base-uri 'none'",
+    `form-action 'self' ${teamOrigins().join(" ")}`,
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+/**
+ * On every response this Worker writes. Static files under ./public are
+ * served by Cloudflare without invoking the Worker, so these cannot reach
+ * them from here.
+ */
+function secure(res: Response): Response {
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.headers.set("X-Frame-Options", "DENY");
+  if (res.headers.get("content-type")?.startsWith("text/html")) {
+    res.headers.set("Content-Security-Policy", landingCsp());
+  }
+  return res;
+}
 
 function redirect(location: string): Response {
   return new Response(null, { status: 302, headers: { location } });
@@ -45,94 +77,98 @@ function html(body: string, status = 200): Response {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const url = new URL(req.url);
-
-    // One canonical host. Path and query survive, so a bookmarked
-    // www/go?code=... does not lose the code on the way through.
-    if (url.hostname === WWW) {
-      const to = new URL(url);
-      to.hostname = APEX;
-      return redirect(to.toString());
-    }
-
-    if (url.pathname === "/go") {
-      const code = url.searchParams.get("code") ?? "";
-      const team = await resolveTeam(env, code);
-      if (team) {
-        // team.url, not a URL built from the slug — see the comment on
-        // Team.url. The school's pretty hostname is filtered on its own campus.
-        //
-        // The code rides along in a FRAGMENT so the player types it once. A
-        // fragment is never sent to the server and never appears in a Referer
-        // header; the team app loads artwork via <img> from Deezer and iTunes,
-        // so a ?code= would hand the team code to Apple and Deezer with every
-        // cover it fetches.
-        //
-        // The destination still verifies it. This map and the school's
-        // TEAM_CODE secret are independent sources, so a rotated code would
-        // otherwise be waved through here and fail at the final submit —
-        // reviving the "sent back three fields later" bug that cost a real
-        // debugging session.
-        return redirect(`${team.url}#code=${encodeURIComponent(normalizeTeamCode(code))}`);
-      }
-
-      // Past this point the code was WRONG, and only wrong codes are counted.
-      //
-      // The apex answers "is this a valid team code?" to anyone who asks, and
-      // that code is currently the only gate on a school's data. Cloudflare's
-      // WAF rate limiting is a paid add-on on this plan, so the throttle lives
-      // here instead, on the Workers rate-limit binding.
-      //
-      // Counting only failures is what makes a low limit safe. A whole school
-      // shares one public IP on campus wifi, so throttling every /go would let
-      // 75 players arriving at the start of practice lock each other out.
-      // Legitimate players type a code that works; a brute-forcer is, by
-      // definition, generating misses.
-      if (env.RATE_LIMITER) {
-        const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
-        const { success } = await env.RATE_LIMITER.limit({ key: ip });
-        if (!success) {
-          return html(renderLanding(code, "Too many tries. Wait a minute and try again."), 429);
-        }
-      } else {
-        // Loud on purpose. The binding is optional so a local `wrangler dev`,
-        // or a rollback, degrades to no throttling rather than a 500 on every
-        // miss — but "degrades silently" was the wrong call for a security
-        // control and it cost real time: the throttle was deployed, did
-        // nothing, and there was no way to tell a missing binding from a
-        // working one. An absent limiter means this door is answering
-        // unlimited guesses at the only gate a school's data has.
-        //
-        // Visible with: cd apex && npx wrangler tail
-        console.error(
-          "RATE_LIMITER binding is MISSING — /go is answering unlimited guesses. " +
-            "Check [[unsafe.bindings]] in apex/wrangler.toml reached the deploy.",
-        );
-      }
-
-      // Back to the form with what they typed, so it can be corrected rather
-      // than retyped. encodeURIComponent is load-bearing, not tidiness: this
-      // string is attacker-controlled and goes into a response header, where a
-      // bare CRLF would split it.
-      return redirect(`/?e=${encodeURIComponent(code)}`);
-    }
-
-    if (url.pathname === "/") {
-      // `e` present at all — even empty — means /go just turned someone away.
-      return html(renderLanding(url.searchParams.get("e")));
-    }
-
-    // There is no API here at all — this Worker has no database to expose.
-    // Still answered explicitly rather than swept into the redirect below:
-    // anything programmatic that lands on /api/* deserves a 404 it can read,
-    // not a 302 into an HTML page.
-    if (url.pathname.startsWith("/api/")) {
-      return new Response(JSON.stringify({ error: "Not found" }), {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      });
-    }
-
-    return redirect("/");
+    return secure(await route(req, env));
   },
 };
+
+async function route(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
+
+  // One canonical host. Path and query survive, so a bookmarked
+  // www/go?code=... does not lose the code on the way through.
+  if (url.hostname === WWW) {
+    const to = new URL(url);
+    to.hostname = APEX;
+    return redirect(to.toString());
+  }
+
+  if (url.pathname === "/go") {
+    const code = url.searchParams.get("code") ?? "";
+    const team = await resolveTeam(env, code);
+    if (team) {
+      // team.url, not a URL built from the slug — see the comment on
+      // Team.url. The school's pretty hostname is filtered on its own campus.
+      //
+      // The code rides along in a FRAGMENT so the player types it once. A
+      // fragment is never sent to the server and never appears in a Referer
+      // header; the team app loads artwork via <img> from Deezer and iTunes,
+      // so a ?code= would hand the team code to Apple and Deezer with every
+      // cover it fetches.
+      //
+      // The destination still verifies it. This map and the school's
+      // TEAM_CODE secret are independent sources, so a rotated code would
+      // otherwise be waved through here and fail at the final submit —
+      // reviving the "sent back three fields later" bug that cost a real
+      // debugging session.
+      return redirect(`${team.url}#code=${encodeURIComponent(normalizeTeamCode(code))}`);
+    }
+
+    // Past this point the code was WRONG, and only wrong codes are counted.
+    //
+    // The apex answers "is this a valid team code?" to anyone who asks, and
+    // that code is currently the only gate on a school's data. Cloudflare's
+    // WAF rate limiting is a paid add-on on this plan, so the throttle lives
+    // here instead, on the Workers rate-limit binding.
+    //
+    // Counting only failures is what makes a low limit safe. A whole school
+    // shares one public IP on campus wifi, so throttling every /go would let
+    // 75 players arriving at the start of practice lock each other out.
+    // Legitimate players type a code that works; a brute-forcer is, by
+    // definition, generating misses.
+    if (env.RATE_LIMITER) {
+      const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
+      const { success } = await env.RATE_LIMITER.limit({ key: ip });
+      if (!success) {
+        return html(renderLanding(code, "Too many tries. Wait a minute and try again."), 429);
+      }
+    } else {
+      // Loud on purpose. The binding is optional so a local `wrangler dev`,
+      // or a rollback, degrades to no throttling rather than a 500 on every
+      // miss — but "degrades silently" was the wrong call for a security
+      // control and it cost real time: the throttle was deployed, did
+      // nothing, and there was no way to tell a missing binding from a
+      // working one. An absent limiter means this door is answering
+      // unlimited guesses at the only gate a school's data has.
+      //
+      // Visible with: cd apex && npx wrangler tail
+      console.error(
+        "RATE_LIMITER binding is MISSING — /go is answering unlimited guesses. " +
+          "Check [[unsafe.bindings]] in apex/wrangler.toml reached the deploy.",
+      );
+    }
+
+    // Back to the form with what they typed, so it can be corrected rather
+    // than retyped. encodeURIComponent is load-bearing, not tidiness: this
+    // string is attacker-controlled and goes into a response header, where a
+    // bare CRLF would split it.
+    return redirect(`/?e=${encodeURIComponent(code)}`);
+  }
+
+  if (url.pathname === "/") {
+    // `e` present at all — even empty — means /go just turned someone away.
+    return html(renderLanding(url.searchParams.get("e")));
+  }
+
+  // There is no API here at all — this Worker has no database to expose.
+  // Still answered explicitly rather than swept into the redirect below:
+  // anything programmatic that lands on /api/* deserves a 404 it can read,
+  // not a 302 into an HTML page.
+  if (url.pathname.startsWith("/api/")) {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  return redirect("/");
+}
