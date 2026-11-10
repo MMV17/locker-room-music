@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
-import { normalize } from "./trackKey";
 import { PI_COMMANDS, isPiCommand, normaliseMac, OFFLINE_AFTER_MS } from "./piControl";
+import { hasOutstandingCommand, queueCommand } from "./piCommands";
+import { identityKey } from "./roster";
+import { nowIso } from "./util";
 import { listReports } from "./piReports";
 import {
   listDevices,
@@ -16,8 +18,6 @@ import { isVoteWindowOpen } from "./voteWindow";
 import type { PlayRow } from "./types";
 
 export const admin = new Hono<{ Bindings: Env }>();
-
-const nowIso = () => new Date().toISOString();
 
 /**
  * Where the covers stand, and a few stored cover URLs for the Admin screen to
@@ -110,19 +110,7 @@ admin.post("/api/admin/artwork/retry", async (c) => {
   return c.json({ retried: results.length, found, remaining, next_offset: nextOffset, failures });
 });
 
-/* Roster CRUD */
-
-/**
- * The roster identity key: normalize(first)|normalize(last)|normalize(jersey).
- *
- * UNIQUE in the schema, and it is what makes a re-signup — cleared cookies, a
- * new phone, a reinstalled browser — find an existing player instead of
- * creating a second row and splitting their play history. Every writer of it
- * calls THIS, which is why the old "must stay identical to" note is gone:
- * signup, the admin rename and PATCH /api/me all share it now.
- */
-export const identityKey = (first: string, last: string, jersey: string | null) =>
-  `${normalize(first)}|${normalize(last)}|${normalize(jersey ?? "")}`;
+/* Roster CRUD. The identity key every writer shares lives in roster.ts. */
 
 admin.get("/api/admin/users", async (c) => {
   // The play and vote counts are not decoration: deleting a player is
@@ -406,14 +394,6 @@ admin.post("/api/admin/votes/:id/void", async (c) => {
    queue, so a mistyped name fails loudly at the point of entry rather than
    sitting queued forever waiting for a Pi that will refuse it. */
 
-/**
- * A dispatched command that has not reported back within this long is treated
- * as finished for queueing purposes. `reboot` never reports - the Pi is gone
- * before it can - so without this the first reboot would block every command
- * that followed it.
- */
-const STALE_DISPATCH_MS = 5 * 60_000;
-
 admin.get("/api/admin/pi/commands", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, command, created_at, dispatched_at, completed_at, ok, result
@@ -440,32 +420,12 @@ admin.post("/api/admin/pi/commands", async (c) => {
     return c.json({ error: `Unknown command. Allowed: ${PI_COMMANDS.join(", ")}` }, 400);
   }
 
-  // One outstanding command at a time. Queueing three reboots because the
-  // first appeared to do nothing would reboot the Pi three times.
-  //
-  // "Outstanding" excludes commands dispatched long ago and never reported.
-  // Without that escape hatch a Pi that died mid-command would block the
-  // queue forever - and `reboot` does exactly that every single time, because
-  // the process is killed before it can report back. One reboot used to
-  // wedge remote control permanently.
-  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
-  const outstanding = await c.env.DB.prepare(
-    `SELECT id FROM pi_commands
-      WHERE completed_at IS NULL
-        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
-  )
-    .bind(staleCutoff)
-    .first<{ id: string }>();
-  if (outstanding) {
+  // One outstanding command at a time - see hasOutstandingCommand.
+  if (await hasOutstandingCommand(c.env)) {
     return c.json({ error: "A command is already queued or running" }, 409);
   }
 
-  const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
-  )
-    .bind(id, b.command, nowIso())
-    .run();
+  const id = await queueCommand(c.env, b.command);
   return c.json({ ok: true, id, command: b.command });
 });
 
@@ -598,26 +558,13 @@ admin.post("/api/admin/pi/forget", async (c) => {
   // One outstanding command at a time, same rule and same stale-dispatch
   // escape hatch as /pi/commands. Checked BEFORE the target is written, so a
   // refused request does not leave a target pointing somewhere unexpected.
-  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
-  const outstanding = await c.env.DB.prepare(
-    `SELECT id FROM pi_commands
-      WHERE completed_at IS NULL
-        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
-  )
-    .bind(staleCutoff)
-    .first<{ id: string }>();
-  if (outstanding) {
+  if (await hasOutstandingCommand(c.env)) {
     return c.json({ error: "A command is already queued or running" }, 409);
   }
 
   await setForgetTarget(c.env, mac);
 
-  const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
-  )
-    .bind(id, "forget-selected-phone", nowIso())
-    .run();
+  const id = await queueCommand(c.env, "forget-selected-phone");
 
   return c.json({ ok: true, id, mac });
 });

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
+import { getSetting, putSetting } from "./settings";
 
 export const theme = new Hono<{ Bindings: Env }>();
 
@@ -22,22 +23,6 @@ export const DEFAULT_TEAM_NAME = "AuxGoat";
  * property on every page, so an unvalidated string here was a stylesheet
  * injection into the whole site.
  */
-
-async function getSetting(env: Env, key: string): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(key)
-    .first<{ value: string }>();
-  return row?.value ?? null;
-}
-
-async function putSetting(env: Env, key: string, value: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(key, value, new Date().toISOString())
-    .run();
-}
 
 /**
  * Unauthenticated on purpose: the join screen renders before any session

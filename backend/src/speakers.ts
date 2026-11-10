@@ -19,6 +19,7 @@ import {
   RELAY_SPEAKER_NAME_KEY,
 } from "./piControl";
 import type { Env } from "./types";
+import { getSetting, putSetting, putSettingStmt } from "./settings";
 
 /** One device as the Pi's scan reported it. */
 export type ScannedDevice = {
@@ -126,22 +127,17 @@ export async function listDevices(env: Env): Promise<ScannedDevice[]> {
  * and the Pi would not be able to tell it from a malformed response.
  */
 export async function getSelection(env: Env): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(RELAY_SPEAKER_MAC_KEY)
-    .first<{ value: string }>();
-  if (!row) return null;
+  const value = await getSetting(env, RELAY_SPEAKER_MAC_KEY);
+  if (value === null) return null;
   // Anything stored that is not a MAC and not the empty string is treated as
   // "off" rather than passed on. The write path validates, so this only fires
   // on a hand-edited row - and sending junk down would just be refused by the
   // Pi anyway, silently.
-  return row.value === "" ? "" : (normaliseMac(row.value) ?? "");
+  return value === "" ? "" : (normaliseMac(value) ?? "");
 }
 
 export async function getSelectionName(env: Env): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(RELAY_SPEAKER_NAME_KEY)
-    .first<{ value: string }>();
-  return row?.value ?? null;
+  return getSetting(env, RELAY_SPEAKER_NAME_KEY);
 }
 
 /**
@@ -157,14 +153,8 @@ export async function setSelection(
 ): Promise<void> {
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    ).bind(RELAY_SPEAKER_MAC_KEY, mac ?? "", now),
-    env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    ).bind(RELAY_SPEAKER_NAME_KEY, name ?? "", now),
+    putSettingStmt(env, RELAY_SPEAKER_MAC_KEY, mac ?? "", now),
+    putSettingStmt(env, RELAY_SPEAKER_NAME_KEY, name ?? "", now),
   ]);
 }
 
@@ -179,14 +169,12 @@ export async function setSelection(
  * pending".
  */
 export async function getForgetTarget(env: Env): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(FORGET_DEVICE_MAC_KEY)
-    .first<{ value: string }>();
-  if (!row || row.value === "") return null;
+  const value = await getSetting(env, FORGET_DEVICE_MAC_KEY);
+  if (!value) return null;
   // Anything stored that is not a MAC is dropped rather than passed on. The
   // write path validates, so this only fires on a hand-edited row — and the
   // Pi would refuse it anyway, which is the point of validating twice.
-  return normaliseMac(row.value);
+  return normaliseMac(value);
 }
 
 /**
@@ -197,10 +185,5 @@ export async function getForgetTarget(env: Env): Promise<string | null> {
  * row here is harmless — nothing acts on it until somebody presses the button.
  */
 export async function setForgetTarget(env: Env, mac: string | null): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(FORGET_DEVICE_MAC_KEY, mac ?? "", new Date().toISOString())
-    .run();
+  await putSetting(env, FORGET_DEVICE_MAC_KEY, mac ?? "");
 }

@@ -14,17 +14,14 @@
  * way in.
  */
 import { Hono } from "hono";
-import type { Env } from "./types";
+import type { AppEnv, Env } from "./types";
 import { isMacAddress, normaliseMac } from "./piControl";
 import { listDevices, getSelection, getSelectionName, setSelection } from "./speakers";
+import { hasOutstandingCommand, queueCommand, staleCutoff } from "./piCommands";
+import { putSetting } from "./settings";
 import { mayChangeSpeaker, isScanFresh, scanProblem, isAudiblyPlaying } from "./speakerAccess";
 
-export const speakerRoutes = new Hono<{
-  Bindings: Env;
-  Variables: { userId: string };
-}>();
-
-const STALE_DISPATCH_MS = 5 * 60_000;
+export const speakerRoutes = new Hono<AppEnv>();
 
 speakerRoutes.get("/api/speakers", async (c) => {
   const userId = c.get("userId");
@@ -46,14 +43,13 @@ speakerRoutes.get("/api/speakers", async (c) => {
 
   // Is there a scan running right now? The player needs to be told to wait
   // rather than left looking at a stale list wondering if the button worked.
-  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
   const running = await c.env.DB.prepare(
     `SELECT dispatched_at FROM pi_commands
       WHERE command = 'scan-speakers' AND completed_at IS NULL
         AND (dispatched_at IS NULL OR dispatched_at > ?)
       ORDER BY created_at DESC LIMIT 1`,
   )
-    .bind(staleCutoff)
+    .bind(staleCutoff())
     .first<{ dispatched_at: string | null }>();
 
   const scannedAt = await c.env.DB.prepare(
@@ -96,15 +92,9 @@ speakerRoutes.post("/api/speakers/scan", async (c) => {
   // The same one-at-a-time rule the admin channel uses. Queueing three scans
   // because the first appeared to do nothing would occupy the radio for a
   // minute, and the radio is also carrying the music.
-  const staleCutoff = new Date(Date.now() - STALE_DISPATCH_MS).toISOString();
-  const outstanding = await c.env.DB.prepare(
-    `SELECT id FROM pi_commands
-      WHERE completed_at IS NULL
-        AND (dispatched_at IS NULL OR dispatched_at > ?)`,
-  )
-    .bind(staleCutoff)
-    .first<{ id: string }>();
-  if (outstanding) return c.json({ error: "The AuxGoat is already busy" }, 409);
+  if (await hasOutstandingCommand(c.env)) {
+    return c.json({ error: "The AuxGoat is already busy" }, 409);
+  }
 
   // The Pi refuses to scan under a playing song (it would stutter the room).
   // Say so now, rather than after a minute of "Waiting for the AuxGoat…" that
@@ -120,12 +110,7 @@ speakerRoutes.post("/api/speakers/scan", async (c) => {
     );
   }
 
-  const id = crypto.randomUUID();
-  await c.env.DB.prepare(
-    "INSERT INTO pi_commands (id, command, created_at) VALUES (?, ?, ?)",
-  )
-    .bind(id, "scan-speakers", new Date().toISOString())
-    .run();
+  const id = await queueCommand(c.env, "scan-speakers");
   return c.json({ ok: true, id });
 });
 
@@ -170,11 +155,5 @@ speakerRoutes.put("/api/speakers", async (c) => {
  * room where 75 people can all reach the control.
  */
 async function recordWhoChangedIt(env: Env, userId: string): Promise<void> {
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES ('relay_speaker_set_by', ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(userId, now)
-    .run();
+  await putSetting(env, "relay_speaker_set_by", userId);
 }

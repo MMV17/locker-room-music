@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import type { Env } from "./types";
+import type { AppEnv } from "./types";
 
-export const devices = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
+export const devices = new Hono<AppEnv>();
 
 /**
  * Devices seen playing that nobody has claimed yet. The mac_hint (last two

@@ -22,6 +22,7 @@
  */
 import { lookupArtwork } from "./artwork";
 import type { Env } from "./types";
+import { getSetting, putSetting } from "./settings";
 
 /**
  * Same as the Admin retry. A lookup is up to 5 fetches (2 Deezer, iTunes,
@@ -56,30 +57,14 @@ export function isResting(restUntil: string | null | undefined, now = Date.now()
   return Number.isFinite(t) && now < t;
 }
 
-async function readSetting(env: Env, key: string): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
-    .bind(key)
-    .first<{ value: string }>();
-  return row?.value ?? null;
-}
-
-async function writeSetting(env: Env, key: string, value: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  )
-    .bind(key, value, new Date().toISOString())
-    .run();
-}
-
 export async function healArtwork(
   env: Env,
   now = Date.now(),
 ): Promise<{ tried: number; found: number; offset: number; next: number; resting?: boolean }> {
-  if (isResting(await readSetting(env, REST_KEY), now)) {
+  if (isResting(await getSetting(env, REST_KEY), now)) {
     return { tried: 0, found: 0, offset: 0, next: 0, resting: true };
   }
-  const offset = Math.max(0, Math.floor(Number(await readSetting(env, CURSOR_KEY)) || 0));
+  const offset = Math.max(0, Math.floor(Number(await getSetting(env, CURSOR_KEY)) || 0));
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, t.title, t.artist, t.album FROM tracks t
@@ -102,10 +87,10 @@ export async function healArtwork(
   }
 
   const next = nextHealOffset(offset, results.length, found);
-  await writeSetting(env, CURSOR_KEY, String(next));
+  await putSetting(env, CURSOR_KEY, String(next));
   // A short batch is the end of a pass. Rest before the next one.
   if (results.length < HEAL_BATCH) {
-    await writeSetting(env, REST_KEY, new Date(now + HEAL_REST_MS).toISOString());
+    await putSetting(env, REST_KEY, new Date(now + HEAL_REST_MS).toISOString());
   }
 
   return { tried: results.length, found, offset, next };

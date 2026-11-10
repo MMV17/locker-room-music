@@ -390,25 +390,19 @@ R3=$(curl -s -b "$JAR" "$BASE/api/plays/$PLAY3/results")
 echo "$R3" | grep -q '"upvotes":0' \
   && ok "vote cast before claiming is voided by the claim" || bad "claim backfill void" "$R3"
 
-echo "== team colour =="
+echo "== team name =="
+# There is no team colour any more (see src/theme.ts): the palette is fixed,
+# so the name is the only thing an operator can set. The colour checks that
+# used to live here tested a validator that was deleted with it.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$BASE/api/admin/theme" \
-  -H 'content-type: application/json' -d '{"primary":"#862633"}')
+  -H 'content-type: application/json' -d '{"team_name":"Crusaders"}')
 [ "$code" = "401" ] && ok "theme write without admin password is rejected" || bad "theme auth" "got $code"
 
-for BADCOLOR in 'red' '#fff' '#f00; background:url(x)' 'javascript:alert(1)'; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$BASE/api/admin/theme" \
-    -H "X-Admin-Password: $ADMIN_PW" -H 'content-type: application/json' \
-    -d "{\"primary\":\"$BADCOLOR\"}")
-  # This value is written into a CSS custom property on every page, so
-  # anything but a six-digit hex is a stylesheet injection.
-  [ "$code" = "400" ] && ok "theme rejects '$BADCOLOR'" || bad "theme rejects '$BADCOLOR'" "got $code"
-done
-
 curl -s -X PUT "$BASE/api/admin/theme" -H "X-Admin-Password: $ADMIN_PW" \
-  -H 'content-type: application/json' -d '{"primary":"#862633","team_name":"Crusaders"}' > /dev/null
+  -H 'content-type: application/json' -d '{"team_name":"Crusaders"}' > /dev/null
 THEME=$(curl -s "$BASE/api/theme")
-echo "$THEME" | grep -q '"primary":"#862633"' \
-  && ok "valid hex round-trips through the public endpoint" || bad "theme round-trip" "$THEME"
+echo "$THEME" | grep -q '"primary"' \
+  && bad "theme carries no colour" "$THEME" || ok "theme carries no colour"
 echo "$THEME" | grep -q '"team_name":"Crusaders"' \
   && ok "team name round-trips" || bad "team name" "$THEME"
 

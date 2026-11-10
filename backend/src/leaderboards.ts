@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import type { Env } from "./types";
+import type { AppEnv } from "./types";
 import { trackScore, djScore, DJ_MIN_PLAYS, playsUntilQualified } from "./scoring";
 import { fallbackColor } from "./crypto";
 import { tallyVisible } from "./voteWindow";
 
-export const boards = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
+export const boards = new Hono<AppEnv>();
 
 /** Leaderboards are cached at the edge; they are never polled (spec 8). */
 const CACHE_60S = { "Cache-Control": "public, max-age=60" };
