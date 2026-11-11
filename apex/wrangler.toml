@@ -54,7 +54,7 @@ routes = [
   { pattern = "www.auxgoat.com", custom_domain = true }
 ]
 
-# The Outfit subset, and nothing else. The page itself is rendered by the
+# Two font subsets and two icons, and nothing else. The page itself is rendered by the
 # Worker with its CSS inlined, which costs ~1.2 kB gzipped and saves a round
 # trip — worth more than the bytes on the wifi this product lives on.
 #

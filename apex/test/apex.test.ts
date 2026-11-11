@@ -40,11 +40,15 @@ describe("landing page", () => {
     expect(html).not.toContain('rel="stylesheet"');
   });
 
-  it("asks for the font it actually ships", async () => {
+  it("asks for the fonts it actually ships", async () => {
     const html = await (await get("https://auxgoat.com/")).text();
-    expect(html).toContain("/fonts/outfit-latin.woff2");
-    // Text must paint immediately in a fallback rather than hang on 32 kB.
-    expect(html).toContain("font-display: swap");
+    // The same pair as the team app, and exactly the two files committed in
+    // public/fonts. A name here with no file behind it falls back to a system
+    // face without any error, so if a font is ever swapped, change both.
+    const asked = [...html.matchAll(/url\("(\/fonts\/[^"]+)"\)/g)].map((m) => m[1]).sort();
+    expect(asked).toEqual(["/fonts/manrope-latin.woff2", "/fonts/unbounded-latin.woff2"]);
+    // Text must paint immediately in a fallback rather than hang on the fonts.
+    expect(html.match(/font-display: swap/g)?.length).toBe(2);
   });
 
   it("shows no error and an empty field on a clean load", async () => {
