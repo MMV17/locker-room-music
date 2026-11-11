@@ -1,11 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "@fontsource-variable/outfit";
-// Archivo carries every piece of chrome: eyebrows, timers, jersey numbers,
-// vote captions. Self-hosted like Outfit rather than pulled from Google —
-// the campus filter blocks whole domains, and a webfont that fails to load
-// on the one network this is used on is not a webfont.
-import "@fontsource-variable/archivo";
+// Two faces: Unbounded for headings, Manrope for everything else (see the
+// "Type" section of the redesign layer in styles.css). Self-hosted rather
+// than pulled from Google - the campus filter blocks whole domains, and a
+// webfont that fails to load on the one network this is used on is not a
+// webfont. The page's CSP also only allows fonts from this origin.
+import "@fontsource-variable/unbounded";
+import "@fontsource-variable/manrope";
 import "./styles.css";
 import { App } from "./App";
 import { watchForStaleBuild } from "./staleBuild";

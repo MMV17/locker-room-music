@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { errorMessage, get, patch, signOut } from "./../api";
-import { Banner } from "./../components";
-import { goBack, useNavigate } from "./../router";
+import { Banner, PushedPage } from "./../components";
+import { IconChevron, IconPhone, IconShield, IconSignOut, IconSpeaker, IconUser } from "./../icons";
+import { useNavigate } from "./../router";
 import { SpeakerSection } from "./SpeakerSection";
 
 export interface Me {
@@ -22,6 +23,7 @@ export interface Me {
  * arrive already knowing which of the three you came for.
  */
 
+/** Every page under You: the shared pushed-page shell, back to the hub. */
 function SettingsFrame({
   title,
   children,
@@ -30,43 +32,130 @@ function SettingsFrame({
   children: React.ReactNode;
 }) {
   return (
-    <main className="screen set">
-      <header className="set-head">
-        <button className="btn-quiet" onClick={() => goBack("/")}>
-          &lsaquo; Back
-        </button>
-        <h1 className="t-section">{title}</h1>
-      </header>
+    <PushedPage title={title} back="/settings" className="set">
       {children}
+    </PushedPage>
+  );
+}
+
+const SpeakerGlyph = ({ className }: { className?: string }) => <IconSpeaker className={className} />;
+
+function useMe(): [Me | null, (m: Me) => void] {
+  const [me, setMe] = useState<Me | null>(null);
+  useEffect(() => {
+    get<Me>("/api/me").then(setMe).catch(() => setMe(null));
+  }, []);
+  return [me, setMe];
+}
+
+function Identity({ me }: { me: Me | null }) {
+  const initials = me ? (me.first_name[0] ?? "") + (me.last_name[0] ?? "") : "";
+  return (
+    <div className="prof">
+      {/* The number is the badge, because that is how a locker room identifies
+          people; the name confirms it is you. */}
+      <span className="prof-badge" aria-hidden="true">
+        {me?.jersey_number || initials || "?"}
+      </span>
+      <span className="prof-who">
+        <span className="prof-name">{me ? `${me.first_name} ${me.last_name}` : "\u2026"}</span>
+        <span className="t-chrome prof-sub">
+          {me?.jersey_number ? `Number ${me.jersey_number}` : "No number set"}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * You - the fourth tab, and the front door to everything about the person
+ * holding the phone.
+ *
+ * This replaced a gear on the Now Playing screen. The pages it leads to were
+ * always there; what was missing was a place that listed them, reachable from
+ * anywhere, with a way back that worked the same every time.
+ */
+export function YouScreen({ onSignedOut }: { onSignedOut: () => void }) {
+  const navigate = useNavigate();
+  const [me] = useMe();
+  const [busy, setBusy] = useState(false);
+  const rows = [
+    { to: "/settings/profile", title: "Profile", sub: "Your name and number", Icon: IconUser },
+    { to: "/claim", title: "Your phone", sub: "Get credit for the songs you play", Icon: IconPhone },
+    { to: "/settings/speaker", title: "Speaker", sub: "What the box plays through", Icon: SpeakerGlyph },
+  ];
+  return (
+    <main className="screen you">
+      <header className="screen-head">
+        <h1 className="t-display">You</h1>
+      </header>
+      <button className="you-card" onClick={() => navigate("/settings/profile")}>
+        <Identity me={me} />
+        <IconChevron className="group-chev" />
+      </button>
+
+      <div className="group">
+        {rows.map(({ to, title, sub, Icon }) => (
+          <button key={to} className="group-row" onClick={() => navigate(to)}>
+            <span className="group-icon" aria-hidden="true">
+              <Icon />
+            </span>
+            <span className="group-main">
+              <span className="group-title">{title}</span>
+              <span className="group-sub">{sub}</span>
+            </span>
+            <IconChevron className="group-chev" />
+          </button>
+        ))}
+      </div>
+
+      <div className="group">
+        <button className="group-row" onClick={() => navigate("/settings/account")}>
+          <span className="group-icon" aria-hidden="true">
+            <IconShield />
+          </span>
+          <span className="group-main">
+            <span className="group-title">Account</span>
+            <span className="group-sub">How signing in works</span>
+          </span>
+          <IconChevron className="group-chev" />
+        </button>
+        <button
+          className="group-row is-danger"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await signOut();
+            } finally {
+              onSignedOut();
+              navigate("/");
+            }
+          }}
+        >
+          <span className="group-icon" aria-hidden="true">
+            <IconSignOut />
+          </span>
+          <span className="group-main">
+            <span className="group-title">{busy ? "Signing out\u2026" : "Sign out"}</span>
+            <span className="group-sub">Sign in as someone else</span>
+          </span>
+        </button>
+      </div>
+
+      <a className="you-coach" href="/admin">
+        Coach? Open the admin screen
+      </a>
     </main>
   );
 }
 
 /** Your name, your number, and the profile header that shows them. */
 export function ProfileScreen() {
-  const [me, setMe] = useState<Me | null>(null);
-  useEffect(() => {
-    get<Me>("/api/me").then(setMe).catch(() => setMe(null));
-  }, []);
-  const initials = me ? (me.first_name[0] ?? "") + (me.last_name[0] ?? "") : "";
-
+  const [me, setMe] = useMe();
   return (
     <SettingsFrame title="Profile">
-      {/* The number is the badge, because that is how a locker room identifies
-          people; the name confirms it is you. */}
-      <div className="prof">
-        <span className="prof-badge" aria-hidden="true">
-          {me?.jersey_number || initials || "?"}
-        </span>
-        <span className="prof-who">
-          <span className="prof-name">
-            {me ? `${me.first_name} ${me.last_name}` : "\u2026"}
-          </span>
-          <span className="t-chrome prof-sub">
-            {me?.jersey_number ? `Number ${me.jersey_number}` : "No number set"}
-          </span>
-        </span>
-      </div>
+      <Identity me={me} />
       <ProfileForm me={me} onSaved={setMe} />
     </SettingsFrame>
   );
@@ -75,7 +164,7 @@ export function ProfileScreen() {
 /** Everything about what the box plays through. */
 export function SpeakerScreen() {
   return (
-    <SettingsFrame title="Speaker & connection">
+    <SettingsFrame title="Speaker">
       <SpeakerSection />
     </SettingsFrame>
   );
@@ -87,15 +176,6 @@ export function AccountScreen({ onSignedOut }: { onSignedOut: () => void }) {
   return (
     <SettingsFrame title="Account">
       <div className="rows">
-        <div className="row">
-          <span className="row-main">
-            <span className="row-title">Claim your phone</span>
-            <span className="row-sub">Get credit for the songs you play</span>
-          </span>
-          <button className="btn" onClick={() => navigate("/claim")}>
-            Claim
-          </button>
-        </div>
         <div className="row">
           <span className="row-main">
             <span className="row-title">Sign out</span>

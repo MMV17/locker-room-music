@@ -108,7 +108,7 @@ body {
 body {
   background: var(--page);
   color: var(--ink);
-  font-family: "Outfit Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-text);
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
@@ -211,18 +211,17 @@ input {
 }
 
 .t-chrome {
-  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-text);
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-variant-numeric: tabular-nums;
 }
 
-/* Archivo carries the chrome, Outfit carries the content. That split IS the
-   design: labels, timers, jersey numbers and vote captions are one voice, and
-   the song is another. Tracking is 0.18-0.20em because Archivo is
-   normal-width — the 0.16em that suited a monospace trial read gappy here,
-   and the 0.22em that suited a condensed face read loose. */
+/* The small upper-case labels ("chrome") used to be set in their own face.
+   Since the 2026-11 redesign they are Manrope like the rest of the text,
+   told apart by weight and tracking instead; the faces and their settings
+   are in the "Type" section of the redesign layer near the end of this file. */
 
 /* The reference's letterspaced "SONGS" device, reused for every small label. */
 .t-label {
@@ -811,7 +810,7 @@ input {
 .np-time {
   font-size: 12px;
   color: var(--muted);
-  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-text);
   letter-spacing: 0.10em;
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -916,32 +915,14 @@ input {
   height: 13px;
 }
 
-/* The caption under each thumb — the third signal, and the only one that
-   says in words which way you voted. */
-.vote-cap {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.vote-cap.is-mine {
-  color: var(--ink);
-}
-
-/* Spans the whole .votes row under the two thumbs (it wraps onto its own
-   line). Only while you have not voted: after that, "Your vote" says it. */
+/* The one line of words under the two thumbs (it wraps onto its own line).
+   Before a vote it explains the secrecy; after one it says the vote is in. */
 .vote-hint {
   flex-basis: 100%;
   margin: 0;
   font-size: 12px;
   color: var(--muted);
   text-align: center;
-}
-
-.vote-pick {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
 }
 
 .vote:disabled {
@@ -1731,7 +1712,7 @@ input {
   place-items: center;
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r-thumb);
-  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-text);
   font-size: 20px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -1837,6 +1818,996 @@ input {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 12px;
+}
+
+/* ==========================================================================
+ * THE 2026-11 REDESIGN LAYER
+ * ==========================================================================
+ *
+ * Everything from here to the fit rules below is the redesign: the surfaces,
+ * the motion, and the styles for the new navigation (labelled tab bar, the
+ * You hub, pushed pages, segmented switches). It sits AFTER the base rules so
+ * it can refine them without rewriting them, and BEFORE the fit rules and the
+ * short-screen block, which still have the last word on what fits where.
+ *
+ * Three ideas, applied everywhere:
+ *
+ *   DEPTH     Surfaces are a faint ivory tint with a 1px top highlight, not
+ *             flat #121214 boxes. The tab bar and sheets are glass.
+ *   MOTION    One curve (--spring, the iOS sheet curve) for anything that
+ *             travels, one (--bounce) for anything that answers a tap. Pages
+ *             slide or cross-fade by direction (router.ts sets data-motion).
+ *   TOUCH     Everything you can press visibly gives when pressed.
+ *
+ * The palette is unchanged, and so are the measured contrast rules it carries:
+ * text still uses --ink / --ink-2 / --muted / --gold and the *-ink vote
+ * colours. Anything translucent here was checked against the worst case
+ * behind it; the numbers are next to the rule.
+ * ========================================================================== */
+
+:root {
+  --r-card: 20px;
+  --r-art: 22px;
+  --r-thumb: 12px;
+  /* Two faces. Unbounded is wide and rounded and only ever sets a heading or
+     a name; Manrope sets everything that has to be read or pressed. Both are
+     self-hosted variable fonts (see main.tsx). */
+  --font-display: "Unbounded Variable", "Unbounded", ui-sans-serif, system-ui, sans-serif;
+  --font-text: "Manrope Variable", "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --gold-hi: #c9ac78;
+  /* Warm, not grey. Every raised surface and every button face is a tint of
+     the brand bronze rather than of ivory: on black, an ivory tint reads as
+     grey, which is exactly what made the first pass of this look cold. */
+  --tint: rgba(214, 186, 134, 0.05);
+  --tint-2: rgba(214, 186, 134, 0.1);
+  --glass: rgba(27, 22, 14, 0.88);
+  --glass-line: rgba(214, 186, 134, 0.2);
+  /* A pressable face: lit from above, bronze. The edge is 60% bronze, which
+     is 3.8:1 on black - the boundary of a control has to clear 3:1. */
+  --face: linear-gradient(180deg, rgba(214, 186, 134, 0.3), rgba(169, 140, 92, 0.1));
+  --face-edge: rgba(201, 172, 120, 0.6);
+  --face-shadow: inset 0 1px 0 rgba(255, 236, 200, 0.24), 0 10px 22px -12px rgba(0, 0, 0, 0.85);
+  --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+html {
+  background: #000;
+}
+
+/* A warm glow at the top of every page instead of a flat black field. Darkest
+   stop under body text is #0a0907, where --muted still measures 6.9:1. */
+body {
+  background: radial-gradient(120% 55% at 50% -10%, #1b160d 0%, #0a0907 40%, #000 72%) fixed #000;
+}
+
+/* ---- Touch: everything pressable gives ---------------------------------- */
+
+.btn,
+.btn-quiet,
+.back-btn,
+.np-gear,
+.np-speaker,
+.you-card,
+.group-row,
+.segmented-item,
+.tab,
+.nav-item {
+  transition:
+    transform 0.2s var(--spring),
+    background-color 0.2s ease,
+    color 0.2s ease,
+    opacity 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:active,
+.back-btn:active,
+.np-gear:active,
+.np-speaker:active,
+.you-card:active {
+  transform: scale(0.96);
+}
+
+.nav-item:active svg,
+.segmented-item:active,
+.tab:active {
+  transform: scale(0.92);
+}
+
+@media (hover: hover) {
+  .group-row:hover,
+  .you-card:hover {
+    background-color: var(--tint-2);
+  }
+
+  .nav-item:hover {
+    color: var(--ink);
+  }
+}
+
+/* ---- Type --------------------------------------------------------------- */
+
+/* Headings and names: Unbounded.
+ *
+ * It runs about a sixth wider than the face the 12/14/16/20/25/31 scale was
+ * drawn for and has a taller lower case, so each heading sits one notch down
+ * to carry the same weight on the page without pushing a long song title onto
+ * a second line:
+ *
+ *   display  31 -> 28      title  25 -> 21      section  20 -> 17
+ *
+ * Those three are the display column of the scale now. Everything set in
+ * Manrope stays on the original steps. */
+.t-display,
+.t-title,
+.t-section,
+.empty-title,
+.goat-line,
+.goat-word,
+.prof-name {
+  font-family: var(--font-display);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.t-display {
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.t-title {
+  font-size: 21px;
+}
+
+.t-section,
+.goat-line,
+.prof-name {
+  font-size: 17px;
+}
+
+/* Things you read in a list or press: Manrope, bold. */
+.row-title,
+.group-title,
+.dj-chip-name,
+.segmented-item,
+.tab,
+.btn,
+.jersey,
+.prof-badge,
+.row-rank,
+.row-score {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* The small upper-case labels: Manrope at its heaviest, tracked out. */
+.t-chrome,
+.t-label,
+.vote-window,
+.vote-window *,
+.prof-sub,
+.pop-state,
+.nav-label,
+.np-eyebrow-label {
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.screen-head {
+  margin: 8px 0 20px;
+}
+
+/* ---- The tab bar: glass, labelled, with one highlight that travels ------ */
+
+.nav {
+  gap: 2px;
+  padding: 6px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid var(--glass-line);
+  box-shadow:
+    inset 0 1px 0 rgba(248, 242, 233, 0.08),
+    0 18px 40px rgba(0, 0, 0, 0.6);
+  view-transition-name: nav;
+}
+
+.nav-item {
+  position: relative;
+  width: min(76px, 21vw);
+  height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: none;
+  border: 0;
+  color: var(--muted);
+}
+
+.nav-item.is-active {
+  color: var(--gold-hi);
+  background: none;
+}
+
+.nav-pill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(201, 172, 120, 0.24), rgba(169, 140, 92, 0.1));
+  box-shadow: inset 0 1px 0 rgba(248, 242, 233, 0.12);
+  view-transition-name: nav-pill;
+}
+
+.nav-item svg,
+.nav-label {
+  position: relative;
+}
+
+.nav-item svg {
+  width: 21px;
+  height: 21px;
+}
+
+.nav-label {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* ---- Pushed pages: one header, one way back ----------------------------- */
+
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 24px;
+}
+
+.back-btn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--face);
+  border: 1px solid var(--face-edge);
+  box-shadow: var(--face-shadow);
+  color: var(--gold-hi);
+}
+
+.back-btn svg {
+  width: 20px;
+  height: 20px;
+  transform: scaleX(-1);
+}
+
+/* ---- Segmented switches (Songs | DJs, Season | Month | Week) ------------ */
+
+.segmented,
+.tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--seg-n, 2), minmax(0, 1fr));
+  gap: 0;
+  padding: 4px;
+  margin: 0 0 20px;
+  overflow: visible;
+  border-radius: 16px;
+  background: rgba(214, 186, 134, 0.07);
+  border: 1px solid var(--glass-line);
+}
+
+/* The thumb. It is one element that slides, which is the whole difference
+   between a switch and three buttons that change colour.
+
+   Two strengths, so two switches stacked on Charts do not shout over each
+   other: the main one (Songs | DJs) is solid gold with dark lettering - the
+   same face as a primary button, 6.7:1 at its darkest - and the filter under
+   it (Season | Month | Week) is the bronze tint with gold lettering. */
+.segmented::before,
+.tabs::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / var(--seg-n, 2));
+  border-radius: 12px;
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  transition: transform 0.45s var(--spring);
+}
+
+.segmented::before {
+  background: linear-gradient(180deg, #d9be8b 0%, #b3965f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    0 10px 20px -8px rgba(169, 140, 92, 0.65);
+}
+
+.tabs::before {
+  background: linear-gradient(180deg, rgba(214, 186, 134, 0.4), rgba(169, 140, 92, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 236, 200, 0.3),
+    inset 0 0 0 1px rgba(201, 172, 120, 0.4),
+    0 8px 16px -8px rgba(0, 0, 0, 0.7);
+}
+
+.segmented-item,
+.tab {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  padding: 0 8px;
+  background: none;
+  border: 0;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.segmented-item.is-active {
+  color: #12100c;
+}
+
+.tab.is-active {
+  color: var(--gold-hi);
+}
+
+.tab.is-active::after {
+  display: none;
+}
+
+/* ---- Lists -------------------------------------------------------------- */
+
+.rows,
+.group,
+.card {
+  background: var(--tint);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-card);
+  box-shadow: inset 0 1px 0 rgba(248, 242, 233, 0.05);
+}
+
+.rows,
+.group {
+  overflow: hidden;
+}
+
+.row-art {
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* The score as a chip. Text colours are unchanged (--up-ink / --down-ink);
+   on these tints over the list surface they measure 5.0:1 and 4.7:1. */
+.row-score {
+  flex: none;
+  min-width: 48px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-score.is-pos {
+  background: var(--up-soft);
+}
+
+.row-score.is-neg {
+  background: var(--down-soft);
+}
+
+.row-score.is-flat {
+  background: var(--tint-2);
+}
+
+/* Podium. Only where there is a rank to show. */
+.rows > .row:nth-child(1) .row-rank {
+  color: var(--gold-hi);
+  font-weight: 700;
+}
+
+.rows > .row:nth-child(2) .row-rank {
+  color: #c9ccd1;
+  font-weight: 700;
+}
+
+.rows > .row:nth-child(3) .row-rank {
+  color: #c08f66;
+  font-weight: 700;
+}
+
+/* ---- You ---------------------------------------------------------------- */
+
+.you-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  margin: 0 0 20px;
+  text-align: left;
+  color: var(--ink);
+  border-radius: var(--r-card);
+  background: linear-gradient(135deg, rgba(201, 172, 120, 0.18), rgba(248, 242, 233, 0.04) 62%);
+  border: 1px solid rgba(201, 172, 120, 0.3);
+  box-shadow: inset 0 1px 0 rgba(248, 242, 233, 0.08);
+}
+
+.you-card .prof {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.group {
+  margin: 0 0 20px;
+}
+
+.group-row {
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--ink);
+}
+
+.group-row + .group-row {
+  border-top: 1px solid rgba(248, 242, 233, 0.07);
+}
+
+.group-row:active {
+  background-color: var(--tint-2);
+}
+
+.group-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--gold-soft);
+  color: var(--gold-hi);
+}
+
+.group-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.group-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.group-sub {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.group-chev {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.group-row.is-danger .group-title {
+  color: var(--down-ink);
+}
+
+.group-row.is-danger .group-icon {
+  background: var(--down-soft);
+  color: var(--down-ink);
+}
+
+.you-coach {
+  display: block;
+  padding: 14px 12px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---- Controls ----------------------------------------------------------- */
+
+.btn {
+  background: var(--face);
+  border-color: var(--face-edge);
+  box-shadow: var(--face-shadow);
+}
+
+.btn.is-primary {
+  background: linear-gradient(180deg, #d9be8b, #a98c5c);
+  border-color: transparent;
+  color: #12100c;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 12px 26px -10px rgba(169, 140, 92, 0.6);
+}
+
+.btn:disabled,
+.btn.is-primary:disabled {
+  background: rgba(169, 140, 92, 0.12);
+  border-color: rgba(169, 140, 92, 0.28);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.input {
+  border-radius: 14px;
+  background: rgba(248, 242, 233, 0.05);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.banner {
+  border-radius: 14px;
+}
+
+/* ---- Now Playing -------------------------------------------------------- */
+
+/* The cover, blown up and blurred into the room's colour. Worst case behind
+   text is a pure white cover: at 40% image opacity under a 60%+ scrim that is
+   #292929 at the very top, where --muted measures 5.0:1 and --gold 4.6:1, and
+   it only gets darker further down the screen. */
+.np-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  animation: ambient-in 1.4s ease both;
+}
+
+.np-ambient img,
+.np-ambient-fill {
+  position: absolute;
+  top: -20%;
+  left: -20%;
+  width: 140%;
+  height: 140%;
+  object-fit: cover;
+  filter: blur(64px) saturate(1.5);
+  opacity: 0.4;
+}
+
+.np-ambient::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.6) 0%,
+    rgba(0, 0, 0, 0.7) 40%,
+    rgba(0, 0, 0, 0.94) 76%,
+    #000 100%
+  );
+}
+
+@keyframes ambient-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.np-art {
+  border: 1px solid rgba(248, 242, 233, 0.1);
+  box-shadow:
+    0 30px 60px -18px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+/* Paused: the cover steps back, the way a record lifts off the platter. */
+.np-artwrap {
+  transition: transform 0.7s var(--spring);
+}
+
+.np-artwrap.is-paused {
+  transform: scale(0.86);
+}
+
+.np-artwrap.is-paused .np-art {
+  filter: saturate(0.75) brightness(0.85);
+  transition: filter 0.7s ease;
+}
+
+.np-gear,
+.np-speaker {
+  border-radius: 50%;
+  background: var(--face);
+  border: 1px solid var(--face-edge);
+  box-shadow: var(--face-shadow);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.np-gear {
+  color: var(--gold-hi);
+}
+
+/* The one loud moment on the DJ chart gets the same gold edge as your own
+   card on the You tab: the two places the product talks about a person. */
+.goat {
+  border-radius: var(--r-card);
+  background: linear-gradient(135deg, rgba(201, 172, 120, 0.18), rgba(248, 242, 233, 0.04) 62%);
+  border: 1px solid rgba(201, 172, 120, 0.3);
+  box-shadow: inset 0 1px 0 rgba(248, 242, 233, 0.08);
+}
+
+.np-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(214, 186, 134, 0.22);
+}
+
+/* Number badges: the same bronze face as the buttons, so a jersey number is
+   not a grey box. */
+.jersey,
+.prof-badge {
+  background: var(--face);
+  border-color: var(--face-edge);
+  box-shadow: var(--face-shadow);
+}
+
+.np-bar-fill {
+  border-radius: inherit;
+  background: linear-gradient(90deg, #a98c5c, #e3c690);
+}
+
+/* The two buttons the product exists for. Each is its own colour even at
+   rest - deep red, deep green, lit from the top-left like a pressed gem - and
+   answers a tap by brightening to the full --down / --up, growing a ring and
+   popping. The chosen fills start at the original tokens, so the white glyph
+   stays above 4.5:1; the resting edges (#c74a4a, #3a9b62) are 4.4:1 and 6:1
+   on black, clear of the 3:1 a control boundary needs. */
+.vote {
+  color: var(--ink);
+  border: 1px solid transparent;
+  transition:
+    transform 0.28s var(--bounce),
+    box-shadow 0.3s ease,
+    background 0.3s ease,
+    border-color 0.3s ease,
+    opacity 0.3s ease,
+    filter 0.3s ease;
+}
+
+.vote:active {
+  transform: scale(0.9);
+}
+
+.vote.is-down {
+  background: radial-gradient(120% 120% at 30% 16%, #7a2424 0%, #4a1515 48%, #200909 100%);
+  border-color: #c74a4a;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.4),
+    0 16px 30px -14px rgba(220, 38, 38, 0.6);
+}
+
+.vote.is-up {
+  background: radial-gradient(120% 120% at 30% 16%, #1f6a3d 0%, #124126 48%, #081d11 100%);
+  border-color: #3a9b62;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.4),
+    0 16px 30px -14px rgba(18, 136, 62, 0.65);
+}
+
+.vote.is-on-up {
+  background: radial-gradient(120% 120% at 30% 16%, var(--up) 0%, #0f7435 55%, #0a5226 100%);
+  border-color: #4fd083;
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.25),
+    0 0 0 7px rgba(18, 136, 62, 0.22),
+    0 20px 40px -12px rgba(18, 136, 62, 0.85);
+  animation: vote-pop 0.55s var(--bounce);
+}
+
+.vote.is-on-down {
+  background: radial-gradient(120% 120% at 30% 16%, var(--down) 0%, #b81f1f 55%, #861515 100%);
+  border-color: #ff7a7a;
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.25),
+    0 0 0 7px rgba(220, 38, 38, 0.22),
+    0 20px 40px -12px rgba(220, 38, 38, 0.85);
+  animation: vote-pop 0.55s var(--bounce);
+}
+
+/* Once there is a vote, the thumb that was not chosen steps back. */
+.votes.has-vote .vote[aria-pressed="false"] {
+  opacity: 0.7;
+  filter: saturate(0.7);
+}
+
+@keyframes vote-pop {
+  0% {
+    transform: scale(0.84);
+  }
+
+  55% {
+    transform: scale(1.12);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ---- Sheets, popovers, the reveal --------------------------------------- */
+
+.pop {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid var(--glass-line);
+  border-radius: 18px;
+  transform-origin: top left;
+  animation: pop-in 0.3s var(--spring) both;
+}
+
+.pop.is-right {
+  transform-origin: top right;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(-6px);
+  }
+}
+
+.modal-backdrop {
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  animation: fade-in 0.25s ease both;
+}
+
+.modal {
+  border-radius: 24px;
+  animation: sheet-up 0.45s var(--spring) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.97);
+  }
+}
+
+.reveal {
+  background: rgba(0, 0, 0, 0.8);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  backdrop-filter: blur(28px) saturate(1.4);
+  animation: reveal-rise 0.55s var(--spring) both;
+}
+
+@keyframes reveal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(40px) scale(0.98);
+  }
+}
+
+.reveal-art {
+  box-shadow: 0 30px 60px -18px rgba(0, 0, 0, 0.9);
+}
+
+.reveal-score {
+  animation: score-pop 0.7s var(--bounce) 0.18s both;
+}
+
+@keyframes score-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+/* ---- Motion: lists arrive, pages travel --------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .rows > .row,
+  .group > .group-row,
+  .you-card {
+    animation: rise 0.5s var(--spring) both;
+  }
+
+  .rows > .row:nth-child(2),
+  .group > .group-row:nth-child(2) {
+    animation-delay: 30ms;
+  }
+
+  .rows > .row:nth-child(3),
+  .group > .group-row:nth-child(3) {
+    animation-delay: 60ms;
+  }
+
+  .rows > .row:nth-child(4) {
+    animation-delay: 90ms;
+  }
+
+  .rows > .row:nth-child(5) {
+    animation-delay: 120ms;
+  }
+
+  .rows > .row:nth-child(6) {
+    animation-delay: 150ms;
+  }
+
+  .rows > .row:nth-child(7) {
+    animation-delay: 180ms;
+  }
+
+  .rows > .row:nth-child(8) {
+    animation-delay: 210ms;
+  }
+
+  .rows > .row:nth-child(n + 9) {
+    animation-delay: 240ms;
+  }
+
+  /* Page transitions. router.ts wraps every navigation in a view transition
+     and names its direction in data-motion; these pick the animation.
+     Browsers without the API simply change page. */
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.42s;
+    animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  html[data-motion="push"]::view-transition-old(root) {
+    animation-name: vt-out-left;
+  }
+
+  html[data-motion="push"]::view-transition-new(root) {
+    animation-name: vt-in-right;
+  }
+
+  html[data-motion="pop"]::view-transition-old(root) {
+    animation-name: vt-out-right;
+    z-index: 1;
+  }
+
+  html[data-motion="pop"]::view-transition-new(root) {
+    animation-name: vt-in-left;
+  }
+
+  html[data-motion="tab-next"]::view-transition-old(root),
+  html[data-motion="tab-prev"]::view-transition-old(root),
+  html[data-motion="tab-next"]::view-transition-new(root),
+  html[data-motion="tab-prev"]::view-transition-new(root) {
+    animation-duration: 0.3s;
+  }
+
+  html[data-motion="tab-next"]::view-transition-old(root) {
+    animation-name: vt-fade-out-left;
+  }
+
+  html[data-motion="tab-next"]::view-transition-new(root) {
+    animation-name: vt-fade-in-right;
+  }
+
+  html[data-motion="tab-prev"]::view-transition-old(root) {
+    animation-name: vt-fade-out-right;
+  }
+
+  html[data-motion="tab-prev"]::view-transition-new(root) {
+    animation-name: vt-fade-in-left;
+  }
+
+  /* The bar itself never moves; only its highlight travels. */
+  ::view-transition-old(nav),
+  ::view-transition-new(nav) {
+    animation: none;
+  }
+
+  ::view-transition-old(nav) {
+    display: none;
+  }
+
+  ::view-transition-group(nav-pill) {
+    animation-duration: 0.42s;
+    animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+@keyframes vt-out-left {
+  to {
+    opacity: 0.3;
+    transform: translateX(-28%);
+  }
+}
+
+@keyframes vt-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes vt-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes vt-in-left {
+  from {
+    opacity: 0.3;
+    transform: translateX(-28%);
+  }
+}
+
+@keyframes vt-fade-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+}
+
+@keyframes vt-fade-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+@keyframes vt-fade-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+@keyframes vt-fade-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
 }
 
 /* ------------------------------------------------------------------ *

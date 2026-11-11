@@ -1,5 +1,5 @@
 import type { DjEntry, MyDj } from "./../api";
-import { Empty, LoadError, Spinner, formatScore, scoreClass, useLoad } from "./../components";
+import { ChartsPage, Empty, LoadError, Spinner, formatScore, scoreClass, useLoad } from "./../components";
 
 /**
  * Qualified DJs only. Anyone under the threshold is absent from this list
@@ -17,10 +17,7 @@ export function DjBoard() {
   const tiedAtTop = !!djs && djs.length > 1 && djs[1].score === djs[0].score;
 
   return (
-    <main className="screen">
-      <header className="screen-head">
-        <h1 className="t-display">DJs</h1>
-      </header>
+    <ChartsPage value="djs">
 
       {mine && !mine.qualified && (
         <div className="card" style={{ marginBottom: 20 }}>
@@ -99,6 +96,6 @@ export function DjBoard() {
           ))}
         </div>
       )}
-    </main>
+    </ChartsPage>
   );
 }

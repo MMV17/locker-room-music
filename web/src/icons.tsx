@@ -106,3 +106,30 @@ export const IconSpeaker = ({ className, muted }: P & { muted?: boolean }) => (
     )}
   </svg>
 );
+
+/** A chevron. Points right; the back button flips it with CSS. */
+export const IconChevron = ({ className }: P) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path {...stroke} d="M9.5 5.5 16 12l-6.5 6.5" />
+  </svg>
+);
+
+export const IconUser = ({ className }: P) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <circle {...stroke} cx="12" cy="8.5" r="3.5" />
+    <path {...stroke} d="M5 19.5c1.2-3.2 3.8-4.8 7-4.8s5.800 1.600 7 4.800" />
+  </svg>
+);
+
+export const IconSignOut = ({ className }: P) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path {...stroke} d="M14 5H7.500A1.500 1.500 0 0 0 6 6.500v11A1.500 1.500 0 0 0 7.500 19H14" />
+    <path {...stroke} d="M11 12h9m-3-3 3 3-3 3" />
+  </svg>
+);
+
+export const IconShield = ({ className }: P) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path {...stroke} d="M12 3.500 5.500 6v5.500c0 4 2.700 7.300 6.500 9 3.800-1.700 6.500-5 6.500-9V6L12 3.500Z" />
+  </svg>
+);

@@ -21,6 +21,12 @@ const devCsp: Plugin = {
 export default defineConfig({
   plugins: [react(), devCsp],
   build: {
+    // Never inline a font into the stylesheet. Vite turns any asset under 4 kB
+    // into a data: URI, and two of the smaller font subsets fall under that -
+    // but the page's Content-Security-Policy only allows fonts from this
+    // origin (font-src 'self'), so an inlined one is silently blocked and the
+    // text falls back to a system face. Everything else keeps the default.
+    assetsInlineLimit: (file: string) => (file.endsWith(".woff2") ? false : undefined),
     // One entry, and the output bundle is named `index-<hash>.js` because of
     // it. If a second page is ever added here via rollupOptions.input, the
     // app's entry key MUST be `index`: staleBuild.ts locates the running and

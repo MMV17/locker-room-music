@@ -6,11 +6,13 @@ import {
   Banner,
   Empty,
   Spinner,
+  artworkSrc,
   formatClock,
   formatWhen,
+  tapFeedback,
   useEscape,
 } from "./../components";
-import { IconCheck, IconSettings, IconSpeaker, ThumbDown, ThumbUp } from "./../icons";
+import { IconCheck, IconSpeaker, IconUser, ThumbDown, ThumbUp } from "./../icons";
 import { clearFlash, peekFlash, useNavigate } from "./../router";
 import { Reveal, markRevealed, wasRevealed } from "./Reveal";
 
@@ -76,11 +78,9 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   const [error, setError] = useState<string | null>(null);
   const [voteFailed, setVoteFailed] = useState(false);
   const [speakerOpen, setSpeakerOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   // Read out by the polite live region: the song changing, a vote landing.
   const [announce, setAnnounce] = useState("");
   const speakerBtn = useRef<HTMLButtonElement>(null);
-  const gearBtn = useRef<HTMLButtonElement>(null);
   const lastPlayId = useRef<string | null | undefined>(undefined);
   // A confirmation carried over from the previous screen (a claim).
   const [flash, setFlashShown] = useState(peekFlash);
@@ -294,7 +294,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
         if (q && q.playId === playId && q.value === value) queuedVote.current = null;
         if (!queuedVote.current && alive.current) {
           voteGuard.current = { playId, value, throughSeq: issued.current };
-          setAnnounce(`Vote counted: ${value === 1 ? "Fire" : "Nah"}`);
+          setAnnounce(`Vote counted: ${value === 1 ? "thumbs up" : "thumbs down"}`);
           setVoteFailed(false);
           setError(null);
         }
@@ -321,6 +321,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
   };
 
   const vote = (value: 1 | -1) => {
+    tapFeedback(12);
     if (!play) return;
     if (!voting.current) revertTo.current = play.my_vote;
     // Optimistic: the control fills before the network confirms (spec 9.1).
@@ -393,22 +394,12 @@ export function NowPlaying({ teamName }: { teamName: string }) {
               "settings". Identity moved into the Profile screen. */}
           <span className="np-gear-wrap">
             <button
-              ref={gearBtn}
               className="np-gear"
-              aria-label={`Settings. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((v) => !v)}
+              aria-label={`You. Signed in as ${now?.viewer?.name ?? "unknown"}.`}
+              onClick={() => navigate("/settings")}
             >
-              <IconSettings />
+              <IconUser />
             </button>
-            {menuOpen && (
-              <SettingsMenu
-                onClose={() => {
-                  setMenuOpen(false);
-                  gearBtn.current?.focus();
-                }}
-              />
-            )}
           </span>
         </header>
 
@@ -429,10 +420,11 @@ export function NowPlaying({ teamName }: { teamName: string }) {
              (display: contents) and become the two columns on a wide,
              tall screen. */
           <div className="np-stage">
+            <Ambient src={play.artwork_url} fallback={play.artwork_fallback} />
             {/* The artwork is the ONLY thing on this screen that gives. See
                 .np-artwrap — everything else has a job that does not
                 compress, so the art takes what is left and no more. */}
-            <div className="np-artwrap">
+            <div className={"np-artwrap" + (play.play_status === "paused" ? " is-paused" : "")}>
               <Artwork
                 className="np-art"
                 src={play.artwork_url}
@@ -465,60 +457,45 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             ) : iAmDj ? (
               <DjStanding myDj={myDj} />
             ) : (
-              /* Each thumb is a button plus a caption, and the selected one
-                 also gets a check badge. Three signals, only one of which is
-                 colour — the old version said "you voted" by turning green or
-                 red and nothing else, which is the exact pairing that is
-                 hardest to tell apart. See .vote.is-on-up in styles.css. */
-              <div className="votes">
-                <span className="vote-pick">
-                  <button
-                    className={"vote" + (play.my_vote === -1 ? " is-on-down" : "")}
-                    aria-label="Thumbs down"
-                    aria-pressed={play.my_vote === -1}
-                    onClick={() => vote(-1)}
-                  >
-                    <ThumbDown />
-                    {play.my_vote === -1 && (
-                      <span className="vote-check">
-                        <IconCheck />
-                      </span>
-                    )}
-                  </button>
-                  <span
-                    className={
-                      "t-chrome vote-cap" + (play.my_vote === -1 ? " is-mine" : "")
-                    }
-                  >
-                    {play.my_vote === -1 ? "Your vote" : "Nah"}
-                  </span>
-                </span>
+              /* Two thumbs and one line of words under them. The chosen thumb
+                 says so three ways, only one of which is colour: it brightens
+                 and gains a ring, it gets a check badge, and the line beneath
+                 changes to say the vote is in. The other thumb steps back.
+                 (There used to be a word under each - "Nah" / "Fire" - which
+                 the thumbs already say.) See .vote.is-on-up in styles.css. */
+              <div className={"votes" + (play.my_vote != null ? " has-vote" : "")}>
+                <button
+                  className={"vote is-down" + (play.my_vote === -1 ? " is-on-down" : "")}
+                  aria-label="Thumbs down"
+                  aria-pressed={play.my_vote === -1}
+                  onClick={() => vote(-1)}
+                >
+                  <ThumbDown />
+                  {play.my_vote === -1 && (
+                    <span className="vote-check">
+                      <IconCheck />
+                    </span>
+                  )}
+                </button>
 
-                <span className="vote-pick">
-                  <button
-                    className={"vote" + (play.my_vote === 1 ? " is-on-up" : "")}
-                    aria-label="Thumbs up"
-                    aria-pressed={play.my_vote === 1}
-                    onClick={() => vote(1)}
-                  >
-                    <ThumbUp />
-                    {play.my_vote === 1 && (
-                      <span className="vote-check">
-                        <IconCheck />
-                      </span>
-                    )}
-                  </button>
-                  <span
-                    className={
-                      "t-chrome vote-cap" + (play.my_vote === 1 ? " is-mine" : "")
-                    }
-                  >
-                    {play.my_vote === 1 ? "Your vote" : "Fire"}
-                  </span>
-                </span>
-                {play.my_vote == null && (
-                  <p className="vote-hint">Votes stay secret until the song ends</p>
-                )}
+                <button
+                  className={"vote is-up" + (play.my_vote === 1 ? " is-on-up" : "")}
+                  aria-label="Thumbs up"
+                  aria-pressed={play.my_vote === 1}
+                  onClick={() => vote(1)}
+                >
+                  <ThumbUp />
+                  {play.my_vote === 1 && (
+                    <span className="vote-check">
+                      <IconCheck />
+                    </span>
+                  )}
+                </button>
+                <p className="vote-hint">
+                  {play.my_vote == null
+                    ? "Votes stay secret until the song ends"
+                    : "Your vote is in \u00b7 tap the other to change it"}
+                </p>
               </div>
             )}
             </div>
@@ -658,45 +635,6 @@ function WaitingBanner({ aux }: { aux: AuxState | null }) {
   );
 }
 
-/**
- * The gear's menu. Three destinations, each its own screen.
- *
- * A menu rather than a straight jump to a settings page: you almost always
- * arrive here knowing which of the three you came for, and a page that is
- * three things at once makes you read all of them first. Anchored to the right
- * rail because that is the icon it belongs to.
- */
-function SettingsMenu({ onClose }: { onClose: () => void }) {
-  const navigate = useNavigate();
-  const go = (to: string) => {
-    onClose();
-    navigate(to);
-  };
-  useEscape(onClose);
-  const items: [string, string, string][] = [
-    ["/settings/profile", "Profile", "Your name and number"],
-    ["/settings/speaker", "Speaker & connection", "What the box plays through"],
-    ["/settings/account", "Account", "Claim a phone, sign out"],
-  ];
-  return (
-    <>
-      <button className="pop-scrim" aria-label="Close" onClick={onClose} />
-      {/* A labelled group of buttons, not role="menu": a menu promises
-          arrow-key navigation, and this has none. */}
-      <div className="pop is-right" role="group" aria-label="Settings">
-        {items.map(([to, label, sub]) => (
-          <button key={to} className="pop-item" onClick={() => go(to)}>
-            <span>
-              {label}
-              <span className="pop-item-sub">{sub}</span>
-            </span>
-            <span className="pop-item-mark" aria-hidden="true" />
-          </button>
-        ))}
-      </div>
-    </>
-  );
-}
 
 /**
  * What the speaker icon actually means, on tap.
@@ -1022,6 +960,29 @@ function DjStanding({ myDj }: { myDj: MyDj | null }) {
                 myDj.plays_until_qualified === 1 ? "song" : "songs"
               } to qualify for the DJ board.`}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The room behind the artwork: the cover itself, blown up and blurred until it
+ * is only colour. It is what makes the screen belong to THIS song rather than
+ * being the same black rectangle for every one. With no cover, the fallback
+ * colour does the same job more quietly.
+ *
+ * Purely decorative, fixed behind everything, and keyed by source so a new
+ * song fades its own colours in.
+ */
+function Ambient({ src, fallback }: { src: string | null; fallback: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
+  return (
+    <div className="np-ambient" aria-hidden="true" key={src ?? fallback}>
+      {src && !failed ? (
+        <img src={artworkSrc(src)} alt="" onError={() => setFailed(true)} />
+      ) : (
+        <div className="np-ambient-fill" style={{ background: fallback }} />
+      )}
     </div>
   );
 }

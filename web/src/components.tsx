@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { errorMessage, get } from "./api";
-import { IconDjs, IconHistory, IconNow, IconSongs } from "./icons";
-import { useNavigate, useRoute } from "./router";
+import { IconChevron, IconHistory, IconNow, IconSongs, IconUser } from "./icons";
+import { goBack, navigate as go, useNavigate, useRoute } from "./router";
 
 /**
  * Artwork, or the server's per-track colour block when iTunes found nothing.
@@ -243,11 +243,28 @@ export function formatWhen(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+/**
+ * Four places, each with a name under its icon.
+ *
+ * Until the 2026-11 redesign this was four bare icons (Now, Songs, DJs,
+ * History) and everything else - your profile, your phone, the speaker, signing
+ * out - hung off a gear that only existed on one screen. So the bar now holds
+ * the four things a person comes here to DO, and the fourth is the front door
+ * to everything about them:
+ *
+ *   Now      what is playing, and your vote
+ *   Charts   Songs and DJs, one switch apart
+ *   History  what played
+ *   You      profile, your phone, the speaker, account
+ *
+ * `match` decides which tab is lit on a page that is not a tab root, so a
+ * pushed page still shows where you are.
+ */
 const NAV = [
-  { path: "/", label: "Now playing", Icon: IconNow },
-  { path: "/songs", label: "Songs", Icon: IconSongs },
-  { path: "/djs", label: "DJs", Icon: IconDjs },
-  { path: "/history", label: "History", Icon: IconHistory },
+  { path: "/", label: "Now", Icon: IconNow, match: (r: string) => r === "/" },
+  { path: "/songs", label: "Charts", Icon: IconSongs, match: (r: string) => r === "/songs" || r === "/djs" },
+  { path: "/history", label: "History", Icon: IconHistory, match: (r: string) => r === "/history" },
+  { path: "/settings", label: "You", Icon: IconUser, match: (r: string) => r.startsWith("/settings") || r === "/claim" },
 ];
 
 export function Nav() {
@@ -255,18 +272,181 @@ export function Nav() {
   const navigate = useNavigate();
   return (
     <nav className="nav" aria-label="Sections">
-      {NAV.map(({ path, label, Icon }) => (
+      {NAV.map(({ path, label, Icon, match }) => {
+        const active = match(route);
+        return (
+          <button
+            key={path}
+            className={"nav-item" + (active ? " is-active" : "")}
+            aria-current={active ? "page" : undefined}
+            onClick={() => {
+              tapFeedback();
+              navigate(path);
+            }}
+          >
+            {/* One pill, re-parented to whichever tab is lit. It carries a
+                view-transition-name, so the browser slides it across the bar
+                rather than fading one out and another in. */}
+            {active && <span className="nav-pill" aria-hidden="true" />}
+            <Icon />
+            <span className="nav-label">{label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** The lightest tap a phone can give, where it can give one (Android). */
+export function tapFeedback(ms = 8): void {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    // Not supported, or blocked until the first user gesture. Never matters.
+  }
+}
+
+/**
+ * Horizontal swipes on an element: left = next, right = previous.
+ *
+ * Deliberately a flick detector rather than a drag-follower: it fires once,
+ * after the finger has clearly gone sideways (not down the list), and the
+ * page transition does the moving. `edge` restricts it to swipes that START
+ * at the left edge of the screen, which is the "back" gesture.
+ */
+export function useSwipe(
+  ref: React.RefObject<HTMLElement>,
+  { onLeft, onRight, edge = false }: { onLeft?: () => void; onRight?: () => void; edge?: boolean },
+) {
+  const handlers = useRef({ onLeft, onRight });
+  handlers.current = { onLeft, onRight };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let x0 = 0;
+    let y0 = 0;
+    let t0 = 0;
+    let tracking = false;
+    const start = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      // A swipe that begins on a control with its own sideways meaning (a
+      // text field, the segmented switch) is not a page swipe.
+      if ((e.target as HTMLElement).closest("input, textarea, [data-no-swipe]")) return;
+      if (edge && t.clientX > 28) return;
+      x0 = t.clientX;
+      y0 = t.clientY;
+      t0 = Date.now();
+      tracking = true;
+    };
+    const end = (e: TouchEvent) => {
+      if (!tracking) return;
+      tracking = false;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - x0;
+      const dy = t.clientY - y0;
+      if (Date.now() - t0 > 700) return;
+      if (Math.abs(dx) < 64 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+      if (dx < 0) handlers.current.onLeft?.();
+      else handlers.current.onRight?.();
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchend", end, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", start);
+      el.removeEventListener("touchend", end);
+    };
+  }, [ref, edge]);
+}
+
+/**
+ * The header of a pushed page: a round back button and a large title.
+ *
+ * Every page that is not a tab root uses this, so "how do I get back" has one
+ * answer everywhere - the button, the left-edge swipe (see PushedPage), or the
+ * browser's own back.
+ */
+export function PageHead({ title, back }: { title: string; back: string }) {
+  return (
+    <header className="page-head">
+      <button className="back-btn" aria-label="Back" onClick={() => goBack(back)}>
+        <IconChevron />
+      </button>
+      <h1 className="t-display">{title}</h1>
+    </header>
+  );
+}
+
+/** A pushed page: PageHead plus swipe-from-the-left-edge to go back. */
+export function PushedPage({
+  title,
+  back,
+  className = "",
+  children,
+}: {
+  title: string;
+  back: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  useSwipe(ref, { onRight: () => goBack(back), edge: true });
+  return (
+    <main ref={ref} className={"screen is-pushed " + className}>
+      <PageHead title={title} back={back} />
+      {children}
+    </main>
+  );
+}
+
+/**
+ * Songs | DJs. The two charts are one tab with a switch, and the switch is
+ * also a swipe (see ChartsPage). `replace` on the navigation: flipping between
+ * the two should not pile up history that Back then has to walk through.
+ */
+export function ChartsSwitch({ value }: { value: "songs" | "djs" }) {
+  return (
+    <div
+      className="segmented"
+      role="tablist"
+      aria-label="Chart"
+      data-no-swipe
+      style={{ "--seg-i": value === "songs" ? 0 : 1, "--seg-n": 2 } as React.CSSProperties}
+    >
+      {(["songs", "djs"] as const).map((v) => (
         <button
-          key={path}
-          className={"nav-item" + (route === path ? " is-active" : "")}
-          aria-label={label}
-          aria-current={route === path ? "page" : undefined}
-          onClick={() => navigate(path)}
+          key={v}
+          role="tab"
+          aria-selected={v === value}
+          className={"segmented-item" + (v === value ? " is-active" : "")}
+          onClick={() => {
+            if (v === value) return;
+            tapFeedback();
+            go("/" + v, true);
+          }}
         >
-          <Icon />
+          {v === "songs" ? "Songs" : "DJs"}
         </button>
       ))}
-    </nav>
+    </div>
+  );
+}
+
+/** The shell both chart screens share: big title, the switch, swipe between. */
+export function ChartsPage({ value, children }: { value: "songs" | "djs"; children: ReactNode }) {
+  const ref = useRef<HTMLElement>(null);
+  useSwipe(ref, {
+    onLeft: () => value === "songs" && go("/djs", true),
+    onRight: () => value === "djs" && go("/songs", true),
+  });
+  return (
+    <main ref={ref} className="screen">
+      <header className="screen-head">
+        <h1 className="t-display">Charts</h1>
+      </header>
+      <ChartsSwitch value={value} />
+      {children}
+    </main>
   );
 }
 
@@ -281,7 +461,17 @@ export function Tabs<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="tabs" role="tablist">
+    <div
+      className="tabs"
+      role="tablist"
+      data-no-swipe
+      style={
+        {
+          "--seg-i": Math.max(0, options.findIndex((o) => o.value === value)),
+          "--seg-n": options.length,
+        } as React.CSSProperties
+      }
+    >
       {options.map((o) => (
         <button
           key={o.value}
