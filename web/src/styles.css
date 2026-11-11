@@ -108,7 +108,7 @@ body {
 body {
   background: var(--page);
   color: var(--ink);
-  font-family: "Outfit Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-text);
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
@@ -211,18 +211,17 @@ input {
 }
 
 .t-chrome {
-  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-text);
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-variant-numeric: tabular-nums;
 }
 
-/* Archivo carries the chrome, Outfit carries the content. That split IS the
-   design: labels, timers, jersey numbers and vote captions are one voice, and
-   the song is another. Tracking is 0.18-0.20em because Archivo is
-   normal-width — the 0.16em that suited a monospace trial read gappy here,
-   and the 0.22em that suited a condensed face read loose. */
+/* The small upper-case labels ("chrome") used to be set in their own face.
+   Since the 2026-11 redesign they are Manrope like the rest of the text,
+   told apart by weight and tracking instead; the faces and their settings
+   are in the "Type" section of the redesign layer near the end of this file. */
 
 /* The reference's letterspaced "SONGS" device, reused for every small label. */
 .t-label {
@@ -811,7 +810,7 @@ input {
 .np-time {
   font-size: 12px;
   color: var(--muted);
-  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-text);
   letter-spacing: 0.10em;
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -1713,7 +1712,7 @@ input {
   place-items: center;
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r-thumb);
-  font-family: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-text);
   font-size: 20px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -1850,6 +1849,11 @@ input {
   --r-card: 20px;
   --r-art: 22px;
   --r-thumb: 12px;
+  /* Two faces. Unbounded is wide and rounded and only ever sets a heading or
+     a name; Manrope sets everything that has to be read or pressed. Both are
+     self-hosted variable fonts (see main.tsx). */
+  --font-display: "Unbounded Variable", "Unbounded", ui-sans-serif, system-ui, sans-serif;
+  --font-text: "Manrope Variable", "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --gold-hi: #c9ac78;
   /* Warm, not grey. Every raised surface and every button face is a tint of
      the brand bronze rather than of ivory: on black, an ivory tint reads as
@@ -1924,11 +1928,70 @@ body {
 
 /* ---- Type --------------------------------------------------------------- */
 
+/* Headings and names: Unbounded.
+ *
+ * It runs about a sixth wider than the face the 12/14/16/20/25/31 scale was
+ * drawn for and has a taller lower case, so each heading sits one notch down
+ * to carry the same weight on the page without pushing a long song title onto
+ * a second line:
+ *
+ *   display  31 -> 28      title  25 -> 21      section  20 -> 17
+ *
+ * Those three are the display column of the scale now. Everything set in
+ * Manrope stays on the original steps. */
+.t-display,
+.t-title,
+.t-section,
+.empty-title,
+.goat-line,
+.goat-word,
+.prof-name {
+  font-family: var(--font-display);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
 .t-display {
-  font-size: 31px;
+  font-size: 28px;
   line-height: 1.1;
+}
+
+.t-title {
+  font-size: 21px;
+}
+
+.t-section,
+.goat-line,
+.prof-name {
+  font-size: 17px;
+}
+
+/* Things you read in a list or press: Manrope, bold. */
+.row-title,
+.group-title,
+.dj-chip-name,
+.segmented-item,
+.tab,
+.btn,
+.jersey,
+.prof-badge,
+.row-rank,
+.row-score {
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+}
+
+/* The small upper-case labels: Manrope at its heaviest, tracked out. */
+.t-chrome,
+.t-label,
+.vote-window,
+.vote-window *,
+.prof-sub,
+.pop-state,
+.nav-label,
+.np-eyebrow-label {
+  font-weight: 800;
+  letter-spacing: 0.14em;
 }
 
 .screen-head {
@@ -1990,9 +2053,7 @@ body {
 
 .nav-label {
   font-size: 12px;
-  font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.01em;
 }
 
 /* ---- Pushed pages: one header, one way back ----------------------------- */
