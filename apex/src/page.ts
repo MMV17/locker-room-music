@@ -16,9 +16,10 @@
  * There is nothing to substitute here.
  *
  * Inlining the CSS costs ~1.2 kB gzipped and saves a round trip. On the campus
- * wifi this product keeps losing, that is the better trade. The font is the
- * only separate request, and font-display: swap means text paints immediately
- * in a fallback rather than hanging on 32 kB.
+ * wifi this product keeps losing, that is the better trade. The two fonts
+ * (the same pair as the team app: Unbounded for the wordmark, Manrope for the
+ * rest) are the only separate requests, and font-display: swap means text
+ * paints immediately in a fallback rather than hanging on 76 kB.
  *
  * No JavaScript. The form is a plain GET to /go; the destination is a
  * different origin, so there is a full navigation either way and a fetch would
@@ -65,11 +66,21 @@ const T = TOKENS;
 
 const CSS = `
 @font-face {
-  font-family: "Outfit Variable";
+  font-family: "Unbounded Variable";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 200 900;
   font-display: swap;
-  src: url("/fonts/outfit-latin.woff2") format("woff2-variations");
+  src: url("/fonts/unbounded-latin.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Manrope Variable";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("/fonts/manrope-latin.woff2") format("woff2-variations");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
     U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
     U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
@@ -95,9 +106,12 @@ html, body { margin: 0; padding: 0; }
 
 body {
   min-height: 100svh;
-  background: var(--page);
+  /* The same warm glow the team app has behind every page. Its lightest stop
+     under any text here is #0a0907, darker than --surface, so every measured
+     contrast pair below still holds. */
+  background: radial-gradient(120% 55% at 50% -10%, #1b160d 0%, #0a0907 40%, #000 72%) fixed var(--page);
   color: var(--ink);
-  font-family: "Outfit Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: "Manrope Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
@@ -113,8 +127,11 @@ body {
    and it is the most obviously adjustable thing here. */
 .mark {
   margin: 0;
-  font-size: clamp(44px, 13vw, 60px);
-  font-weight: 700;
+  /* Unbounded, like every heading in the team app this page hands off to. It
+     runs wide, so the wordmark is a step smaller than it was in the old face. */
+  font-family: "Unbounded Variable", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(38px, 11.5vw, 52px);
+  font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.05;
 }
@@ -124,8 +141,9 @@ body {
 /* A hairline, not a drop shadow: on black a shadow is invisible. */
 .form {
   margin-top: 32px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
+  /* A bronze tint and edge, like the app's cards, rather than a grey box. */
+  background: rgba(214, 186, 134, 0.05);
+  border: 1px solid rgba(214, 186, 134, 0.2);
   border-radius: 20px;
   padding: 22px 20px;
   text-align: left;
@@ -133,9 +151,9 @@ body {
 
 .label {
   display: block;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 8px;
@@ -171,9 +189,10 @@ body {
   margin-top: 16px;
   font: inherit;
   font-size: 17px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--on-gold);
-  background: var(--gold);
+  background: linear-gradient(180deg, #d9be8b, var(--gold));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 12px 26px -10px rgba(169, 140, 92, 0.6);
   border: 0;
   border-radius: 12px;
   padding: 15px 16px;
@@ -192,7 +211,8 @@ body {
    button still reads as confidently tappable, which shipped once already on
    the Join screen. */
 .form:has(.input:invalid) .btn {
-  background: var(--hairline);
+  background: rgba(169, 140, 92, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(169, 140, 92, 0.28);
   color: var(--muted);
   cursor: not-allowed;
 }
