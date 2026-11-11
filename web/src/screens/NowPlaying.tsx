@@ -294,7 +294,7 @@ export function NowPlaying({ teamName }: { teamName: string }) {
         if (q && q.playId === playId && q.value === value) queuedVote.current = null;
         if (!queuedVote.current && alive.current) {
           voteGuard.current = { playId, value, throughSeq: issued.current };
-          setAnnounce(`Vote counted: ${value === 1 ? "Fire" : "Nah"}`);
+          setAnnounce(`Vote counted: ${value === 1 ? "thumbs up" : "thumbs down"}`);
           setVoteFailed(false);
           setError(null);
         }
@@ -457,60 +457,45 @@ export function NowPlaying({ teamName }: { teamName: string }) {
             ) : iAmDj ? (
               <DjStanding myDj={myDj} />
             ) : (
-              /* Each thumb is a button plus a caption, and the selected one
-                 also gets a check badge. Three signals, only one of which is
-                 colour — the old version said "you voted" by turning green or
-                 red and nothing else, which is the exact pairing that is
-                 hardest to tell apart. See .vote.is-on-up in styles.css. */
-              <div className="votes">
-                <span className="vote-pick">
-                  <button
-                    className={"vote" + (play.my_vote === -1 ? " is-on-down" : "")}
-                    aria-label="Thumbs down"
-                    aria-pressed={play.my_vote === -1}
-                    onClick={() => vote(-1)}
-                  >
-                    <ThumbDown />
-                    {play.my_vote === -1 && (
-                      <span className="vote-check">
-                        <IconCheck />
-                      </span>
-                    )}
-                  </button>
-                  <span
-                    className={
-                      "t-chrome vote-cap" + (play.my_vote === -1 ? " is-mine" : "")
-                    }
-                  >
-                    {play.my_vote === -1 ? "Your vote" : "Nah"}
-                  </span>
-                </span>
+              /* Two thumbs and one line of words under them. The chosen thumb
+                 says so three ways, only one of which is colour: it brightens
+                 and gains a ring, it gets a check badge, and the line beneath
+                 changes to say the vote is in. The other thumb steps back.
+                 (There used to be a word under each - "Nah" / "Fire" - which
+                 the thumbs already say.) See .vote.is-on-up in styles.css. */
+              <div className={"votes" + (play.my_vote != null ? " has-vote" : "")}>
+                <button
+                  className={"vote is-down" + (play.my_vote === -1 ? " is-on-down" : "")}
+                  aria-label="Thumbs down"
+                  aria-pressed={play.my_vote === -1}
+                  onClick={() => vote(-1)}
+                >
+                  <ThumbDown />
+                  {play.my_vote === -1 && (
+                    <span className="vote-check">
+                      <IconCheck />
+                    </span>
+                  )}
+                </button>
 
-                <span className="vote-pick">
-                  <button
-                    className={"vote" + (play.my_vote === 1 ? " is-on-up" : "")}
-                    aria-label="Thumbs up"
-                    aria-pressed={play.my_vote === 1}
-                    onClick={() => vote(1)}
-                  >
-                    <ThumbUp />
-                    {play.my_vote === 1 && (
-                      <span className="vote-check">
-                        <IconCheck />
-                      </span>
-                    )}
-                  </button>
-                  <span
-                    className={
-                      "t-chrome vote-cap" + (play.my_vote === 1 ? " is-mine" : "")
-                    }
-                  >
-                    {play.my_vote === 1 ? "Your vote" : "Fire"}
-                  </span>
-                </span>
-                {play.my_vote == null && (
-                  <p className="vote-hint">Votes stay secret until the song ends</p>
-                )}
+                <button
+                  className={"vote is-up" + (play.my_vote === 1 ? " is-on-up" : "")}
+                  aria-label="Thumbs up"
+                  aria-pressed={play.my_vote === 1}
+                  onClick={() => vote(1)}
+                >
+                  <ThumbUp />
+                  {play.my_vote === 1 && (
+                    <span className="vote-check">
+                      <IconCheck />
+                    </span>
+                  )}
+                </button>
+                <p className="vote-hint">
+                  {play.my_vote == null
+                    ? "Votes stay secret until the song ends"
+                    : "Your vote is in \u00b7 tap the other to change it"}
+                </p>
               </div>
             )}
             </div>

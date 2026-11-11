@@ -916,32 +916,14 @@ input {
   height: 13px;
 }
 
-/* The caption under each thumb — the third signal, and the only one that
-   says in words which way you voted. */
-.vote-cap {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.vote-cap.is-mine {
-  color: var(--ink);
-}
-
-/* Spans the whole .votes row under the two thumbs (it wraps onto its own
-   line). Only while you have not voted: after that, "Your vote" says it. */
+/* The one line of words under the two thumbs (it wraps onto its own line).
+   Before a vote it explains the secrecy; after one it says the vote is in. */
 .vote-hint {
   flex-basis: 100%;
   margin: 0;
   font-size: 12px;
   color: var(--muted);
   text-align: center;
-}
-
-.vote-pick {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
 }
 
 .vote:disabled {
@@ -1869,10 +1851,18 @@ input {
   --r-art: 22px;
   --r-thumb: 12px;
   --gold-hi: #c9ac78;
-  --tint: rgba(248, 242, 233, 0.035);
-  --tint-2: rgba(248, 242, 233, 0.06);
-  --glass: rgba(20, 19, 18, 0.72);
-  --glass-line: rgba(248, 242, 233, 0.1);
+  /* Warm, not grey. Every raised surface and every button face is a tint of
+     the brand bronze rather than of ivory: on black, an ivory tint reads as
+     grey, which is exactly what made the first pass of this look cold. */
+  --tint: rgba(214, 186, 134, 0.05);
+  --tint-2: rgba(214, 186, 134, 0.1);
+  --glass: rgba(27, 22, 14, 0.88);
+  --glass-line: rgba(214, 186, 134, 0.2);
+  /* A pressable face: lit from above, bronze. The edge is 60% bronze, which
+     is 3.8:1 on black - the boundary of a control has to clear 3:1. */
+  --face: linear-gradient(180deg, rgba(214, 186, 134, 0.3), rgba(169, 140, 92, 0.1));
+  --face-edge: rgba(201, 172, 120, 0.6);
+  --face-shadow: inset 0 1px 0 rgba(255, 236, 200, 0.24), 0 10px 22px -12px rgba(0, 0, 0, 0.85);
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -2021,9 +2011,10 @@ body {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: var(--tint-2);
-  border: 1px solid var(--hairline-strong);
-  color: var(--ink);
+  background: var(--face);
+  border: 1px solid var(--face-edge);
+  box-shadow: var(--face-shadow);
+  color: var(--gold-hi);
 }
 
 .back-btn svg {
@@ -2044,12 +2035,17 @@ body {
   margin: 0 0 20px;
   overflow: visible;
   border-radius: 16px;
-  background: var(--tint-2);
+  background: rgba(214, 186, 134, 0.07);
   border: 1px solid var(--glass-line);
 }
 
 /* The thumb. It is one element that slides, which is the whole difference
-   between a switch and three buttons that change colour. */
+   between a switch and three buttons that change colour.
+
+   Two strengths, so two switches stacked on Charts do not shout over each
+   other: the main one (Songs | DJs) is solid gold with dark lettering - the
+   same face as a primary button, 6.7:1 at its darkest - and the filter under
+   it (Season | Month | Week) is the bronze tint with gold lettering. */
 .segmented::before,
 .tabs::before {
   content: "";
@@ -2059,12 +2055,24 @@ body {
   left: 4px;
   width: calc((100% - 8px) / var(--seg-n, 2));
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(248, 242, 233, 0.17), rgba(248, 242, 233, 0.09));
-  box-shadow:
-    inset 0 1px 0 rgba(248, 242, 233, 0.16),
-    0 6px 14px rgba(0, 0, 0, 0.45);
   transform: translateX(calc(var(--seg-i, 0) * 100%));
   transition: transform 0.45s var(--spring);
+}
+
+.segmented::before {
+  background: linear-gradient(180deg, #d9be8b 0%, #b3965f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    0 10px 20px -8px rgba(169, 140, 92, 0.65);
+}
+
+.tabs::before {
+  background: linear-gradient(180deg, rgba(214, 186, 134, 0.4), rgba(169, 140, 92, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 236, 200, 0.3),
+    inset 0 0 0 1px rgba(201, 172, 120, 0.4),
+    0 8px 16px -8px rgba(0, 0, 0, 0.7);
 }
 
 .segmented-item,
@@ -2082,9 +2090,12 @@ body {
   white-space: nowrap;
 }
 
-.segmented-item.is-active,
+.segmented-item.is-active {
+  color: #12100c;
+}
+
 .tab.is-active {
-  color: var(--ink);
+  color: var(--gold-hi);
 }
 
 .tab.is-active::after {
@@ -2262,8 +2273,14 @@ body {
 
 /* ---- Controls ----------------------------------------------------------- */
 
+.btn {
+  background: var(--face);
+  border-color: var(--face-edge);
+  box-shadow: var(--face-shadow);
+}
+
 .btn.is-primary {
-  background: linear-gradient(180deg, #c9ac78, #a98c5c);
+  background: linear-gradient(180deg, #d9be8b, #a98c5c);
   border-color: transparent;
   color: #12100c;
   font-weight: 700;
@@ -2272,9 +2289,10 @@ body {
     0 12px 26px -10px rgba(169, 140, 92, 0.6);
 }
 
+.btn:disabled,
 .btn.is-primary:disabled {
-  background: var(--tint-2);
-  border-color: var(--hairline);
+  background: rgba(169, 140, 92, 0.12);
+  border-color: rgba(169, 140, 92, 0.28);
   color: var(--muted);
   box-shadow: none;
 }
@@ -2362,9 +2380,15 @@ body {
 .np-gear,
 .np-speaker {
   border-radius: 50%;
-  background: var(--tint-2);
+  background: var(--face);
+  border: 1px solid var(--face-edge);
+  box-shadow: var(--face-shadow);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
+}
+
+.np-gear {
+  color: var(--gold-hi);
 }
 
 /* The one loud moment on the DJ chart gets the same gold edge as your own
@@ -2379,7 +2403,16 @@ body {
 .np-bar {
   height: 6px;
   border-radius: 999px;
-  background: rgba(248, 242, 233, 0.16);
+  background: rgba(214, 186, 134, 0.22);
+}
+
+/* Number badges: the same bronze face as the buttons, so a jersey number is
+   not a grey box. */
+.jersey,
+.prof-badge {
+  background: var(--face);
+  border-color: var(--face-edge);
+  box-shadow: var(--face-shadow);
 }
 
 .np-bar-fill {
@@ -2387,43 +2420,74 @@ body {
   background: linear-gradient(90deg, #a98c5c, #e3c690);
 }
 
-/* The two buttons the product exists for. Glass at rest; a filled, glowing
-   answer when pressed. The fills keep the original --up / --down at their
-   lightest stop, so the white glyph stays above 4.5:1. */
+/* The two buttons the product exists for. Each is its own colour even at
+   rest - deep red, deep green, lit from the top-left like a pressed gem - and
+   answers a tap by brightening to the full --down / --up, growing a ring and
+   popping. The chosen fills start at the original tokens, so the white glyph
+   stays above 4.5:1; the resting edges (#c74a4a, #3a9b62) are 4.4:1 and 6:1
+   on black, clear of the 3:1 a control boundary needs. */
 .vote {
-  background: radial-gradient(120% 120% at 30% 20%, rgba(248, 242, 233, 0.13), rgba(248, 242, 233, 0.03) 62%);
-  box-shadow:
-    inset 0 1px 0 rgba(248, 242, 233, 0.16),
-    0 16px 32px -14px rgba(0, 0, 0, 0.85);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  color: var(--ink);
+  border: 1px solid transparent;
   transition:
     transform 0.28s var(--bounce),
     box-shadow 0.3s ease,
     background 0.3s ease,
-    border-color 0.3s ease;
+    border-color 0.3s ease,
+    opacity 0.3s ease,
+    filter 0.3s ease;
 }
 
 .vote:active {
   transform: scale(0.9);
 }
 
-.vote.is-on-up {
-  background: linear-gradient(160deg, var(--up), #0c6b30);
+.vote.is-down {
+  background: radial-gradient(120% 120% at 30% 16%, #7a2424 0%, #4a1515 48%, #200909 100%);
+  border-color: #c74a4a;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 0 7px rgba(18, 136, 62, 0.18),
-    0 20px 40px -12px rgba(18, 136, 62, 0.75);
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.4),
+    0 16px 30px -14px rgba(220, 38, 38, 0.6);
+}
+
+.vote.is-up {
+  background: radial-gradient(120% 120% at 30% 16%, #1f6a3d 0%, #124126 48%, #081d11 100%);
+  border-color: #3a9b62;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.4),
+    0 16px 30px -14px rgba(18, 136, 62, 0.65);
+}
+
+.vote.is-on-up {
+  background: radial-gradient(120% 120% at 30% 16%, var(--up) 0%, #0f7435 55%, #0a5226 100%);
+  border-color: #4fd083;
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.25),
+    0 0 0 7px rgba(18, 136, 62, 0.22),
+    0 20px 40px -12px rgba(18, 136, 62, 0.85);
   animation: vote-pop 0.55s var(--bounce);
 }
 
 .vote.is-on-down {
-  background: linear-gradient(160deg, var(--down), #a81c1c);
+  background: radial-gradient(120% 120% at 30% 16%, var(--down) 0%, #b81f1f 55%, #861515 100%);
+  border-color: #ff7a7a;
+  color: #fff;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 0 7px rgba(220, 38, 38, 0.18),
-    0 20px 40px -12px rgba(220, 38, 38, 0.75);
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -12px 20px rgba(0, 0, 0, 0.25),
+    0 0 0 7px rgba(220, 38, 38, 0.22),
+    0 20px 40px -12px rgba(220, 38, 38, 0.85);
   animation: vote-pop 0.55s var(--bounce);
+}
+
+/* Once there is a vote, the thumb that was not chosen steps back. */
+.votes.has-vote .vote[aria-pressed="false"] {
+  opacity: 0.7;
+  filter: saturate(0.7);
 }
 
 @keyframes vote-pop {
