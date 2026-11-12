@@ -102,6 +102,11 @@ battery, and a wrong clock shifts when voting closes).
 
 ## 4. Retire the legacy test hostname
 
+> **Steps 1-3 below are DONE (2026-11-12).** The speaker was updated, Report
+> full showed it reaching `auxgoat-hc.mmvinton17.workers.dev` and
+> `hc.auxgoat.com` from the school network, and the route was removed. What is
+> left is step 4 onward: leave it a day or two, then delete the zone.
+
 The speaker was provisioned with one server address, on an unrelated test
 domain (the second `routes` entry in `backend/wrangler.toml`). The updated
 speaker software knows two more addresses and switches by itself. **Do not

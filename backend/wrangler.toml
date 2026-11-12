@@ -28,15 +28,11 @@ compatibility_date = "2024-12-18"
 # colour come from the settings table, which is why /admin can change them —
 # so adding a school is a deploy, not a rewrite.
 #
-# THE SECOND ROUTE BELOW IS THE LEGACY API HOSTNAME, AND IT IS ON ITS WAY OUT.
-# It is on an unrelated test domain and is the address speaker 0001 was
-# provisioned with. Do NOT delete the route (or that zone) until Admin shows
-# the speaker checking in through another hostname: removing a custom domain
-# from this list deletes it on the next deploy, the speaker's listener and its
-# wifi watchdog would both lose the only host they know, and the box would go
-# dark and start rebooting itself - recoverable only with a cable. The speaker
-# learns its other hostnames from the over-the-air update (pi/lockerroom
-# /endpoints.py). The exact retirement steps are in docs/LAUNCH.md.
+# The legacy API hostname (on an unrelated test domain, the address speaker
+# 0001 was provisioned with) was retired on 2026-11-12, after the speaker had
+# been updated to a listener that knows other addresses and Report full showed
+# it reaching both of them from the school network. The speaker's config still
+# names the old host first; it fails over by itself (pi/lockerroom/endpoints.py).
 workers_dev = true
 # auxgoat.com and www USED TO BE HERE and were moved to the apex Worker
 # (../apex) on 2026-08-08. Do not add them back.
@@ -53,8 +49,7 @@ workers_dev = true
 # Keeping them off this Worker also means a bad deploy here cannot take down
 # the front door for any other school.
 routes = [
-  { pattern = "hc.auxgoat.com", custom_domain = true },
-  { pattern = "lockerroom.finestkindfarms.com", custom_domain = true }
+  { pattern = "hc.auxgoat.com", custom_domain = true }
 ]
 
 # Secrets are set with `wrangler secret put`, never committed:
