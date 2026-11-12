@@ -117,40 +117,21 @@ class TestStartLimits:
         assert "Type=notify" not in text and "WatchdogSec" not in text
 
 
-class TestTheClockUnit:
-    UNIT = (UNITS / "auxgoat-clock.service").read_text()
-
-    def test_it_runs_before_the_listener_and_is_hard_bounded(self):
-        assert re.search(r"^Before=lockerroom-listener\.service$", self.UNIT, re.M)
-        assert re.search(r"^TimeoutStartSec=45$", self.UNIT, re.M)
-        assert re.search(r"^Type=oneshot$", self.UNIT, re.M)
-
-    def test_nothing_requires_it_and_nothing_reruns_it(self):
-        for unit in UNITS.glob("*"):
-            for line in unit.read_text().splitlines():
-                if re.match(r"(Requires|BindsTo|Requisite|PartOf|Wants)=", line):
-                    assert "auxgoat-clock" not in line, unit.name
-        assert not (UNITS / "auxgoat-clock.timer").exists()
-
-    def test_nothing_in_this_release_installs_enables_or_starts_it(self):
-        """NOT SHIPPED YET. One spoofed plain-HTTP Date header can pin the
-        clock in the future for good (it only ever steps forward), which ends
-        every TLS handshake and with them the beacon. Until it has an
-        HTTPS-first source and a bounded step, the script and its unit sit in
-        the repo and nothing - updater, repair, deploy, provision, report -
-        so much as names them."""
-        own = {SCRIPTS / "auxgoat-clock.sh", UNITS / "auxgoat-clock.service"}
+class TestTheClockLivesInTheListener:
+    def test_there_is_no_boot_clock_script_any_more(self):
+        """The boot-time script (a plain-HTTP, forward-only step) was never
+        installed: one forged Date header could pin the clock in the future
+        for good. The clock is kept by lockerroom/clock.py instead, from the
+        verified beacon, and tested in test_clock.py. Nothing here may bring
+        the script back by naming it."""
+        assert not (SCRIPTS / "auxgoat-clock.sh").exists()
+        assert not (UNITS / "auxgoat-clock.service").exists()
         pi = SCRIPTS.parent
-        others = [f for d in (SCRIPTS, UNITS, pi / "lockerroom") for f in d.glob("*")
-                  if f.is_file() and f not in own]
-        assert len(others) > 30
-        for f in others:
-            assert "auxgoat-clock" not in f.read_text(errors="replace"), f.name
-        for f in own:
-            assert "NOT INSTALLED" in f.read_text(), f.name
-        # And the report still says whether NTP works on campus, which is what
-        # decides whether this is ever needed.
-        assert re.search(r"^run \d+ timedatectl", (SCRIPTS / "report-full.sh").read_text(), re.M)
+        for d_ in (SCRIPTS, UNITS, pi / "lockerroom"):
+            for f in d_.glob("*"):
+                if f.is_file():
+                    assert "auxgoat-clock" not in f.read_text(errors="replace"), f.name
+        assert (pi / "lockerroom" / "clock.py").exists()
 
 
 class TestTheNightlyRestart:
@@ -196,82 +177,6 @@ class TestTheNightlyRestart:
     def test_it_is_skipped_while_a_song_is_open_on_the_relay(self, tmp_path):
         result, log = self.run(tmp_path, open_play=True)
         assert "skipped" in result.stdout and log == ""
-
-
-class TestTheBootClock:
-    """A2 part 1: forward only, boot only, and only when NTP has not synced."""
-
-    NOW = 1800000000
-
-    def run(self, tmp_path, ntp="no", header_epoch=None, uptime="30.00", args=()):
-        binv = tmp_path / "bin"
-        binv.mkdir(exist_ok=True)
-        setlog = tmp_path / "set.log"
-        (binv / "timedatectl").write_text(f"#!/bin/sh\necho {ntp}\n")
-        (binv / "sleep").write_text("#!/bin/sh\nexit 0\n")
-        if header_epoch is None:
-            (binv / "curl").write_text("#!/bin/sh\nexit 7\n")
-        else:
-            stamp = subprocess.run(["date", "-u", "-d", f"@{header_epoch}",
-                                    "+%a, %d %b %Y %H:%M:%S GMT"], capture_output=True,
-                                   text=True, check=True).stdout.strip()
-            (binv / "curl").write_text(
-                f'#!/bin/sh\nprintf "HTTP/1.1 200 OK\\r\\nDate: {stamp}\\r\\n\\r\\n"\n')
-        # A `date` that reports a fixed "now" but still parses real dates.
-        real_date = subprocess.run(["sh", "-c", "command -v date"], capture_output=True,
-                                   text=True).stdout.strip()
-        (binv / "date").write_text(
-            f'#!/bin/sh\nif [ "$1" = "-u" ] && [ "$2" = "+%s" ]; then echo {self.NOW}; exit 0; fi\n'
-            f'exec {real_date} "$@"\n')
-        (binv / "setclock").write_text(f'#!/bin/sh\necho "$*" >> "{setlog}"\n')
-        for f in binv.iterdir():
-            f.chmod(0o755)
-        (tmp_path / "uptime").write_text(f"{uptime} 1.0\n")
-        env = dict(os.environ, PATH=f"{binv}:{os.environ['PATH']}",
-                   AUXGOAT_UPTIME_FILE=str(tmp_path / "uptime"),
-                   AUXGOAT_CONFIG=str(tmp_path / "no-config"),
-                   AUXGOAT_CLOCK_SET_CMD=str(binv / "setclock"))
-        result = subprocess.run(["bash", str(SCRIPTS / "auxgoat-clock.sh"), *args], env=env,
-                                capture_output=True, text=True, timeout=30)
-        return result, (setlog.read_text().strip() if setlog.exists() else "")
-
-    def test_a_clock_weeks_behind_is_stepped_forward(self, tmp_path):
-        target = self.NOW + 40 * 86400
-        result, stepped = self.run(tmp_path, header_epoch=target)
-        assert result.returncode == 0
-        assert stepped == f"@{target}"
-
-    def test_ntp_synchronised_means_do_nothing(self, tmp_path):
-        _, stepped = self.run(tmp_path, ntp="yes", header_epoch=self.NOW + 40 * 86400)
-        assert stepped == ""
-
-    def test_not_knowing_whether_ntp_synced_means_do_nothing(self, tmp_path):
-        _, stepped = self.run(tmp_path, ntp="", header_epoch=self.NOW + 40 * 86400)
-        assert stepped == ""
-
-    def test_it_never_steps_backwards(self, tmp_path):
-        result, stepped = self.run(tmp_path, header_epoch=self.NOW - 40 * 86400)
-        assert stepped == "" and "not stepping" in result.stdout
-
-    def test_two_minutes_or_less_is_left_alone(self, tmp_path):
-        _, stepped = self.run(tmp_path, header_epoch=self.NOW + 120)
-        assert stepped == ""
-        _, stepped = self.run(tmp_path, header_epoch=self.NOW + 121)
-        assert stepped == f"@{self.NOW + 121}"
-
-    def test_an_absurd_date_header_is_ignored(self, tmp_path):
-        result, stepped = self.run(tmp_path, header_epoch=self.NOW + 20 * 365 * 86400)
-        assert stepped == "" and "outside sane bounds" in result.stdout
-
-    def test_no_answer_from_anywhere_is_not_an_error(self, tmp_path):
-        result, stepped = self.run(tmp_path, header_epoch=None)
-        assert result.returncode == 0 and stepped == ""
-
-    def test_it_refuses_to_run_after_boot(self, tmp_path):
-        """Stepping the clock under an open song corrupts its play time."""
-        result, stepped = self.run(tmp_path, header_epoch=self.NOW + 40 * 86400,
-                                   uptime="5000.00")
-        assert stepped == "" and "not at boot" in result.stdout
 
 
 class TestWhatGetsShipped:
