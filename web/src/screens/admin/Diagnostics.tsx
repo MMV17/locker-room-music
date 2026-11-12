@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "./../../api";
 import { Fold as Section, Banner, Spinner, formatWhen, useConfirm } from "./../../components";
 import type { PiCommand, PiInfo, PiReport } from "./types";
 import type { Call } from "./adminApi";
+
+/** How often Diagnostics refreshes while a command is in flight, and for
+ *  WATCH_MS afterwards; and how often when nothing is going on. */
+const FAST_MS = 3_000;
+const SLOW_MS = 20_000;
+const WATCH_MS = 6 * 60_000;
 
 /**
  * The words a coach sees for each command, on the buttons and in the history
@@ -109,6 +115,7 @@ export function Speaker({ call }: { call: Call }) {
         body: JSON.stringify({ command: cmd }),
       });
       setSent(`${label} — queued. The speaker picks it up on its next check-in.`);
+      watch();
     } catch (e) {
       setError(errorMessage(e, "Could not queue that"));
     } finally {
@@ -145,6 +152,7 @@ export function Speaker({ call }: { call: Call }) {
           ? "Run repair — queued, to install the updater. The speaker picks it up on its next check-in."
           : "Update speaker software — queued. The speaker picks it up on its next check-in.",
       );
+      watch();
     } catch (e) {
       setError(errorMessage(e, "Could not queue that"));
     } finally {
@@ -162,16 +170,64 @@ export function Speaker({ call }: { call: Call }) {
           clock_skew_ms: r.clock_skew_ms ?? null,
         });
       })
-      .catch(() => setCommands([]));
+      // A failed REFRESH keeps what is on screen; only a failed first load has
+      // nothing to keep. Blanking the list on one dropped request would make
+      // a flaky connection look like a speaker with no history.
+      .catch(() => setCommands((prev) => prev ?? []));
     // Separate request because it is separate storage. A failure here must not
     // blank the command list — the buttons are the half you need when the box
     // is misbehaving.
     call<{ reports: PiReport[] }>("/api/admin/pi/reports")
       .then((r) => setReports(r.reports ?? []))
-      .catch(() => setReports([]));
+      .catch(() => setReports((prev) => prev));
   }, [call]);
 
-  useEffect(load, [load]);
+  // THIS SCREEN REFRESHES ITSELF. It used to load once, so a report, a repair
+  // log or the result of an update only appeared after reloading the page by
+  // hand - while the screen sat there saying "queued".
+  //
+  // Two speeds. While something is in flight it checks every few seconds, and
+  // it keeps doing so for WATCH_MS after the last command finished: an update
+  // answers "scheduled" at once and sends its real outcome a few minutes
+  // later, and a repair's log arrives a beat after its one-line result.
+  // Otherwise it idles at SLOW_MS, which is enough to keep the software
+  // version, check-in address and clock warning honest. Nothing is fetched
+  // while the tab is hidden, and it catches up the moment it is shown again.
+  const watchUntil = useRef(0);
+  const watch = useCallback(() => {
+    watchUntil.current = Date.now() + WATCH_MS;
+    load();
+  }, [load]);
+
+  const outstanding = !!commands?.some((c) => !c.completed_at);
+  useEffect(() => {
+    if (outstanding) watchUntil.current = Date.now() + WATCH_MS;
+  }, [outstanding, commands]);
+
+  // One steady tick decides each time whether a refresh is due. (An earlier
+  // version armed a 3s or a 20s timer; pressing a button during a 20s wait
+  // then took up to 20s to speed up, which is the wait this exists to remove.)
+  const lastLoad = useRef(0);
+  useEffect(() => {
+    const refresh = () => {
+      lastLoad.current = Date.now();
+      load();
+    };
+    refresh();
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      const every = Date.now() < watchUntil.current ? FAST_MS : SLOW_MS;
+      if (Date.now() - lastLoad.current >= every) refresh();
+    }, 1000);
+    const onVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
 
   const label = (c: PiCommand) =>
     c.completed_at ? (c.ok ? "done" : "failed") : c.dispatched_at ? "running" : "queued";
@@ -183,7 +239,8 @@ export function Speaker({ call }: { call: Call }) {
       {sent && <Banner kind="info">{sent}</Banner>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
         Check the box, try to fix it, and read what it sent back. It checks in
-        about once a minute, so a result can take that long to appear.
+        every ten seconds or so, and this screen updates by itself: no need to
+        reload.
       </p>
 
       {info && (

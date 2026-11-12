@@ -173,6 +173,22 @@ fi
 # counted toward a reboot. `iw` is NOT installed on this box — nmcli and
 # ip route are what work.
 # ---------------------------------------------------------------------------
+section "SERVER ADDRESSES (can this box reach each one?)"
+# The listener tries these in order and stays on the last one that worked
+# (lockerroom/endpoints.py). Before a hostname is ever retired, this is where
+# to confirm from the box itself that the others answer: 200 means reachable,
+# 000 means no connection at all, anything else is something in the way.
+HOSTS="$(PYTHONPATH=/opt/lockerroom timeout 10 /usr/bin/python3 -c 'from lockerroom import endpoints; print("\n".join(endpoints.configured_urls()))' 2>/dev/null)"
+if [ -z "$HOSTS" ]; then
+  echo "(could not list the server addresses)"
+else
+  for h in $HOSTS; do
+    code="$(timeout 12 curl -s -o /dev/null -m 10 -w '%{http_code}' "$h/api/theme" 2>/dev/null)"
+    printf '%-52s %s\n' "$h" "${code:-000}"
+  done
+  echo "in use now: $(cat /var/lib/lockerroom/api-host 2>/dev/null || echo '(first in the list)')"
+fi
+
 section "NETWORK"
 run 15 nmcli -t -f NAME,DEVICE,TYPE,STATE connection show --active
 echo

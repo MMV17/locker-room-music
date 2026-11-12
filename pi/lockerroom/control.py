@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from . import btscan, endpoints, forgettarget, relaytarget, software
+from . import btscan, clock, endpoints, forgettarget, relaytarget, software
 
 if TYPE_CHECKING:  # pragma: no cover
     # Import for typing only. config.py needs tomllib (3.11+), and importing
@@ -454,6 +454,7 @@ async def beacon_loop(
     pending_path: Path = software.PENDING_PATH,
     update_result_path: Path = software.UPDATE_RESULT_PATH,
     update_reported_path: Path = software.UPDATE_REPORTED_PATH,
+    keeper: clock.Keeper | None = None,
 ) -> None:
     """
     POST liveness, carry back the last result, pick up the next command.
@@ -578,6 +579,17 @@ async def beacon_loop(
                     beacon_ok = True
                     pool.success(url)
                     marker.good_beacon()
+                    # The answer came from our Worker over verified TLS, so its
+                    # Date header is a time we can trust. See clock.py; it only
+                    # ever steps the clock on an idle box.
+                    if keeper is not None:
+                        try:
+                            keeper.on_good_beacon(
+                                resp.headers.get("date"),
+                                idle=play_signature(sessions) is None,
+                            )
+                        except Exception:
+                            log.exception("clock check failed")
                     # Only now: the server has actually taken them.
                     if any(pending.values()):
                         pending = {"result": None, "scan": None, "report": None}
@@ -663,6 +675,14 @@ async def beacon_loop(
                 # stack trace every minute - the next beacon is the retry.
                 pool.failure(url, type(exc).__name__)
                 log.debug("beacon to %s failed: %s", url, exc)
+                # A clock far enough out makes every TLS handshake fail on the
+                # certificate's dates, and then nothing above can ever succeed.
+                if keeper is not None:
+                    try:
+                        if keeper.on_failure(exc):
+                            await keeper.rescue(url, idle=play_signature(sessions) is None)
+                    except Exception:
+                        log.exception("clock rescue failed")
             except Exception:
                 log.exception("beacon loop failed unexpectedly")
 

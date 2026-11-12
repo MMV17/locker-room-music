@@ -6,6 +6,7 @@ import logging.handlers
 
 from typing import Any, Awaitable, Callable
 
+from . import clock
 from . import config as config_mod
 from . import relaytarget
 from .aux import AuxRouter
@@ -96,6 +97,7 @@ async def run_listener(
     beacon: Callable[..., Awaitable[None]] = beacon_loop,
     drain: Callable[..., Awaitable[None]] = drain_loop,
     retry_s: float = 5.0,
+    keeper: Any = None,
 ) -> None:
     """Build the listener and run it. Split from async_main so it can be tested
     with parts that fail: see tests/test_main_startup.py."""
@@ -181,7 +183,11 @@ async def run_listener(
         # box off the air. And if the beacon loop itself ever dies the right
         # answer is for the whole process to exit and systemd to restart it,
         # not to limp on unreachable.
-        beacon(cfg, session_manager, relay=relay, pool=pool),
+        # `keeper` corrects the box's clock from the server's time (clock.py).
+        # Only the real entry point passes one, so nothing under test can ever
+        # set the clock of the machine running the tests.
+        beacon(cfg, session_manager, relay=relay, pool=pool,
+               **({"keeper": keeper} if keeper is not None else {})),
         supervised(
             "outbox drain", lambda: drain(cfg, store, pool=pool),
             base_delay_s=retry_s, fatal=(FatalStoreError,),
@@ -200,7 +206,7 @@ async def async_main() -> None:
 
     log = logging.getLogger("lockerroom.main")
     log.info("starting lockerroom listener, api_base_url=%s", cfg.api_base_url)
-    await run_listener(cfg)
+    await run_listener(cfg, keeper=clock.Keeper())
 
 
 def main() -> None:
