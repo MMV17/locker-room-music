@@ -204,26 +204,27 @@ export function Speaker({ call }: { call: Call }) {
     if (outstanding) watchUntil.current = Date.now() + WATCH_MS;
   }, [outstanding, commands]);
 
+  // One steady tick decides each time whether a refresh is due. (An earlier
+  // version armed a 3s or a 20s timer; pressing a button during a 20s wait
+  // then took up to 20s to speed up, which is the wait this exists to remove.)
+  const lastLoad = useRef(0);
   useEffect(() => {
-    load();
-    let timer: number | undefined;
-    let stopped = false;
-    const schedule = () => {
-      if (stopped) return;
-      const fast = Date.now() < watchUntil.current;
-      timer = window.setTimeout(() => {
-        if (!document.hidden) load();
-        schedule();
-      }, fast ? FAST_MS : SLOW_MS);
+    const refresh = () => {
+      lastLoad.current = Date.now();
+      load();
     };
-    schedule();
+    refresh();
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      const every = Date.now() < watchUntil.current ? FAST_MS : SLOW_MS;
+      if (Date.now() - lastLoad.current >= every) refresh();
+    }, 1000);
     const onVisible = () => {
-      if (!document.hidden) load();
+      if (!document.hidden) refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      stopped = true;
-      window.clearTimeout(timer);
+      window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [load]);

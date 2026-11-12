@@ -109,7 +109,11 @@ remove the old one until the speaker is running the new software**, or the box
 loses the only address it knows, cannot be reached, and its wifi watchdog
 starts rebooting it. That needs a cable to fix.
 
-1. Precondition: step 3 worked. Diagnostics shows a software version.
+1. Precondition: step 3 worked, AND the speaker has proved it can reach
+   another address. Press **Report full** and read the section "SERVER
+   ADDRESSES": at least one line other than the legacy hostname must end in
+   `200`. If none does, do not remove the route - the speaker would have
+   nowhere to go.
 2. In `backend/wrangler.toml`, delete the route line for the legacy hostname
    and the comment block above it, and merge. The deploy removes the hostname
    from Cloudflare.
@@ -241,12 +245,12 @@ Deliberately left for a decision or for hardware testing:
   Moving the hashing onto the speaker needs a config change on the box.
 - **The speaker's own folder and service names still say `lockerroom`**, as do
   the database and backup bucket. See the README for why.
-- **The speaker has no clock battery.** If the school network does not give
-  it the time, its clock drifts or lags after a long power-off. Report full
-  now shows whether the clock is synchronised, and Admin warns when it is more
-  than two minutes out. A boot-time clock setter was written and deliberately
-  left out of this release: as built, one bad answer from a network filter
-  could have pushed the clock into the future for good.
+- **The speaker has no clock battery, and the school network does not give
+  it the time** (measured 2026-11-12: 8.6 days behind, then minutes behind
+  again within an hour of being set by hand). The listener now keeps the clock
+  itself, from the time on the server's verified answers, whenever no song is
+  open and no phone is connected. Admin still warns when it is more than two
+  minutes out; if that warning stays up on an idle speaker, something is wrong.
 - **Two rare updater cases clear themselves only on the next power cycle:** a
   completely full disk at the last step of an update, and a power cut in the
   few seconds an update is being finalised. In both the speaker keeps working;
