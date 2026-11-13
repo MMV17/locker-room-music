@@ -75,6 +75,28 @@ Build order status (spec section 10):
 
 ---
 
+## Forgetting on the phone no longer locks the phone out (2026-11-13) — SHIPS VIA `run repair`
+
+**Symptom:** "Forget This Device" on a phone, then it can never pair again
+until someone presses Admin -> Pairings -> Forget for it. Bluetooth sends no
+"unpair" message, so the Pi keeps a stale bond, and BlueZ's default
+`JustWorksRepairing = never` refuses the phone's fresh pairing.
+
+**Fix:** `pi/scripts/bt-repair-policy.sh` sets `JustWorksRepairing = always` in
+`/etc/bluetooth/main.conf`: the Pi accepts the new pairing and overwrites the
+stale bond. Same result as forgetting on both sides at once. No security cost
+here: bt-agent is NoInputNoOutput, so anything in range could already pair.
+
+- `remote-repair.sh` runs it (before the units block). **The first repair
+  after this commit restarts bluetoothd once**, with
+  `--job-mode=ignore-dependencies` so the listener survives, which drops
+  connected phones for a few seconds. Every later repair is a no-op.
+- `provision.sh` runs it with `--no-restart` (it reboots anyway).
+- Tests: `pi/tests/test_bt_repair_policy.py`.
+- Admin -> Forget (`bt-forget.sh`) stays as the manual fallback.
+- **To verify on hardware:** forget AUXGOAT on a phone, re-pair from the phone,
+  and confirm it connects without touching Admin.
+
 ## TO DO: Bluetooth gets spotty when more than one phone is connected (noted 2026-11-10)
 
 **The complaint:** with one phone connected the audio is fine; as soon as more

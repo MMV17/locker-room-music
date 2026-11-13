@@ -111,6 +111,10 @@ for kv in "DiscoverableTimeout = 0" "PairableTimeout = 0"; do
     sed -i "/^\[General\]/a $kv" /etc/bluetooth/main.conf
   fi
 done
+# A phone that hit "Forget This Device" can pair again without anyone forgetting
+# it here first. bt-repair-policy.sh is the ONE writer of this key, shared with
+# remote-repair.sh so the two cannot drift. No restart: provisioning reboots.
+bash "$(dirname "$0")/bt-repair-policy.sh" --no-restart
 
 echo "== audio out =="
 # spec.md 4.1 has required this since phase 1 and NOTHING has ever asserted it —
