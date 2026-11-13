@@ -167,6 +167,8 @@ async def run_listener(
         # getattr: test doubles for the watcher predate profile control.
         if hasattr(watcher, "disconnect_profile") and hasattr(watcher, "connect_profile"):
             session_manager.set_profiles(watcher.disconnect_profile, watcher.connect_profile)
+        if hasattr(watcher, "connect_device"):
+            session_manager.set_device_connect(watcher.connect_device)
         try:
             await watcher.start()
         except BaseException:

@@ -125,6 +125,25 @@ DROP_COOLDOWN = timedelta(seconds=5)
 # pause; a reconnect does not (it can take seconds) and runs in its own task.
 PROFILE_DROP_TIMEOUT_S = 5.0
 PROFILE_CONNECT_TIMEOUT_S = 20.0
+# THE STALE AUX (2026-11-13). A phone's A2DP transport can vanish while the
+# phone stays connected over AVRCP and HFP. Seen on hardware twice: the radio
+# overload of 2026-11-12 21:15 (the DJ's iPhone lost its stream to a second
+# phone's) and the iPad in Tests C/D. The phone keeps saying "Connected", its
+# music plays out of its own speaker, its AVRCP keeps reporting songs - so the
+# speaker kept it as DJ, the site showed it holding the aux, and plays piled up
+# for a song the room could not hear. Nothing noticed, because only a whole
+# device disconnecting was ever reported.
+#
+# Now: when the HOLDER loses its transport, wait AUDIO_LOST_GRACE for the phone
+# to bring it back itself (iOS often does), then ask BlueZ to reconnect the
+# device's missing profiles, wait AUDIO_RECOVER_WAIT, and if the audio is still
+# not back, RELEASE the aux - close the play, hand the speaker to whoever is
+# waiting, and stop treating that phone's AVRCP as music until its audio
+# returns. A silent DJ the room cannot hear is worse than a free aux.
+AUDIO_LOST_GRACE = timedelta(seconds=8)
+AUDIO_RECOVER_WAIT = timedelta(seconds=8)
+AUDIO_RECOVER_TIMEOUT_S = 15.0
+AUDIO_RECOVER_COOLDOWN = timedelta(seconds=30)
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -226,6 +245,17 @@ class Session:
     a2dp_dropped: bool = False
     # When the last drop was attempted. See DROP_COOLDOWN.
     last_drop_at: datetime | None = None
+    # Whether this phone has an A2DP transport right now - i.e. whether its
+    # audio can reach the speaker at all. See AUDIO_LOST_GRACE.
+    has_audio_link: bool = False
+    # Set when the aux was taken away because the audio link did not come back.
+    # While set, this phone's AVRCP is not treated as music.
+    audio_lost: bool = False
+    audio_watch: asyncio.Task | None = None
+    last_recover_at: datetime | None = None
+    # Last AVRCP Status, so a phone whose audio comes back mid-song can be
+    # given the aux without waiting for another event.
+    last_status: str | None = None
 
 
 class NullAux:
@@ -296,6 +326,8 @@ class SessionManager:
         # Optional for the same reason as _pause; see DROP_WAITING_STREAMS.
         self._disconnect_profile: Callable[[str, str], Awaitable[None]] | None = None
         self._connect_profile: Callable[[str, str], Awaitable[None]] | None = None
+        # Set by main.py to BluezWatcher.connect_device. See AUDIO_LOST_GRACE.
+        self._connect_device: Callable[[str], Awaitable[None]] | None = None
         # Strong references to fire-and-forget tasks (profile reconnects,
         # deferred drops); asyncio only keeps weak ones.
         self._side_tasks: set[asyncio.Task] = set()
@@ -348,6 +380,11 @@ class SessionManager:
         """
         self._disconnect_profile = disconnect
         self._connect_profile = connect
+
+    def set_device_connect(self, connect: Callable[[str], Awaitable[None]]) -> None:
+        """Give the manager a way to ask BlueZ to reconnect a device's missing
+        profiles. See AUDIO_LOST_GRACE."""
+        self._connect_device = connect
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         task = asyncio.create_task(coro)
@@ -726,6 +763,9 @@ class SessionManager:
             session = self._sessions.pop(device_path, None)
             if session is None:
                 return
+            if session.audio_watch is not None:
+                session.audio_watch.cancel()
+                session.audio_watch = None
             if session.current_play is not None:
                 await self._close_play(session, session.current_play, reason="disconnect")
             log.info("session closed: %s (%s)", session.alias, session.mac)
@@ -763,6 +803,13 @@ class SessionManager:
         session = self._sessions.get(device_path)
         if session is None:
             log.warning("track change for unknown session %s", device_path)
+            return
+
+        if session.audio_lost:
+            # Their music is coming out of their own phone; it is not a song
+            # the room hears, and pausing them would only add confusion.
+            session.last_track = dict(track)
+            self._maybe_recover(session)
             return
 
         title = _as_str(track.get("Title"))
@@ -859,6 +906,12 @@ class SessionManager:
         if session is None:
             return
 
+        session.last_status = status
+        if session.audio_lost:
+            if status == "playing":
+                self._maybe_recover(session)
+            return
+
         moment_now = now()
         if status == "playing" and not await self._may_use_aux(session, moment_now):
             # They pressed play on a speaker that is not listening to them.
@@ -925,6 +978,9 @@ class SessionManager:
         if session is None:
             return
         session.last_transport_state = state
+        if not session.has_audio_link:
+            session.has_audio_link = True
+            await self._audio_link_back(session)
         self._note_waiting_stream(session, state)
         await self._drop_waiting_stream(session)
         if session.current_play is None:
@@ -954,6 +1010,107 @@ class SessionManager:
         play.transport_timer = asyncio.create_task(
             self._transport_idle_watchdog(session, play, now())
         )
+
+    async def on_transport_removed(self, device_path: str) -> None:
+        async with self._lock:
+            session = self._sessions.get(device_path)
+            if session is None:
+                return
+            session.has_audio_link = False
+            session.last_transport_state = None
+            if self._aux_path != device_path:
+                return
+            log.warning(
+                "%s holds the aux but its audio connection is gone (still connected); "
+                "waiting %ss for it to come back",
+                session.alias, int(AUDIO_LOST_GRACE.total_seconds()),
+            )
+            if session.audio_watch is None:
+                session.audio_watch = asyncio.create_task(self._audio_lost_watchdog(session))
+
+    async def _audio_lost_watchdog(self, session: Session) -> None:
+        try:
+            await asyncio.sleep(AUDIO_LOST_GRACE.total_seconds())
+            async with self._lock:
+                if not self._still_lost_holder(session):
+                    session.audio_watch = None
+                    return
+            await self._try_recover(session)
+            await asyncio.sleep(AUDIO_RECOVER_WAIT.total_seconds())
+            async with self._lock:
+                session.audio_watch = None
+                if not self._still_lost_holder(session):
+                    return
+                await self._release_lost_holder(session)
+        except asyncio.CancelledError:
+            return
+
+    def _still_lost_holder(self, session: Session) -> bool:
+        return (
+            self._sessions.get(session.device_path) is session
+            and not session.has_audio_link
+            and self._aux_path == session.device_path
+        )
+
+    async def _try_recover(self, session: Session) -> None:
+        """Ask BlueZ to reconnect the phone's missing profiles. Outside the lock."""
+        if self._connect_device is None:
+            return
+        session.last_recover_at = now()
+        try:
+            await asyncio.wait_for(
+                self._connect_device(session.device_path), timeout=AUDIO_RECOVER_TIMEOUT_S
+            )
+            log.info("asked %s to reconnect its audio", session.alias)
+        except Exception:
+            log.warning("could not reconnect the audio of %s", session.alias, exc_info=True)
+
+    def _maybe_recover(self, session: Session) -> None:
+        """A recovery attempt for an audio-lost phone that is trying to play,
+        at most once per AUDIO_RECOVER_COOLDOWN. Fire-and-forget."""
+        moment = now()
+        if (
+            session.last_recover_at is not None
+            and moment - session.last_recover_at < AUDIO_RECOVER_COOLDOWN
+        ):
+            return
+        session.last_recover_at = moment
+        self._spawn(self._try_recover(session))
+
+    async def _release_lost_holder(self, session: Session) -> None:
+        """Take the aux from a phone whose audio did not come back. Lock held."""
+        session.audio_lost = True
+        if session.current_play is not None:
+            await self._close_play(session, session.current_play, reason="audio_lost")
+        log.warning(
+            "released the aux from %s: its audio connection is gone and did not come "
+            "back. Turning Bluetooth off and on on that phone fixes it.", session.alias,
+        )
+        self._aux_path = None
+        waiting = sorted(
+            (s for s in self._sessions.values() if s is not session and not s.audio_lost),
+            key=lambda s: s.connected_at,
+        )
+        if waiting:
+            await self._grant(waiting[0])
+        else:
+            await self._resync_aux()
+
+    async def _audio_link_back(self, session: Session) -> None:
+        """The phone has an A2DP transport again. Lock held."""
+        if session.audio_watch is not None:
+            session.audio_watch.cancel()
+            session.audio_watch = None
+        if not session.audio_lost:
+            return
+        session.audio_lost = False
+        log.info("the audio connection of %s is back", session.alias)
+        # Back mid-song with the aux free: give it to them now, rather than
+        # leaving the song unheard until the phone happens to send another event.
+        if session.last_status == "playing" and self._holder(now()) is None:
+            await self._grant(session)
+            if session.last_track is not None:
+                await self._track_changed(session.device_path, session.last_track, None, _force=True)
 
     def _note_waiting_stream(self, session: Session, state: str) -> None:
         """Log when a phone that is NOT on the aux is streaming anyway.

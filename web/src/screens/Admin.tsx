@@ -5,7 +5,6 @@ import { PW_KEY, useAdminCall } from "./admin/adminApi";
 import { Covers } from "./admin/Covers";
 import { Devices } from "./admin/Devices";
 import { Speaker } from "./admin/Diagnostics";
-import { Pairings } from "./admin/Pairings";
 import { Plays } from "./admin/Plays";
 import { Roster } from "./admin/Roster";
 import { SpeakerOutput } from "./admin/SpeakerOutput";
@@ -92,13 +91,13 @@ export function Admin({ teamName }: { teamName: string }) {
           and put the remote commands ABOVE the speaker picker they operate on.
 
           The split that matters is doing vs reading, and output vs input:
-          Speaker output is where you change and fix the box, Bluetooth
-          pairings is the connections coming IN to it, and Diagnostics is
-          purely what came back. Forget used to sit on the output list, which
-          put a destructive button on the one list that answers a different
-          question entirely. */}
+          Speaker output is where you change and fix the box, and Diagnostics
+          is purely what came back. A "Bluetooth pairings" section with a
+          Forget button sat here until 2026-11-13: the box now accepts a phone
+          that forgot it re-pairing by itself (JustWorksRepairing = always,
+          pi/scripts/bt-repair-policy.sh), which was that button's whole job.
+          forget-selected-phone stays on the allowlist, unused. */}
       <SpeakerOutput call={call} />
-      <Pairings call={call} />
       <Devices call={call} />
       <Roster call={call} />
       <Plays call={call} />

@@ -335,3 +335,33 @@ class TestTheUpdateLock:
         assert "could not take a complete snapshot" in result.stdout
         assert "RESTORE FAILED" in result.stdout
         assert (box["pkg"] / "control.py").exists(), "the package was destroyed"
+
+
+class TestFixTheSpeakerFollowUp:
+    """'Fix the speaker' restarts the listener when healthy and reboots when
+    not, and either one is SCHEDULED: the listener is running the repair."""
+
+    def _code(self):
+        return [l.strip() for l in REPAIR_SH.read_text().splitlines()
+                if l.strip() and not l.strip().startswith("#")]
+
+    def test_the_listener_restart_and_the_reboot_are_both_scheduled(self):
+        code = self._code()
+        restart = [l for l in code if "restart lockerroom-listener" in l]
+        reboot = [l for l in code if "systemctl reboot" in l]
+        assert restart and reboot
+        # Each sits on a continuation of a systemd-run --on-active call.
+        body = REPAIR_SH.read_text()
+        for needle in ("systemctl restart lockerroom-listener", "systemctl reboot"):
+            before = body[: body.index(needle)]
+            last_call = before[before.rindex('"$SYSTEMD_RUN"'):]
+            assert "--on-active=" in last_call
+
+    def test_nothing_restarts_the_listener_inline(self):
+        for line in self._code():
+            if "restart lockerroom-listener" in line or "restart-listener" in line:
+                assert line.startswith("--on-active") or "SYSTEMD_RUN" in line or "echo" in line, line
+
+    def test_the_follow_up_is_the_last_thing_the_repair_does(self):
+        body = REPAIR_SH.read_text()
+        assert body.index("===== health check and follow-up") > body.index("===== software update: request")
