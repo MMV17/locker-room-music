@@ -122,6 +122,12 @@ if command -v hciconfig >/dev/null 2>&1; then
   echo "  UP RUNNING with NO PSCAN/ISCAN is the 2026-09-20 fault exactly — the"
   echo "  controller is healthy and no phone can see it. keep-discoverable"
   echo "  and/or bt-agent are the units to look at, and run-repair restarts them."
+  echo
+  run 10 hciconfig hci0 lm
+  echo "READ THIS LINE: 'CENTRAL' (or 'MASTER') means keep-discoverable is holding"
+  echo "  the central-role experiment. Under BLUETOOTH CONNECTIONS below, every"
+  echo "  'lm' should then read CENTRAL; a phone on PERIPHERAL refused the switch"
+  echo "  or connected before it took hold."
 else
   # hciconfig is deprecated in BlueZ and may not be installed on a rebuilt box.
   # bluetoothctl carries the same two facts under different names.

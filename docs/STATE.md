@@ -75,6 +75,39 @@ Build order status (spec section 10):
 
 ---
 
+## Two phones: the second stream knocks out the first (tested 2026-11-12) — central-role EXPERIMENT shipping
+
+**The test** (iPhone on the aux, relay to the JBL, iPad waiting): connecting the
+iPad crackled. When the iPad pressed play, the iPhone's audio moved back to the
+phone's own speaker. The phone still said "connected", but its music had paused.
+From the report-full at 21:15:
+
+```
+21:15:00  waiting phone 21:B0 is streaming (transport pending) while B2:61 holds the aux
+21:15:02  bluealsa: Device not available: /org/bluez/hci0/dev_5C_AD_BA_F0_B2_61/fd5   <- iPhone's A2DP gone
+21:15:05  paused Mack's iPad, which is not on the aux                                 <- our pause, too late
+dmesg:    "Bluetooth: Unexpected start frame (len 679)" dozens per second            <- L2CAP fragments lost
+Connections:  JBL lm CENTRAL / iPhone lm PERIPHERAL / iPad lm CENTRAL                  <- scatternet
+```
+
+So the second incoming stream overloads the one radio, and the holder's stream
+is the one that dies. It is NOT the listener: its pause came after the loss.
+Note that a MacBook Pro also auto-connected during the test (21:08-21:14).
+
+**Experiment (2026-11-13):** `keep-discoverable.sh` now holds `hciconfig hci0 lm
+accept,central`, so incoming links role-switch to make the Pi central: one
+piconet, one clock. It ships via Admin -> Update software (the updater installs
+keep-discoverable.sh and restarts it). `report-full` now prints `hciconfig hci0
+lm`. Off switch: `PREFER_CENTRAL=0` in the script.
+
+**To judge it:** after the update, disconnect and reconnect BOTH phones (only new
+links switch roles), confirm every `lm` reads CENTRAL in report-full, then rerun
+steps 2 and 3. Unverified on this kernel/chip until then.
+
+**Still on the table afterwards:** (1) the USB Bluetooth dongle for phones in
+(moves them off the UART, where those lost fragments are), and (2) dropping a
+waiting phone's A2DP profile so it cannot stream at all (fix #1 in the TO DO below).
+
 ## Forgetting on the phone no longer locks the phone out (2026-11-13) — SHIPS VIA `run repair`
 
 **Symptom:** "Forget This Device" on a phone, then it can never pair again
