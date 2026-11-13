@@ -110,6 +110,15 @@ off the UART that loses fragments and off the radio the relay uses.
 - bluealsa serves all adapters (no `-i`), and main.conf settings
   (JustWorksRepairing, Class, timeouts) are global. Nothing changes there.
 
+**FIRST HARDWARE RESULT (2026-11-13 13:31, UB500):** firmware loaded
+(`rtl_bt/rtl8761bu_fw.bin`, fw 0xdfc6d922). Roles came out right (PHONES=hci1
+USB, RELAY=hci0 UART, SPLIT=1). The dongle read `UP RUNNING PSCAN ISCAN` and the
+built-in chip `UP RUNNING PSCAN` (hidden). Two fixes followed: BlueZ named
+the dongle "AuxGoat 0001 #2", so keep-discoverable now sets the dongle's Alias to
+the pretty hostname and the built-in chip's to "<name> (speaker link)", writing
+only when it differs because Alias writes go to flash. And bt-agent ignores
+SIGTERM, so every restart waited 90s; `TimeoutStopSec=5` in bt-agent.service.
+
 **Bring-up when it arrives:** plug the dongle into a **black USB 2 port** (an
 extension cable is better), press Fix the speaker, then Get a report. Want
 `SPLIT=1`, the dongle `UP RUNNING PSCAN ISCAN`, and the built-in chip without

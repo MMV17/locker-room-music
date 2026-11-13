@@ -67,6 +67,7 @@ def run_keep_discoverable(tmp_path, sysfs, extra=None):
     exe(bin_ / "busctl", f'#!/bin/bash\necho "busctl $*" >> {log}\n')
     exe(bin_ / "bluetoothctl", f'#!/bin/bash\necho "bluetoothctl $*" >> {log}\n')
     exe(bin_ / "hciconfig", "#!/bin/bash\necho 'Link mode: PERIPHERAL ACCEPT'\n")
+    exe(bin_ / "hostnamectl", "#!/bin/bash\necho 'AuxGoat 0001'\n")
     env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}")
     env.update(roles_env(sysfs))
     env.update(extra or {})
@@ -84,6 +85,35 @@ def test_split_makes_the_dongle_discoverable_and_hides_the_built_in(tmp_path):
     assert "/org/bluez/hci0 org.bluez.Adapter1 Pairable b false" in calls
     assert "bluetoothctl" not in calls
     assert "phones on hci1" in r.stdout
+    # Named as the speaker, not BlueZ's "AuxGoat 0001 #2" for a second adapter.
+    assert "/org/bluez/hci1 org.bluez.Adapter1 Alias s AuxGoat 0001\n" in calls
+    assert "/org/bluez/hci0 org.bluez.Adapter1 Alias s AuxGoat 0001 (speaker link)" in calls
+
+
+def test_a_name_that_is_already_right_is_not_rewritten(tmp_path):
+    """Alias writes land on flash; the loop runs every 5s."""
+    sysfs = fake_tree(tmp_path / "sys", {"hci0": "uart", "hci1": "usb"})
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "calls"
+    exe(bin_ / "busctl", f"""#!/bin/bash
+echo "busctl $*" >> {log}
+if [ "$1" = "get-property" ]; then
+  case "$3" in
+    /org/bluez/hci1) echo 's "AuxGoat 0001"' ;;
+    /org/bluez/hci0) echo 's "AuxGoat 0001 (speaker link)"' ;;
+  esac
+fi
+""")
+    exe(bin_ / "hciconfig", "#!/bin/bash\necho 'Link mode: PERIPHERAL ACCEPT'\n")
+    exe(bin_ / "hostnamectl", "#!/bin/bash\necho 'AuxGoat 0001'\n")
+    env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}")
+    env.update(roles_env(sysfs))
+    subprocess.run(["bash", str(SCRIPTS / "keep-discoverable.sh"), "--once"],
+                   env=env, capture_output=True, text=True, timeout=60)
+    calls = log.read_text()
+    assert "Alias s" not in calls
+    assert "get-property org.bluez /org/bluez/hci1 org.bluez.Adapter1 Alias" in calls
 
 
 def test_without_a_dongle_it_runs_todays_bluetoothctl_lines(tmp_path):

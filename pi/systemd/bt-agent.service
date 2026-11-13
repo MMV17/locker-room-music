@@ -13,6 +13,11 @@ Type=simple
 ExecStart=/usr/bin/bt-agent -c NoInputNoOutput
 Restart=always
 RestartSec=2
+# bt-agent ignores SIGTERM, so every stop sat out systemd's default 90s before
+# the SIGKILL (seen in every repair log: "State 'stop-sigterm' timed out").
+# It holds no state worth a graceful exit - it re-registers as the agent on
+# start - so give it 5s, not 90.
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target
