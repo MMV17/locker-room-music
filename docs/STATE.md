@@ -77,6 +77,18 @@ Build order status (spec section 10):
 
 ## The silent relay, and Admin fixes run mid-song (2026-11-13)
 
+**UPDATE, later the same night:** the first version of the check below
+MISFIRED. `bluealsa-cli list-pcms` came back EMPTY while music was playing
+(confirmed by ear at 23:03), so it reconnected a working JBL every 30s (an
+audible chime). It was switched off, then rebuilt on the player's own failure:
+>= 3 `Couldn't open ALSA playback PCM` lines in the last 20s of `journalctl -u
+bluealsa-aplay`, with an `Opening ALSA playback PCM: name=bluealsa:DEV=<speaker>`
+among them, on two looks 5s apart. A phone that is not playing produces no
+lines, so an idle box cannot trip it. Tests use the verbatim failing (22:40) and
+healthy (23:03) lines. **Also retracted:** bluealsa's `Device not available …`
+lines and an empty PCM list appear while audio works. They are not evidence of
+anything on their own.
+
 **The silent relay (seen on hardware):** the phone's audio reached the Pi fine,
 but at 22:39:07 the JBL's A2DP channel closed (`Device not available …
 dev_78_66_F3_1C_9D_B6/sep2`) while the JBL stayed connected. bluealsa-aplay then
