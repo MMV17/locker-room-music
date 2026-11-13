@@ -164,6 +164,9 @@ async def run_listener(
         # sink, and doing it in either constructor would be a cycle.
         watcher = watcher_factory(session_manager)
         session_manager.set_pause(watcher.pause)
+        # getattr: test doubles for the watcher predate profile control.
+        if hasattr(watcher, "disconnect_profile") and hasattr(watcher, "connect_profile"):
+            session_manager.set_profiles(watcher.disconnect_profile, watcher.connect_profile)
         try:
             await watcher.start()
         except BaseException:
