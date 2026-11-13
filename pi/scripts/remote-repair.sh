@@ -355,10 +355,31 @@ echo "===== health check and follow-up ====="
 FOLLOWUP_DELAY_S="${AUXGOAT_FOLLOWUP_DELAY_S:-45}"
 SYSTEMD_RUN="${AUXGOAT_SYSTEMD_RUN:-systemd-run}"
 HEALTHY=1
+# WAIT for units still settling before judging them. On 2026-11-13 bt-agent was
+# "deactivating" (its stop is slow and the restart above timed out on it) when
+# this looked, a second later - so the box was rebooted for a unit that came
+# back by itself moments after. Up to HEALTH_WAIT_S for each to reach active.
+HEALTH_WAIT_S="${AUXGOAT_HEALTH_WAIT_S:-90}"
 for u in bluetooth bt-agent keep-discoverable bluealsa bluealsa-aplay; do
-  if [ "$(systemctl is-active "$u" 2>/dev/null)" != "active" ]; then
-    echo "  UNHEALTHY: $u is not running"
+  waited=0
+  state="$(systemctl is-active "$u" 2>/dev/null)"
+  while [ "$state" != "active" ] && [ "$waited" -lt "$HEALTH_WAIT_S" ]; do
+    case "$state" in
+      activating|deactivating|reloading|inactive) ;;
+      *) break ;;   # failed, or unknown: waiting will not help
+    esac
+    if [ "$state" = "inactive" ] && [ "$waited" -ge 10 ]; then
+      timeout 30 systemctl start "$u" >/dev/null 2>&1
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    state="$(systemctl is-active "$u" 2>/dev/null)"
+  done
+  if [ "$state" != "active" ]; then
+    echo "  UNHEALTHY: $u is not running (state: ${state:-unknown}, waited ${waited}s)"
     HEALTHY=0
+  elif [ "$waited" -gt 0 ]; then
+    echo "  $u came up after ${waited}s"
   fi
 done
 if command -v hciconfig >/dev/null 2>&1; then
