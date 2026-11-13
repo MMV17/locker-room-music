@@ -32,6 +32,28 @@ function commandLabel(cmd: string): string {
   return COMMAND_LABELS[cmd] ?? cmd.replace(/-/g, " ");
 }
 
+/**
+ * Which long-form report each command produces. Each kind keeps only its
+ * LATEST report server-side, so a report can only belong to the newest command
+ * of its kind - older rows keep their one-line result.
+ */
+const REPORT_FOR: Record<string, string> = {
+  "report-full": "report-full",
+  "run-repair": "run-repair",
+  "update-software": "update",
+};
+/** The Pi stamps collected_at with its own clock; allow it to be a bit off. */
+const SKEW_MS = 2 * 60_000;
+/** Stop showing "installing" for an update that never reported back. */
+const UPDATE_GIVE_UP_MS = 15 * 60_000;
+
+/** "AuxGoat software update: committed\nnow running e871845\n..." -> one line. */
+function updateSummary(body: string): string {
+  const [first = "", second = ""] = body.split("\n");
+  const outcome = first.replace(/^.*?:\s*/, "");
+  return second ? `${outcome} - ${second}` : outcome;
+}
+
 
 /**
  * Remote control for the Pi.
@@ -213,7 +235,35 @@ export function Speaker({ call }: { call: Call }) {
     load();
   }, [load]);
 
-  const outstanding = !!commands?.some((c) => !c.completed_at);
+  /*
+   * Each history row carries its own result (2026-11-13). The long-form
+   * reports used to sit in separate folded boxes at the bottom - "Full
+   * report", "Repair log", "Last update" - apart from the button that made
+   * them, and an update's row said "scheduled" for good while its outcome
+   * landed in a box nobody looked at. Now the newest row of each kind owns its
+   * report: "Show all" opens it, and an update row reads "installing" until
+   * its outcome arrives, then shows the outcome.
+   */
+  const reportFor = (c: PiCommand): PiReport | undefined => {
+    const kind = REPORT_FOR[c.command];
+    if (!kind || !commands) return undefined;
+    const newest = commands.find((x) => x.command === c.command);
+    if (newest?.id !== c.id) return undefined;
+    const r = reports.find((x) => x.kind === kind);
+    if (!r) return undefined;
+    return Date.parse(r.collected_at) >= Date.parse(c.created_at) - SKEW_MS ? r : undefined;
+  };
+  const installing = (c: PiCommand) =>
+    c.command === "update-software" &&
+    !!c.completed_at &&
+    !!c.ok &&
+    !reportFor(c) &&
+    Date.now() - Date.parse(c.created_at) < UPDATE_GIVE_UP_MS;
+
+  // An update counts as outstanding until its outcome report arrives, not just
+  // until the box answers "scheduled" - that is what kept this screen from
+  // showing the result by itself.
+  const outstanding = !!commands?.some((c) => !c.completed_at || installing(c));
   useEffect(() => {
     if (outstanding) watchUntil.current = Date.now() + WATCH_MS;
   }, [outstanding, commands]);
@@ -243,8 +293,12 @@ export function Speaker({ call }: { call: Call }) {
     };
   }, [load]);
 
-  const label = (c: PiCommand) =>
-    c.completed_at ? (c.ok ? "done" : "failed") : c.dispatched_at ? "running" : "queued";
+  const label = (c: PiCommand) => {
+    if (installing(c)) return "installing";
+    const r = reportFor(c);
+    if (c.command === "update-software" && r) return r.ok ? "done" : "failed";
+    return c.completed_at ? (c.ok ? "done" : "failed") : c.dispatched_at ? "running" : "queued";
+  };
 
   return (
     <Section title="Diagnostics">
@@ -340,9 +394,20 @@ export function Speaker({ call }: { call: Call }) {
                stays — a history of six one-liners is the right default — but
                the full result is now one tap away. */
             const expanded = !!open[c.id];
-            const summary = c.result ? c.result.split("\n")[0] : "";
+            const report = reportFor(c);
+            const summary =
+              c.command === "update-software" && report
+                ? updateSummary(report.body)
+                : installing(c)
+                  ? "the speaker is installing it and restarts by itself; the result shows here"
+                  : c.result
+                    ? // The speaker still says "open it below" from when the
+                      // report sat in a box under the list; it is "Show all" now.
+                      c.result.split("\n")[0].replace(/,\s*open it below$/, "")
+                    : "";
+            const full = report ? report.body : c.result;
             const hasMore =
-              !!c.result && (c.result.includes("\n") || c.result !== summary);
+              !!full && (full.includes("\n") || full !== summary);
             return (
               /* Every row uses the block layout with a flex header, expandable
                  or not. Visually identical to the old flat row, and it avoids
@@ -369,50 +434,25 @@ export function Speaker({ call }: { call: Call }) {
                     </button>
                   )}
                 </div>
-                {hasMore && expanded && <pre className="dump">{c.result}</pre>}
+                {hasMore && expanded && (
+                  <>
+                    {/* The report is long and the useful thing to do with it
+                        is send it to somebody; dragging over 20 KB of
+                        monospace on a phone is not a realistic way to do that. */}
+                    <div className="dump-action">
+                      <button className="btn-quiet" onClick={() => copy(c.id, full ?? "")}>
+                        {copied === c.id ? "Copied" : "Copy all"}
+                      </button>
+                    </div>
+                    <pre className="dump">{full}</pre>
+                  </>
+                )}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* The long-form output. Its own storage, because `pi_commands.result` is
-          cut to 2000 characters server-side and a truncated dump hides the line
-          you went looking for — see migration 007. Each kind keeps its latest,
-          so a repair log does not overwrite the diagnostic that justified
-          running it; reading the two together is the whole workflow. */}
-      {/* FOLDED, because a full report is 20 KB and it was pushing the command
-          history off the bottom of the screen every time one arrived. Collapsed
-          it is a one-line receipt; open it is the whole dump. */}
-      {reports.map((r) => (
-        <details key={r.kind} className="fold">
-          <summary className="fold-head">
-            <span className="fold-title t-section" style={{ fontSize: 16 }}>
-              {r.kind === "run-repair"
-                ? "Repair log"
-                : r.kind === "update"
-                  ? "Last update"
-                  : "Full report"}
-            </span>
-            <span className="dump-when" style={{ marginLeft: "auto", marginRight: 10 }}>
-              <span className={r.ok ? "dump-ok" : "dump-bad"}>
-                {r.ok ? "ok" : "problem"}
-              </span>{" "}
-              · {formatWhen(r.collected_at)}
-            </span>
-            <span className="fold-mark" aria-hidden="true" />
-          </summary>
-          <div className="dump-action">
-            {/* The report is long and the useful thing to do with it is send it
-                to somebody. Selecting 20 KB of monospace by dragging on a phone
-                is not a realistic way to do that. */}
-            <button className="btn-quiet" onClick={() => copy(r.kind, r.body)}>
-              {copied === r.kind ? "Copied" : "Copy all"}
-            </button>
-          </div>
-          <pre className="dump">{r.body}</pre>
-        </details>
-      ))}
     </Section>
   );
 }
