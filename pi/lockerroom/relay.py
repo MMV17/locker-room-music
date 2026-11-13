@@ -61,6 +61,11 @@ AUDIO_CHECK_TIMEOUT_S = 10.0
 RELAY_AUDIO_KICK = True
 PLAYER_FAIL_WINDOW_S = 20
 PLAYER_FAIL_MIN = 3
+# At most one player-failure reconnect per this long. On 2026-11-13 14:10-14:13
+# the JBL's audio slot was held by an iPad playing to it DIRECTLY (the Charge 6
+# takes two sources), so the failure was real but a reconnect could not fix it -
+# and the relay reconnected every ~40s, an audible chime each time.
+RELAY_KICK_BACKOFF_S = 300.0
 ROUTE_ARGV = ["sudo", "/usr/local/bin/audio-route.sh"]
 ROUTE_TIMEOUT_S = 30.0
 
@@ -278,6 +283,7 @@ class RelayManager:
         self._audio_ok = audio_ok
         self._recheck_s = recheck_s
         self._live = False
+        self._last_kick: float | None = None
         self._paired: set[str] = set()
         self._last_error: str | None = None
         self._target_listeners: list[Callable[[str | None], None]] = []
@@ -373,14 +379,22 @@ class RelayManager:
         if self._mac is None:
             return False
         if self._live:
-            if not RELAY_AUDIO_KICK or await self._audio_alive():
+            if not RELAY_AUDIO_KICK:
                 return True
+            loop_now = asyncio.get_running_loop().time()
+            if self._last_kick is not None and loop_now - self._last_kick < RELAY_KICK_BACKOFF_S:
+                return True
+            if await self._audio_alive():
+                return True
+            self._last_kick = loop_now
             # Connected, but with no audio channel: the silent relay. A fresh
             # connection brings a fresh A2DP stream; falling back to the wired
             # output in between is audible, which silence is not.
             log.warning(
                 "relay speaker %s is connected but the player cannot open it - "
-                "reconnecting it", self._mac,
+                "reconnecting it (next try no sooner than %ds; if it keeps happening, "
+                "another phone or laptop may be playing to the speaker directly)",
+                self._mac, int(RELAY_KICK_BACKOFF_S),
             )
             mac = self._mac
             try:

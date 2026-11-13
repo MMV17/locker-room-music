@@ -216,3 +216,15 @@ async def test_a_speaker_that_reconnects_by_itself_is_adopted_at_once(tmp_path):
     assert mgr.connected and len(connect.calls) == 1 and len(route.calls) == 1
     await mgr.on_connected()                     # already live: nothing more
     assert len(connect.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_that_did_not_help_is_not_repeated_every_cycle(tmp_path):
+    """2026-11-13: an iPad playing to the JBL directly held its audio slot, so
+    every 40s reconnect failed the same way - a chime each time."""
+    mgr, connect, _, disconnect = mk(tmp_path, AudioOk([False] * 20))
+    await mgr.ensure_connected()
+    await mgr.ensure_connected()                 # kick 1
+    await mgr.ensure_connected()                 # inside the back-off: left alone
+    await mgr.ensure_connected()
+    assert len(disconnect.calls) == 1
