@@ -140,6 +140,23 @@ else
 fi
 echo
 
+# ---------------------------------------------------------------------------
+# 0b. A phone that forgot this box must be able to pair again by itself.
+#
+# Sets JustWorksRepairing = always; see bt-repair-policy.sh for why and for the
+# trade. BEFORE the units block on purpose: when the setting is new it restarts
+# bluetoothd (ignore-dependencies, so not the listener), and bt-agent,
+# bluealsa and bluealsa-aplay are then restarted below against the new daemon.
+# A no-op on every run after the first.
+# ---------------------------------------------------------------------------
+echo "===== bluetooth: re-pairing policy ====="
+if [ -f "$REPO_DIR/pi/scripts/bt-repair-policy.sh" ]; then
+  timeout 60 bash "$REPO_DIR/pi/scripts/bt-repair-policy.sh" 2>&1
+else
+  echo "  bt-repair-policy.sh is missing from $REPO_DIR - skipped"
+fi
+echo
+
 echo "===== units: enable + restart ====="
 for u in $UNITS; do
   state="$(systemctl is-active "$u" 2>/dev/null || echo unknown)"
