@@ -122,6 +122,24 @@ report-full now greps. Tests: `pi/tests/test_drop_waiting_stream.py`. **Off
 switch: `DROP_WAITING_STREAMS = False`, then Update software.** The open
 question is whether iOS treats the dropped profile as a full disconnect.
 
+**Fix #1 hardware result (2026-11-13): HALF works, switched OFF.** Test A
+passed: the waiting iPad's stream was cut, it kept "Connected", and its music
+fell back to its own speaker. Tests C and D failed: when a cut phone was granted
+the aux, `ConnectProfile` from our side did not bring iOS's stream back. The
+iPad held the aux, its AVRCP kept reporting plays (12 rows of the same song,
+02:54-02:58 UTC), and the room heard nothing, even after a forget and
+re-pair. That most likely re-entered the cut while the iPhone was still in
+AUX_GRACE. A silent DJ is worse than the crackle, so `DROP_WAITING_STREAMS =
+False` until the restore is solved.
+
+**Also found (2026-11-13): an IDLE second phone is enough to crackle.** With the
+iPad connected and doing nothing, the relay crackled now and then. With the iPad
+forgotten, it was clean. iOS keeps the central role (see the failed experiment
+above), so the Pi follows two phones' piconets plus its own for the JBL on one
+radio. No listener change fixes that. **Decision: buy the USB dongle** (phones on
+the dongle, the JBL relay alone on the onboard chip). Wired output was offered
+and declined: the relay stays.
+
 **Still on the table afterwards:** (1) the USB Bluetooth dongle for phones in
 (moves them off the UART, where those lost fragments are), and (2) dropping a
 waiting phone's A2DP profile so it cannot stream at all (fix #1 in the TO DO below).

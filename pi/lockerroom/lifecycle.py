@@ -107,10 +107,15 @@ STREAM_NOTE_INTERVAL = timedelta(seconds=60)
 # just that profile, so AVRCP and HFP keep the phone connected and it still
 # shows as waiting. When it is granted the aux, the profile is reconnected.
 #
-# UNVERIFIED ON HARDWARE: some phones treat a dropped A2DP profile as a full
-# disconnect. If that turns out to be iOS, set this to False and ship it via
-# Admin -> Update software; everything goes back to pause-only.
-DROP_WAITING_STREAMS = True
+# OFF since 2026-11-13, after the hardware test. HALF of it works: the cut does
+# (iPad kept "Connected", music fell back to its own speaker, and the DJ's
+# stream survived). The RESTORE does not: when a cut phone was granted the aux,
+# ConnectProfile from our side did not bring iOS's stream back. The iPad held
+# the aux, its AVRCP kept reporting plays, and the room heard nothing - even
+# after a forget and re-pair, which most likely re-entered the same cut. A DJ
+# left silent is worse than the crackle this was meant to cure, so it is off
+# until the restore is solved. See docs/STATE.md.
+DROP_WAITING_STREAMS = False
 # The phone's side of A2DP: it is the Audio Source and we are the sink.
 A2DP_SOURCE_UUID = "0000110a-0000-1000-8000-00805f9b34fb"
 # At most one drop per phone per this long, so a phone that reconnects its
