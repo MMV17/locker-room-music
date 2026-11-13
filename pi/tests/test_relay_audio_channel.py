@@ -1,6 +1,8 @@
-"""The silent relay: connected to the speaker, but its A2DP channel is gone.
-Seen 2026-11-13 - "Couldn't get BlueALSA PCM: PCM not found" every 5s while
-the relay reported connected."""
+"""The silent relay: connected to the speaker, but the player cannot open it.
+Seen 2026-11-13 - "Couldn't open ALSA playback PCM" every 5s while the relay
+reported connected. Keyed on the player's own failure; the first version used
+bluealsa-cli's PCM list, which was empty while music played, and reconnected a
+working speaker every 30s."""
 
 from __future__ import annotations
 
@@ -20,10 +22,7 @@ MAC = "78:66:F3:1C:9D:B6"
 
 @pytest.fixture(autouse=True)
 def kick_on(monkeypatch):
-    """OFF in production (it misfired on hardware); on here so the mechanism
-    stays tested for when the PCM name is matched properly."""
     monkeypatch.setattr(relay_mod, "RELAY_AUDIO_KICK", True)
-    monkeypatch.setattr(relay_mod, "_last_pcm_log", 0.0)
 
 
 class Rec:
@@ -112,18 +111,55 @@ async def test_a_failed_reconnect_lands_on_wired(tmp_path):
     assert not (tmp_path / "relay-target").exists()
 
 
+# Verbatim from the 2026-11-13 22:40 report, the real failure.
+FAILING = """\
+aplay.c:732: Opening ALSA playback PCM: name=bluealsa:DEV=78:66:F3:1C:9D:B6,PROFILE=a2dp channels=2 rate=44100
+[22333] D: bluealsa-pcm.c:1538: Getting BlueALSA PCM: PLAYBACK 78:66:F3:1C:9D:B6 a2dp
+ALSA lib bluealsa-pcm.c:1542:(_snd_pcm_bluealsa_open) Couldn't get BlueALSA PCM: PCM not found
+aplay.c:736: Couldn't open ALSA playback PCM: Open PCM: No such device
+aplay.c:732: Opening ALSA playback PCM: name=bluealsa:DEV=78:66:F3:1C:9D:B6,PROFILE=a2dp channels=2 rate=44100
+aplay.c:736: Couldn't open ALSA playback PCM: Open PCM: No such device
+aplay.c:732: Opening ALSA playback PCM: name=bluealsa:DEV=78:66:F3:1C:9D:B6,PROFILE=a2dp channels=2 rate=44100
+aplay.c:736: Couldn't open ALSA playback PCM: Open PCM: No such device
+"""
+# Verbatim from the 23:03 report: music playing, the player quiet.
+HEALTHY = """\
+aplay.c:1320: Starting main loop
+aplay.c:904: Creating IO worker 5C:AD:BA:F0:B2:61
+aplay.c:577: Opening BlueALSA source PCM: /org/bluealsa/hci0/dev_5C_AD_BA_F0_B2_61/a2dpsnk/source
+aplay.c:603: Starting IO loop
+"""
+
+
+def test_the_real_failure_is_recognised():
+    assert relay_mod.player_failing(MAC, FAILING)
+
+
+def test_a_playing_box_is_not_a_failure():
+    """The case the first version got wrong: music playing, nothing failing."""
+    assert not relay_mod.player_failing(MAC, HEALTHY)
+    assert not relay_mod.player_failing(MAC, "")
+
+
+def test_one_or_two_failures_while_settling_are_not_enough():
+    two = "\n".join(FAILING.splitlines()[:6])
+    assert not relay_mod.player_failing(MAC, two)
+
+
+def test_failures_aimed_at_another_device_do_not_count():
+    other = FAILING.replace("78:66:F3:1C:9D:B6", "AA:BB:CC:DD:EE:FF")
+    assert not relay_mod.player_failing(MAC, other)
+
+
 @pytest.mark.asyncio
-async def test_the_real_check_reads_bluealsa_cli(tmp_path, monkeypatch):
-    out = (
-        "/org/bluealsa/hci0/dev_5C_AD_BA_F0_B2_61/a2dpsnk/source\n"
-        "/org/bluealsa/hci0/dev_78_66_F3_1C_9D_B6/a2dpsrc/sink\n"
-    )
+async def test_the_real_check_reads_the_players_journal(monkeypatch):
+    seen = {}
 
     class Proc:
         returncode = 0
 
     async def fake_exec(*argv, **kw):
-        assert argv[:2] == ("bluealsa-cli", "list-pcms")
+        seen["argv"] = argv
         return Proc()
 
     async def fake_comm(proc, timeout):
@@ -132,18 +168,19 @@ async def test_the_real_check_reads_bluealsa_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(relay_mod.asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(relay_mod, "_communicate", fake_comm)
 
-    fake_comm.out = out
-    assert await relay_mod._audio_channel_ok(MAC)
-    fake_comm.out = "/org/bluealsa/hci0/dev_5C_AD_BA_F0_B2_61/a2dpsnk/source\n"
-    assert not await relay_mod._audio_channel_ok(MAC)   # the 2026-11-13 state
+    fake_comm.out = FAILING
+    assert not await relay_mod._player_reaches_speaker(MAC)
+    assert seen["argv"][:3] == ("journalctl", "-u", "bluealsa-aplay")
+    fake_comm.out = HEALTHY
+    assert await relay_mod._player_reaches_speaker(MAC)
 
 
 @pytest.mark.asyncio
 async def test_the_real_check_says_fine_when_it_cannot_run(monkeypatch):
     async def missing(*a, **k):
-        raise FileNotFoundError("bluealsa-cli")
+        raise FileNotFoundError("journalctl")
     monkeypatch.setattr(relay_mod.asyncio, "create_subprocess_exec", missing)
-    assert await relay_mod._audio_channel_ok(MAC)
+    assert await relay_mod._player_reaches_speaker(MAC)
 
 
 @pytest.mark.asyncio
@@ -156,6 +193,6 @@ async def test_off_in_production_it_never_disconnects(tmp_path, monkeypatch):
     assert disconnect.calls == [] and len(connect.calls) == 1
 
 
-def test_the_switch_is_off_in_the_source():
+def test_the_switch_is_on_in_the_source():
     src = Path(relay_mod.__file__).read_text()
-    assert "\nRELAY_AUDIO_KICK = False\n" in src
+    assert "\nRELAY_AUDIO_KICK = True\n" in src
