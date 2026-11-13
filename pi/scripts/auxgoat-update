@@ -111,7 +111,13 @@ TRIAL_MAX_S = _f("AUXGOAT_TRIAL_MAX_S", 24 * 3600)
 TRIAL_MAX_BOOTS = int(_f("AUXGOAT_TRIAL_MAX_BOOTS", 3))
 SETTLE_S = _f("AUXGOAT_SETTLE_S", 20)
 REPAIR_WAIT_S = _f("AUXGOAT_REPAIR_WAIT_S", 300)
-IDLE_WAIT_S = _f("AUXGOAT_IDLE_WAIT_S", 900)
+# 0 since 2026-11-13: an update is pressed on the Admin screen, behind a
+# confirm that says the music stops, and whoever presses it has decided the
+# update matters more than the song. It used to wait up to 15 minutes for the
+# room to go quiet - with a song open, an install sat silently for a quarter of
+# an hour and a second press failed with "auxgoat-update-apply.timer was
+# already loaded". Kept as a knob (the tests set it) rather than deleted.
+IDLE_WAIT_S = _f("AUXGOAT_IDLE_WAIT_S", 0)
 IDLE_POLL_S = _f("AUXGOAT_IDLE_POLL_S", 30)
 LOCK_WAIT_S = _f("AUXGOAT_LOCK_WAIT_S", 300)
 MIN_FREE_MB = _f("AUXGOAT_MIN_FREE_MB", 50)
@@ -714,6 +720,15 @@ def cmd_request(args: argparse.Namespace) -> int:
             raise Refuse(f"could not resolve {up}")
         info = check_target(commit, up)
 
+        # One already waiting or running? Then this press is a no-op, not an
+        # error: on 2026-11-13 a second press failed with "Unit
+        # auxgoat-update-apply.timer was already loaded", which read as broken.
+        for unit in (f"{APPLY_UNIT}.timer", f"{APPLY_UNIT}.service"):
+            rc, _ = run(["systemctl", "is-active", "--quiet", unit], 10)
+            if rc == 0:
+                print("already scheduled: an update is waiting to start or installing "
+                      "right now - its result appears here when it is done")
+                return 0
         run(["systemctl", "reset-failed", f"{APPLY_UNIT}.service", f"{APPLY_UNIT}.timer"], 15)
         argv = [
             "systemd-run", f"--unit={APPLY_UNIT}", "--collect",
@@ -940,8 +955,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
         if free < MIN_FREE_MB:
             raise Refuse(f"only {free:.0f} MB free under {ROOT} (need {MIN_FREE_MB:.0f})")
 
+        if IDLE_WAIT_S <= 0:
+            busy = room_busy()
+            if busy is not None:
+                say(f"{busy} - going ahead anyway: an update pressed on the Admin screen wins")
         deadline = time.monotonic() + IDLE_WAIT_S
-        while (busy := room_busy()) is not None:
+        while IDLE_WAIT_S > 0 and (busy := room_busy()) is not None:
             if time.monotonic() >= deadline:
                 finish("deferred", f"{busy} - not interrupting it. Press update again "
                        "when the music has stopped.", st)

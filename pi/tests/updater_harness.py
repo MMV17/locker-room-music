@@ -83,6 +83,7 @@ STUBS = {
 echo "$*" >> "$STUB/systemctl.log"
 case "$1" in
   show) cat "$STUB/listener.show" 2>/dev/null; exit 0 ;;
+  is-active) [ -e "$STUB/apply-pending" ] && exit 0; exit 3 ;;
   restart)
     case " $* " in *" lockerroom-listener "*)
       [ -f "$STUB/listener.pid" ] && kill "$(cat "$STUB/listener.pid")" 2>/dev/null

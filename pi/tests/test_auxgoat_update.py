@@ -286,8 +286,20 @@ class TestRefusals:
         assert result.returncode == 1 and "MB free" in box.result()["reason"]
         assert not box.pkg.is_symlink()
 
-    def test_music_playing_defers_instead_of_interrupting(self, box):
-        """I8/I10."""
+    def test_by_default_music_does_not_hold_an_update_back(self, box):
+        """2026-11-13: Install update is pressed on the Admin screen behind a
+        confirm that says the music stops. It used to wait up to 15 minutes for
+        the room to go quiet, so an install sat silent with a song open."""
+        status = box.tmp / "asound" / "card0" / "pcm0p" / "sub0"
+        status.mkdir(parents=True)
+        (status / "status").write_text("state: RUNNING\n")
+        sha = box.push(package("healthy"), "v2")
+        box.apply(sha, AUXGOAT_IDLE_WAIT_S="0")
+        assert box.result().get("outcome") != "deferred"
+        assert "restart lockerroom-listener" in box.systemctl_log()
+
+    def test_music_playing_defers_when_the_wait_is_configured(self, box):
+        """I8/I10 - the old behaviour, kept behind AUXGOAT_IDLE_WAIT_S."""
         status = box.tmp / "asound" / "card0" / "pcm0p" / "sub0"
         status.mkdir(parents=True)
         (status / "status").write_text("state: RUNNING\n")
@@ -406,6 +418,16 @@ class TestRequest:
         assert "--wait-for-repair" not in scheduled
         # Scheduling changes nothing by itself.
         assert not box.pkg.is_symlink()
+
+    def test_a_second_press_while_one_is_pending_is_a_no_op_not_an_error(self, box):
+        """2026-11-13: the second press failed with 'Unit
+        auxgoat-update-apply.timer was already loaded', which read as broken."""
+        box.push(package("healthy"), "v2")
+        (box.stub / "apply-pending").write_text("")
+        result = box.update("request")
+        assert result.returncode == 0, result.stdout
+        assert "already scheduled" in result.stdout
+        assert not (box.stub / "systemd-run.log").exists()
 
     def test_the_repair_bootstrap_waits_for_the_repair(self, box):
         box.push(package("healthy"), "v2")
