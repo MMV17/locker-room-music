@@ -62,6 +62,30 @@ BIN_DIR="${AUXGOAT_BIN_DIR:-/usr/local/bin}"
 UNIT_DIR="${AUXGOAT_UNIT_DIR:-/etc/systemd/system}"
 UPDATER="$BIN_DIR/auxgoat-update"
 
+# --- adapter roles: lockerroom/adapters.py is the ONE implementation --------
+# Sets PHONES / RELAY / UART (hciN or "") and SPLIT (1 = a USB dongle carries
+# the phones, the built-in chip only the relay). Anything going wrong leaves
+# SPLIT=0 and ROLES_OK=0, and every caller then does exactly what it did before
+# the dongle existed. Identical in every script; test_bt_roles_block holds that.
+AUXGOAT_PKG_ROOT="${AUXGOAT_PKG_ROOT:-/opt/lockerroom}"
+AUXGOAT_PY="${AUXGOAT_PY:-/opt/lockerroom/venv/bin/python}"
+# shellcheck disable=SC2034  # not every script uses every role
+bt_roles() {
+  PHONES=""; RELAY=""; UART=""; SPLIT=0; ROLES_OK=0
+  local out k v
+  out="$(PYTHONPATH="$AUXGOAT_PKG_ROOT" timeout 10 "$AUXGOAT_PY" -m lockerroom.adapters 2>/dev/null)" || return 0
+  while IFS='=' read -r k v; do
+    case "$k=$v" in
+      PHONES=hci[0-9]*|PHONES=) PHONES="$v" ;;
+      RELAY=hci[0-9]*|RELAY=) RELAY="$v" ;;
+      UART=hci[0-9]*|UART=) UART="$v" ;;
+      SPLIT=1) SPLIT=1 ;;
+    esac
+  done <<< "$out"
+  ROLES_OK=1
+}
+# --- end adapter roles --------------------------------------------------------
+
 # lockerroom-listener is NOT in that list either, for the direct version of the
 # same reason. `restart-listener` is its own allowlisted command for when that
 # is genuinely what you want.
@@ -234,8 +258,38 @@ echo
 # reason this script did not fix, setting the flags directly still gets the
 # room through tonight.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# THE DONGLE (2026-11-13). A TP-Link UB500 / UB500 Plus is a Realtek RTL8761BU
+# and needs rtl_bt firmware from firmware-realtek; without it the adapter never
+# comes up and the box quietly stays single-adapter. Installed only when a
+# Realtek Bluetooth dongle is actually plugged in and the firmware is missing.
+# ---------------------------------------------------------------------------
+echo "===== USB Bluetooth dongle ====="
+if grep -qil "realtek\|rtl8761\|0bda\|2357" /sys/bus/usb/devices/*/manufacturer /sys/bus/usb/devices/*/idVendor 2>/dev/null; then
+  if ls /lib/firmware/rtl_bt/rtl8761b* >/dev/null 2>&1 || ls /usr/lib/firmware/rtl_bt/rtl8761b* >/dev/null 2>&1; then
+    echo "  a Realtek USB device is plugged in and its Bluetooth firmware is installed"
+  else
+    echo "  a Realtek USB device is plugged in but rtl8761 firmware is MISSING - installing firmware-realtek"
+    timeout 300 apt-get install -y firmware-realtek 2>&1 | tail -3 | sed 's/^/    /'
+    echo "  unplug the dongle and plug it back in (or reboot) to load the firmware"
+  fi
+else
+  echo "  no Realtek USB device plugged in"
+fi
+bt_roles
+echo "  roles: PHONES=${PHONES:-?} RELAY=${RELAY:-?} UART=${UART:-?} SPLIT=$SPLIT (read=$ROLES_OK)"
+# Which adapter must be discoverable: the dongle when split, else as before.
+DISC_HCI="hci0"
+[ "$ROLES_OK" = "1" ] && [ -n "$PHONES" ] && DISC_HCI="$PHONES"
+echo
+
 echo "===== adapter ====="
-if command -v bluetoothctl >/dev/null 2>&1; then
+if [ "$SPLIT" = "1" ] && [ -x /usr/local/bin/keep-discoverable.sh ]; then
+  # Split: per-adapter settings, done by the same code that holds them.
+  timeout 60 /usr/local/bin/keep-discoverable.sh --once 2>&1 | sed 's/^/  /'
+  timeout 10 busctl get-property org.bluez "/org/bluez/$PHONES" org.bluez.Adapter1 Discoverable 2>&1 | sed "s/^/  $PHONES (phones) Discoverable: /"
+  timeout 10 busctl get-property org.bluez "/org/bluez/$RELAY" org.bluez.Adapter1 Discoverable 2>&1 | sed "s/^/  $RELAY (relay) Discoverable: /"
+elif command -v bluetoothctl >/dev/null 2>&1; then
   timeout 15 bluetoothctl power on        2>&1 | sed 's/^/  /'
   timeout 15 bluetoothctl discoverable on 2>&1 | sed 's/^/  /'
   timeout 15 bluetoothctl pairable on     2>&1 | sed 's/^/  /'
@@ -246,8 +300,8 @@ else
 fi
 if command -v hciconfig >/dev/null 2>&1; then
   echo
-  echo "  hciconfig hci0 (want: UP RUNNING PSCAN ISCAN)"
-  timeout 10 hciconfig hci0 2>&1 | sed 's/^/    /'
+  echo "  hciconfig $DISC_HCI (want: UP RUNNING PSCAN ISCAN)"
+  timeout 10 hciconfig "$DISC_HCI" 2>&1 | sed 's/^/    /'
 fi
 echo
 
@@ -279,7 +333,7 @@ echo
 echo "===== bluetooth service (last resort) ====="
 STILL_DOWN=0
 if command -v hciconfig >/dev/null 2>&1; then
-  timeout 10 hciconfig hci0 2>/dev/null | grep -q "UP RUNNING" || STILL_DOWN=1
+  timeout 10 hciconfig "$DISC_HCI" 2>/dev/null | grep -q "UP RUNNING" || STILL_DOWN=1
 else
   timeout 10 bluetoothctl show 2>/dev/null | grep -q "Powered: yes" || STILL_DOWN=1
 fi
@@ -293,7 +347,7 @@ if [ "$STILL_DOWN" = "1" ]; then
   timeout 15 bluetoothctl discoverable on 2>&1 | sed 's/^/    /'
   timeout 15 bluetoothctl pairable on 2>&1 | sed 's/^/    /'
   if command -v hciconfig >/dev/null 2>&1; then
-    timeout 10 hciconfig hci0 2>&1 | sed 's/^/    /'
+    timeout 10 hciconfig "$DISC_HCI" 2>&1 | sed 's/^/    /'
   fi
 else
   echo "  adapter is up - leaving bluetooth.service alone."
@@ -383,7 +437,7 @@ for u in bluetooth bt-agent keep-discoverable bluealsa bluealsa-aplay; do
   fi
 done
 if command -v hciconfig >/dev/null 2>&1; then
-  HCI_STATE="$(timeout 10 hciconfig hci0 2>/dev/null)"
+  HCI_STATE="$(timeout 10 hciconfig "$DISC_HCI" 2>/dev/null)"
   if ! printf '%s' "$HCI_STATE" | grep -q "UP RUNNING PSCAN ISCAN"; then
     echo "  UNHEALTHY: the adapter is not up and discoverable (want UP RUNNING PSCAN ISCAN)"
     HEALTHY=0

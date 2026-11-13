@@ -37,6 +37,76 @@ set -uo pipefail
 PREFER_CENTRAL="${AUXGOAT_PREFER_CENTRAL:-0}"
 HCICONFIG="${HCICONFIG:-hciconfig}"
 HCI="${AUXGOAT_HCI:-hci0}"
+BUSCTL="${BUSCTL:-busctl}"
+
+# --- adapter roles: lockerroom/adapters.py is the ONE implementation --------
+# Sets PHONES / RELAY / UART (hciN or "") and SPLIT (1 = a USB dongle carries
+# the phones, the built-in chip only the relay). Anything going wrong leaves
+# SPLIT=0 and ROLES_OK=0, and every caller then does exactly what it did before
+# the dongle existed. Identical in every script; test_bt_roles_block holds that.
+AUXGOAT_PKG_ROOT="${AUXGOAT_PKG_ROOT:-/opt/lockerroom}"
+AUXGOAT_PY="${AUXGOAT_PY:-/opt/lockerroom/venv/bin/python}"
+# shellcheck disable=SC2034  # not every script uses every role
+bt_roles() {
+  PHONES=""; RELAY=""; UART=""; SPLIT=0; ROLES_OK=0
+  local out k v
+  out="$(PYTHONPATH="$AUXGOAT_PKG_ROOT" timeout 10 "$AUXGOAT_PY" -m lockerroom.adapters 2>/dev/null)" || return 0
+  while IFS='=' read -r k v; do
+    case "$k=$v" in
+      PHONES=hci[0-9]*|PHONES=) PHONES="$v" ;;
+      RELAY=hci[0-9]*|RELAY=) RELAY="$v" ;;
+      UART=hci[0-9]*|UART=) UART="$v" ;;
+      SPLIT=1) SPLIT=1 ;;
+    esac
+  done <<< "$out"
+  ROLES_OK=1
+}
+# --- end adapter roles --------------------------------------------------------
+
+# One adapter property over D-Bus. busctl names the adapter by its object path,
+# which bluetoothctl cannot do without an interactive "select" - and with two
+# adapters, bluetoothctl's idea of "the" adapter follows probe order.
+set_adapter() {
+  timeout 10 "$BUSCTL" set-property org.bluez "/org/bluez/$1" org.bluez.Adapter1 "$2" "$3" "$4" >/dev/null 2>&1
+}
+
+# THE DONGLE (2026-11-13). Split: the dongle is what phones see and pair with;
+# the built-in chip carries only the relay, so it is hidden and not pairable,
+# and named so a phone that remembers it can tell it is not the one to use.
+# Not split: exactly the three bluetoothctl lines this loop always ran.
+assert_adapters() {
+  if [ "$SPLIT" = "1" ]; then
+    set_adapter "$PHONES" Powered b true
+    set_adapter "$PHONES" Discoverable b true
+    set_adapter "$PHONES" Pairable b true
+    set_adapter "$RELAY" Powered b true
+    set_adapter "$RELAY" Discoverable b false
+    set_adapter "$RELAY" Pairable b false
+  else
+    timeout 10 bluetoothctl power on >/dev/null 2>&1
+    timeout 10 bluetoothctl discoverable on >/dev/null 2>&1
+    timeout 10 bluetoothctl pairable on >/dev/null 2>&1
+  fi
+}
+
+# Recomputed only when the set of adapters changes - a dongle plugged in or
+# pulled, or a btwatch rebind renumbering the built-in chip - not every 5s.
+ROLES_SIG="unset"
+refresh_roles() {
+  local sig
+  sig="$(ls "${AUXGOAT_BT_SYSFS:-/sys/class/bluetooth}" 2>/dev/null | tr '\n' ' ')"
+  [ "$sig" = "$ROLES_SIG" ] && return 0
+  ROLES_SIG="$sig"
+  local was_split="${SPLIT:-0}"
+  bt_roles
+  if [ "$SPLIT" = "1" ]; then
+    HCI="$PHONES"
+    echo "keep-discoverable: phones on $PHONES (USB dongle), relay speaker on $RELAY (built-in, hidden)"
+  else
+    HCI="${PHONES:-${AUXGOAT_HCI:-hci0}}"
+    [ "$was_split" = "1" ] && echo "keep-discoverable: one adapter again ($HCI) - phones and relay share it"
+  fi
+}
 
 # hciconfig says CENTRAL on BlueZ >= 5.62 and MASTER before that, and accepts
 # only its own spelling, so both are tried. Silent when nothing changes; one
@@ -71,12 +141,13 @@ hold_central() {
 ONCE=0
 [ "${1:-}" = "--once" ] && ONCE=1
 
+SPLIT=0
 while true; do
-  # Bounded: bluetoothctl waits for ever on a bluetoothd that is not answering,
-  # and this loop must still be turning when it comes back.
-  timeout 10 bluetoothctl power on >/dev/null 2>&1
-  timeout 10 bluetoothctl discoverable on >/dev/null 2>&1
-  timeout 10 bluetoothctl pairable on >/dev/null 2>&1
+  # Every call is bounded: bluetoothctl and busctl wait for ever on a
+  # bluetoothd that is not answering, and this loop must still be turning when
+  # it comes back.
+  refresh_roles
+  assert_adapters
   hold_central
   [ "$ONCE" = "1" ] && exit 0
   sleep 5

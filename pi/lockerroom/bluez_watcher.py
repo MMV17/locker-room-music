@@ -132,6 +132,11 @@ class BluezWatcher:
         device = (await self._get_proxy(device_path)).get_interface(DEVICE_IFACE)
         await device.call_connect()
 
+    async def disconnect_device(self, device_path: str) -> None:
+        """Device1.Disconnect: the whole device, every profile. Raises on failure."""
+        device = (await self._get_proxy(device_path)).get_interface(DEVICE_IFACE)
+        await device.call_disconnect()
+
     def _player_for(self, device_path: str):
         """The MediaPlayer1 interface belonging to a device, if it has one.
 

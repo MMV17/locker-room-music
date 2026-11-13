@@ -61,7 +61,7 @@ apt-get install -y \
   bluez bluez-alsa-utils bluez-tools alsa-utils \
   python3-venv python3-dev python3-pip \
   libdbus-1-dev pkg-config build-essential \
-  git curl
+  git curl firmware-realtek
 
 echo "== the name phones see =="
 # NOT /etc/bluetooth/main.conf's `Name`, which does nothing on BlueZ 5.x —

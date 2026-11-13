@@ -29,6 +29,7 @@ import logging
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from . import adapters as _adapters
 from .macaddr import normalise as _normalise_mac
 from .proc import communicate as _communicate
 
@@ -79,7 +80,44 @@ async def _bluetoothctl(*args: str, timeout: float = CONNECT_TIMEOUT_S) -> str:
     return (out or b"").decode(errors="replace")
 
 
+# --------------------------------------------------------------------------- #
+# THE DONGLE (2026-11-13). With a USB dongle carrying the phones, the speaker
+# must be reached through the BUILT-IN chip specifically - and bluetoothctl
+# only ever talks to whichever adapter it considers the default, which follows
+# probe order. So when split, the same three operations go over D-Bus to
+# /org/bluez/<relay adapter>/dev_XX by path. Not split: bluetoothctl, exactly
+# as before. See lockerroom/adapters.py.
+# --------------------------------------------------------------------------- #
+
+def _relay_device_path(mac: str) -> str | None:
+    """The speaker's BlueZ object on the relay adapter, or None when not split."""
+    roles = _adapters.roles()
+    if not roles.split:
+        return None
+    return f"/org/bluez/{roles.relay}/dev_{mac.upper().replace(':', '_')}"
+
+
+async def _busctl(*args: str, timeout: float = CONNECT_TIMEOUT_S) -> tuple[int, str]:
+    """argv list, never a shell string; the path is built from a validated MAC."""
+    proc = await asyncio.create_subprocess_exec(
+        "busctl", f"--timeout={int(timeout)}", *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await _communicate(proc, timeout + 5)
+    return proc.returncode or 0, (out or b"").decode(errors="replace")
+
+
+async def _device_call(path: str, method: str, timeout: float = CONNECT_TIMEOUT_S) -> tuple[bool, str]:
+    rc, text = await _busctl("call", "org.bluez", path, "org.bluez.Device1", method, timeout=timeout)
+    return rc == 0, text
+
+
 async def _bluetoothctl_connect(mac: str) -> bool:
+    path = _relay_device_path(mac)
+    if path is not None:
+        ok, text = await _device_call(path, "Connect")
+        return ok or "AlreadyConnected" in text
     text = await _bluetoothctl("connect", mac)
     # bluetoothctl exits 0 even when a connection fails, so the exit code alone
     # is not an answer. Measured on the box: success prints exactly this.
@@ -96,6 +134,20 @@ async def _bluetoothctl_pair(mac: str) -> bool:
     A speaker that is already paired fails with org.bluez.Error.AlreadyExists.
     That is success: it means the state we wanted is the state we have.
     """
+    path = _relay_device_path(mac)
+    if path is not None:
+        # The speaker must have been SEEN by the built-in chip first, which is
+        # what bt-scan.sh does when split; otherwise this is UnknownObject and
+        # the Admin screen says to scan with the speaker in pairing mode.
+        done, text = await _device_call(path, "Pair", timeout=PAIR_TIMEOUT_S)
+        ok = done or "AlreadyExists" in text
+        if ok:
+            try:
+                await _busctl("set-property", "org.bluez", path, "org.bluez.Device1",
+                              "Trusted", "b", "true")
+            except Exception:
+                log.exception("paired %s but could not trust it", mac)
+        return ok
     text = await _bluetoothctl("pair", mac, timeout=PAIR_TIMEOUT_S)
     ok = "Pairing successful" in text or "AlreadyExists" in text
     if ok:
@@ -112,6 +164,10 @@ async def _bluetoothctl_pair(mac: str) -> bool:
 async def _bluetoothctl_disconnect(mac: str) -> None:
     """Best effort. A speaker that is already gone is the normal case here."""
     try:
+        path = _relay_device_path(mac)
+        if path is not None:
+            await _device_call(path, "Disconnect")
+            return
         await _bluetoothctl("disconnect", mac)
     except Exception:
         log.debug("disconnect of %s failed, continuing", mac, exc_info=True)
