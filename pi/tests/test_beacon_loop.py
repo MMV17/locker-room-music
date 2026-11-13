@@ -322,11 +322,12 @@ class TestTheUpdateCommand:
         assert timeout >= 60
 
     @pytest.mark.parametrize("status", ["playing", "paused"])
-    def test_it_is_refused_while_a_song_is_open_even_a_paused_one(self, status):
-        allowed, why = control.may_run(
+    def test_it_runs_even_while_a_song_is_open(self, status):
+        """Admin-only and behind a confirm; whoever presses it has decided the
+        update matters more than the song (2026-11-13)."""
+        assert control.may_run(
             "update-software", FakeSessions({"id": "p1", "status": status})
-        )
-        assert allowed is False and "song is playing" in why
+        ) == (True, "")
 
     def test_it_is_allowed_when_nothing_is_playing(self):
         assert control.may_run("update-software", FakeSessions(None)) == (True, "")

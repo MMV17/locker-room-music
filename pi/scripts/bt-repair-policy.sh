@@ -29,7 +29,8 @@
 # always with --job-mode=ignore-dependencies: lockerroom-listener has
 # Requires=bluetooth.service, and a plain restart would take the control channel
 # down with it (see remote-repair.sh, and docs/STATE.md "THE REPAIR RESTARTED
-# THE LISTENER AND LOST ITS OWN LOG"). run-repair is already refused mid-song.
+# THE LISTENER AND LOST ITS OWN LOG"). Since 2026-11-13 run-repair also runs
+# mid-song (it is an Admin "Fix the speaker"), so this can cut a song once.
 #
 # Overridable so pytest can run this against a fake main.conf.
 set -uo pipefail

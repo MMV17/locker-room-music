@@ -117,14 +117,16 @@ REPORT_COMMANDS = frozenset({REPORT_COMMAND, REPAIR_COMMAND})
 # and every lockerroom unit, which cuts the music outright. report-full is NOT
 # here on purpose - it is strictly read-only, so there is no reason a DJ should
 # have to stop playing before anyone is allowed to look at the box.
-MID_SONG_REFUSED = frozenset({SCAN_COMMAND, REPAIR_COMMAND, UPDATE_COMMAND})
-# Refused under ANY open play, paused included: both restart things a paused
-# phone is still connected to. Only the scan was relaxed for a paused song.
-REFUSED_UNDER_ANY_PLAY = {
-    REPAIR_COMMAND: "refused: a song is playing - a repair restarts bluetooth and would cut it off",
-    UPDATE_COMMAND: "refused: a song is playing - an update restarts the speaker's software. "
-                    "Try again when the music has stopped",
-}
+#
+# ONLY the scan, since 2026-11-13. "Fix the speaker" (run-repair) and "Install
+# update" (update-software) used to be refused under any open play, so a box
+# misbehaving mid-song could not be fixed until somebody stopped the music -
+# and a stale aux, which is exactly when you reach for Fix, keeps an open play
+# forever. Both are pressed deliberately on the Admin screen, behind a confirm
+# that says the music stops; whoever presses them has decided the fix matters
+# more than the song. The scan keeps its rule because the team screen's "Find
+# speakers" sends it too, and this box cannot tell the two apart.
+MID_SONG_REFUSED = frozenset({SCAN_COMMAND})
 
 # What one report may send. The server caps at 64 KiB too; this is the first
 # gate, so a wedged journal does not put a megabyte on the wire every time.
@@ -242,13 +244,6 @@ def may_run(name: str, sessions) -> tuple[bool, str]:
     moment something is playing badly.
     """
     if name not in MID_SONG_REFUSED:
-        return True, ""
-    if name in REFUSED_UNDER_ANY_PLAY:
-        # Stricter than a scan: a repair restarts bluetooth, which drops the
-        # phone even when its song is only paused, and an update restarts the
-        # listener out from under an open play.
-        if _open_play(sessions) is not None:
-            return False, REFUSED_UNDER_ANY_PLAY[name]
         return True, ""
     return may_scan(sessions)
 
