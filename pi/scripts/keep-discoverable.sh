@@ -70,6 +70,24 @@ set_adapter() {
   timeout 10 "$BUSCTL" set-property org.bluez "/org/bluez/$1" org.bluez.Adapter1 "$2" "$3" "$4" >/dev/null 2>&1
 }
 
+# The speaker's name, as provision.sh set it. BlueZ names a SECOND adapter
+# "<name> #2" by itself, which is what phones saw on the dongle's first day.
+speaker_name() {
+  local n
+  n="$(timeout 5 hostnamectl --pretty 2>/dev/null)"
+  [ -n "$n" ] || n="$(hostname 2>/dev/null)"
+  printf '%s' "$n"
+}
+
+# Written only when it differs: an Alias write goes to BlueZ's storage on
+# flash, and this loop runs every 5 seconds.
+ensure_alias() {
+  local cur
+  cur="$(timeout 10 "$BUSCTL" get-property org.bluez "/org/bluez/$1" org.bluez.Adapter1 Alias 2>/dev/null)"
+  [ "$cur" = "s \"$2\"" ] && return 0
+  set_adapter "$1" Alias s "$2" && echo "keep-discoverable: $1 is now named '$2'"
+}
+
 # THE DONGLE (2026-11-13). Split: the dongle is what phones see and pair with;
 # the built-in chip carries only the relay, so it is hidden and not pairable,
 # and named so a phone that remembers it can tell it is not the one to use.
@@ -82,6 +100,12 @@ assert_adapters() {
     set_adapter "$RELAY" Powered b true
     set_adapter "$RELAY" Discoverable b false
     set_adapter "$RELAY" Pairable b false
+    local name
+    name="$(speaker_name)"
+    if [ -n "$name" ]; then
+      ensure_alias "$PHONES" "$name"
+      ensure_alias "$RELAY" "$name (speaker link)"
+    fi
   else
     timeout 10 bluetoothctl power on >/dev/null 2>&1
     timeout 10 bluetoothctl discoverable on >/dev/null 2>&1
@@ -104,7 +128,12 @@ refresh_roles() {
     echo "keep-discoverable: phones on $PHONES (USB dongle), relay speaker on $RELAY (built-in, hidden)"
   else
     HCI="${PHONES:-${AUXGOAT_HCI:-hci0}}"
-    [ "$was_split" = "1" ] && echo "keep-discoverable: one adapter again ($HCI) - phones and relay share it"
+    if [ "$was_split" = "1" ]; then
+      echo "keep-discoverable: one adapter again ($HCI) - phones and relay share it"
+      # Back to the system name (empty Alias = the default), so a built-in chip
+      # left named "... (speaker link)" by split mode is not what phones see.
+      [ -n "$PHONES" ] && set_adapter "$PHONES" Alias s ""
+    fi
   fi
 }
 
