@@ -43,6 +43,14 @@ RECONNECT_INTERVAL_S = 30.0
 # missing, before concluding it is really gone. See _audio_channel_ok.
 AUDIO_RECHECK_S = 5.0
 AUDIO_CHECK_TIMEOUT_S = 10.0
+# OFF (2026-11-13, the same night it shipped). On hardware the check said the
+# JBL's channel was missing on EVERY cycle while it was playing fine, so the
+# relay disconnected and reconnected the speaker every 30s (audible chime,
+# music falling back to the jack each time). The PCM is evidently not listed
+# under the name _audio_channel_ok looks for. Until it is matched against real
+# output, the check only LOGS what it saw (rate-limited) and never kicks.
+RELAY_AUDIO_KICK = False
+AUDIO_LOG_EVERY_S = 600.0
 ROUTE_ARGV = ["sudo", "/usr/local/bin/audio-route.sh"]
 ROUTE_TIMEOUT_S = 30.0
 
@@ -123,10 +131,26 @@ async def _audio_channel_ok(mac: str) -> bool:
     if proc.returncode != 0:
         return True
     dev = "dev_" + mac.upper().replace(":", "_")
-    return any(
-        dev in line and "/a2dpsrc/" in line
-        for line in (out or b"").decode(errors="replace").splitlines()
-    )
+    text = (out or b"").decode(errors="replace")
+    ok = any(dev in line and "/a2dpsrc/" in line for line in text.splitlines())
+    if not ok:
+        _log_pcms_seen(text)
+    return ok
+
+
+_last_pcm_log = 0.0
+
+
+def _log_pcms_seen(text: str) -> None:
+    """What bluealsa actually listed when the check said 'missing', so the
+    right name can be matched. At most once per AUDIO_LOG_EVERY_S."""
+    global _last_pcm_log
+    loop_now = asyncio.get_running_loop().time()
+    if loop_now - _last_pcm_log < AUDIO_LOG_EVERY_S:
+        return
+    _last_pcm_log = loop_now
+    log.info("relay audio check: bluealsa-cli list-pcms said: %s",
+             " | ".join(text.split()) or "(nothing)")
 
 
 async def _run_audio_route() -> None:
@@ -266,7 +290,13 @@ class RelayManager:
         if self._mac is None:
             return False
         if self._live:
-            if await self._audio_alive():
+            if not RELAY_AUDIO_KICK or await self._audio_alive():
+                if not RELAY_AUDIO_KICK:
+                    # Diagnostics only: look, log what was seen, never act.
+                    try:
+                        await self._audio_ok(self._mac)
+                    except Exception:
+                        pass
                 return True
             # Connected, but with no audio channel: the silent relay. A fresh
             # connection brings a fresh A2DP stream; falling back to the wired

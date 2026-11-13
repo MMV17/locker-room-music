@@ -18,6 +18,14 @@ from lockerroom.relay import RelayManager  # noqa: E402
 MAC = "78:66:F3:1C:9D:B6"
 
 
+@pytest.fixture(autouse=True)
+def kick_on(monkeypatch):
+    """OFF in production (it misfired on hardware); on here so the mechanism
+    stays tested for when the PCM name is matched properly."""
+    monkeypatch.setattr(relay_mod, "RELAY_AUDIO_KICK", True)
+    monkeypatch.setattr(relay_mod, "_last_pcm_log", 0.0)
+
+
 class Rec:
     def __init__(self, result=True):
         self.calls: list = []
@@ -136,3 +144,18 @@ async def test_the_real_check_says_fine_when_it_cannot_run(monkeypatch):
         raise FileNotFoundError("bluealsa-cli")
     monkeypatch.setattr(relay_mod.asyncio, "create_subprocess_exec", missing)
     assert await relay_mod._audio_channel_ok(MAC)
+
+
+@pytest.mark.asyncio
+async def test_off_in_production_it_never_disconnects(tmp_path, monkeypatch):
+    monkeypatch.setattr(relay_mod, "RELAY_AUDIO_KICK", False)
+    mgr, connect, _, disconnect = mk(tmp_path, AudioOk([False, False, False]))
+    await mgr.ensure_connected()
+    assert await mgr.ensure_connected()
+    assert await mgr.ensure_connected()
+    assert disconnect.calls == [] and len(connect.calls) == 1
+
+
+def test_the_switch_is_off_in_the_source():
+    src = Path(relay_mod.__file__).read_text()
+    assert "\nRELAY_AUDIO_KICK = False\n" in src
