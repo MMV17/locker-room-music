@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from .aux import AuxRouter  # noqa: F401  (re-exported for main.py)
+from . import adapters as _adapters
 from .storage import Store
 
 log = logging.getLogger("lockerroom.lifecycle")
@@ -328,6 +329,8 @@ class SessionManager:
         self._connect_profile: Callable[[str, str], Awaitable[None]] | None = None
         # Set by main.py to BluezWatcher.connect_device. See AUDIO_LOST_GRACE.
         self._connect_device: Callable[[str], Awaitable[None]] | None = None
+        # Set by main.py to BluezWatcher.disconnect_device. See _turn_away.
+        self._disconnect_device: Callable[[str], Awaitable[None]] | None = None
         # Strong references to fire-and-forget tasks (profile reconnects,
         # deferred drops); asyncio only keeps weak ones.
         self._side_tasks: set[asyncio.Task] = set()
@@ -385,6 +388,33 @@ class SessionManager:
         """Give the manager a way to ask BlueZ to reconnect a device's missing
         profiles. See AUDIO_LOST_GRACE."""
         self._connect_device = connect
+
+    def set_device_disconnect(self, disconnect: Callable[[str], Awaitable[None]]) -> None:
+        """Give the manager a way to disconnect a whole device. See _turn_away."""
+        self._disconnect_device = disconnect
+
+    async def _turn_away(self, device_path: str, mac: str, alias: str) -> None:
+        """A phone on the built-in chip while a USB dongle carries the phones.
+
+        THE DONGLE (2026-11-13): the built-in chip is the relay's radio now. A
+        phone paired before the dongle remembers that adapter's address and
+        reconnects to it; letting it play there would put its stream back on
+        the radio and serial line the dongle exists to relieve. So it is
+        disconnected, with a line that says what the person has to do. The
+        adapter is hidden and not pairable (keep-discoverable), so only phones
+        with an old pairing ever arrive here. See lockerroom/adapters.py.
+        """
+        log.warning(
+            "%s (%s) connected to the built-in adapter, which only carries the "
+            "speaker now - disconnecting it. Forget the old AuxGoat on that phone "
+            "and pair again.", alias, mac,
+        )
+        if self._disconnect_device is None:
+            return
+        try:
+            await asyncio.wait_for(self._disconnect_device(device_path), timeout=PROFILE_DROP_TIMEOUT_S)
+        except Exception:
+            log.warning("could not disconnect %s", alias, exc_info=True)
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         task = asyncio.create_task(coro)
@@ -457,6 +487,9 @@ class SessionManager:
         # comes OUT, not someone asking to play. relay.py owns it.
         if self._relay_mac and mac.upper() == self._relay_mac:
             log.info("relay speaker connected: %s (%s) - not a session", alias, mac)
+            return
+        if _adapters.on_relay_only_adapter(device_path):
+            await self._turn_away(device_path, mac, alias)
             return
         async with self._lock:
             if device_path in self._sessions:

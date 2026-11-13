@@ -75,6 +75,47 @@ Build order status (spec section 10):
 
 ---
 
+## USB Bluetooth dongle support (built 2026-11-13, NOT YET TESTED ON HARDWARE)
+
+Ordered: a TP-Link UB500 and a UB500 Plus (Realtek RTL8761BU). Plan: **phones
+on the dongle, the JBL relay alone on the built-in chip.** This takes the phones
+off the UART that loses fragments and off the radio the relay uses.
+
+- **`lockerroom/adapters.py` is the one source of roles:** PHONES / RELAY / UART
+  / SPLIT. Adapters are told apart **by bus (sysfs `device` link through
+  `/usb`), never by number**, because btwatch's rebind renumbers the built-in
+  chip. Built-in only means SPLIT=0, exactly as before. Built-in plus dongle
+  means phones on the dongle and the relay on the built-in chip. Dongle only
+  means it does both. CLI: `python -m lockerroom.adapters`. The scripts call it
+  through one shared `bt_roles` block (a test holds the copies identical). If it
+  cannot run, every script takes its pre-dongle path.
+- **keep-discoverable:** when split, the dongle is set Powered/Discoverable/
+  Pairable and the built-in chip Powered but NOT discoverable or pairable, via
+  `busctl set-property` on `/org/bluez/hciN`. bluetoothctl cannot pick an
+  adapter non-interactively. Roles are recomputed when `/sys/class/bluetooth`
+  changes, so hot-plugging works.
+- **btwatch** watches the built-in (UART) adapter by bus. If the built-in
+  adapter is missing while a dongle is present, that counts as the wedge.
+- **relay.py:** when split, connect/pair+trust/disconnect go over busctl to
+  `/org/bluez/<relay>/dev_XX`. Otherwise bluetoothctl as before.
+- **bt-scan.sh:** when split, it scans the relay adapter with
+  `python -m lockerroom.adapter_scan` (holds the D-Bus connection; a one-shot
+  `busctl StartDiscovery` ends when busctl exits). Output format unchanged.
+- **Listener:** when split, a phone that connects to the built-in chip (an old
+  pairing) is disconnected with a log line telling them to forget and re-pair.
+- **Fix the speaker** installs `firmware-realtek` if a Realtek USB device is
+  present and the rtl8761 firmware is missing, prints the roles, and checks
+  PSCAN ISCAN on the PHONES adapter. The report prints the roles and
+  `hciconfig -a`. `provision.sh` installs `firmware-realtek`.
+- bluealsa serves all adapters (no `-i`), and main.conf settings
+  (JustWorksRepairing, Class, timeouts) are global. Nothing changes there.
+
+**Bring-up when it arrives:** plug the dongle into a **black USB 2 port** (an
+extension cable is better), press Fix the speaker, then Get a report. Want
+`SPLIT=1`, the dongle `UP RUNNING PSCAN ISCAN`, and the built-in chip without
+ISCAN. Then every phone forgets AuxGoat and pairs again (new address). The JBL
+stays paired to the built-in chip.
+
 ## The silent relay, and Admin fixes run mid-song (2026-11-13)
 
 **UPDATE, later the same night:** the first version of the check below

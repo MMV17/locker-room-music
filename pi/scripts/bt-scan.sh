@@ -26,6 +26,42 @@ set -uo pipefail
 SECONDS_TO_SCAN="${BT_SCAN_SECONDS:-15}"
 BTCTL="${BT_SCAN_BLUETOOTHCTL:-bluetoothctl}"
 
+# --- adapter roles: lockerroom/adapters.py is the ONE implementation --------
+# Sets PHONES / RELAY / UART (hciN or "") and SPLIT (1 = a USB dongle carries
+# the phones, the built-in chip only the relay). Anything going wrong leaves
+# SPLIT=0 and ROLES_OK=0, and every caller then does exactly what it did before
+# the dongle existed. Identical in every script; test_bt_roles_block holds that.
+AUXGOAT_PKG_ROOT="${AUXGOAT_PKG_ROOT:-/opt/lockerroom}"
+AUXGOAT_PY="${AUXGOAT_PY:-/opt/lockerroom/venv/bin/python}"
+# shellcheck disable=SC2034  # not every script uses every role
+bt_roles() {
+  PHONES=""; RELAY=""; UART=""; SPLIT=0; ROLES_OK=0
+  local out k v
+  out="$(PYTHONPATH="$AUXGOAT_PKG_ROOT" timeout 10 "$AUXGOAT_PY" -m lockerroom.adapters 2>/dev/null)" || return 0
+  while IFS='=' read -r k v; do
+    case "$k=$v" in
+      PHONES=hci[0-9]*|PHONES=) PHONES="$v" ;;
+      RELAY=hci[0-9]*|RELAY=) RELAY="$v" ;;
+      UART=hci[0-9]*|UART=) UART="$v" ;;
+      SPLIT=1) SPLIT=1 ;;
+    esac
+  done <<< "$out"
+  ROLES_OK=1
+}
+# --- end adapter roles --------------------------------------------------------
+
+# THE DONGLE (2026-11-13): when a USB dongle carries the phones, the speaker
+# has to be found by the BUILT-IN chip - the adapter the relay pairs and
+# connects through - and bluetoothctl only scans whichever adapter it treats as
+# default. lockerroom.adapter_scan scans one named adapter and prints the same
+# format. Not split: the bluetoothctl sweep below, unchanged.
+bt_roles
+if [ "$SPLIT" = "1" ] && [ -n "$RELAY" ]; then
+  PYTHONPATH="$AUXGOAT_PKG_ROOT" timeout "$((SECONDS_TO_SCAN + 20))" \
+    "$AUXGOAT_PY" -m lockerroom.adapter_scan "$RELAY" "$SECONDS_TO_SCAN" 2>/dev/null
+  exit 0
+fi
+
 # Discovery is a sweep, not a subscription: it has to run for a while and then
 # be read. --timeout makes bluetoothctl do exactly that and exit, which is what
 # lets this be a plain blocking command instead of a background process someone

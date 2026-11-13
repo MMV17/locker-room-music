@@ -38,7 +38,48 @@ RECOVER_CMD="${RECOVER_CMD:-}"
 # bluetoothd off the bus, bluetoothctl waits for ever, and this script used to
 # stop inside power_up - before the rebind, before the restarts - exactly when
 # it was needed. pi/tests/test_script_timeouts.py holds the rule for all scripts.
-healthy() { timeout 10 hciconfig hci0 2>/dev/null | grep -q "UP RUNNING"; }
+# --- adapter roles: lockerroom/adapters.py is the ONE implementation --------
+# Sets PHONES / RELAY / UART (hciN or "") and SPLIT (1 = a USB dongle carries
+# the phones, the built-in chip only the relay). Anything going wrong leaves
+# SPLIT=0 and ROLES_OK=0, and every caller then does exactly what it did before
+# the dongle existed. Identical in every script; test_bt_roles_block holds that.
+AUXGOAT_PKG_ROOT="${AUXGOAT_PKG_ROOT:-/opt/lockerroom}"
+AUXGOAT_PY="${AUXGOAT_PY:-/opt/lockerroom/venv/bin/python}"
+# shellcheck disable=SC2034  # not every script uses every role
+bt_roles() {
+  PHONES=""; RELAY=""; UART=""; SPLIT=0; ROLES_OK=0
+  local out k v
+  out="$(PYTHONPATH="$AUXGOAT_PKG_ROOT" timeout 10 "$AUXGOAT_PY" -m lockerroom.adapters 2>/dev/null)" || return 0
+  while IFS='=' read -r k v; do
+    case "$k=$v" in
+      PHONES=hci[0-9]*|PHONES=) PHONES="$v" ;;
+      RELAY=hci[0-9]*|RELAY=) RELAY="$v" ;;
+      UART=hci[0-9]*|UART=) UART="$v" ;;
+      SPLIT=1) SPLIT=1 ;;
+    esac
+  done <<< "$out"
+  ROLES_OK=1
+}
+# --- end adapter roles --------------------------------------------------------
+
+# The BUILT-IN chip, by bus - it is the one this script knows how to rebind
+# (hci_uart_bcm), and with a USB dongle plugged in "hci0" can be either of them
+# (see lockerroom/adapters.py). Roles unreadable: hci0, as before the dongle.
+# Readable but no built-in adapter at all: that IS the wedge, so unhealthy.
+watched_hci() {
+  bt_roles
+  if [ "$ROLES_OK" = "1" ]; then
+    printf '%s' "$UART"
+  else
+    printf 'hci0'
+  fi
+}
+healthy() {
+  local hci
+  hci="$(watched_hci)"
+  [ -n "$hci" ] || return 1
+  timeout 10 hciconfig "$hci" 2>/dev/null | grep -q "UP RUNNING"
+}
 
 # An rfkill SOFT BLOCK is invisible to everything this watchdog used to do, and
 # a rebind actively preserves it. Measured 2026-09-21: 212 rebinds over nine
@@ -98,7 +139,7 @@ unblock() {
 # waiting for it is a race btwatch loses more often than it wins - and losing
 # means falling through to a rebind that restarts the listener for nothing.
 power_up() {
-  timeout 15 hciconfig hci0 up 2>/dev/null
+  timeout 15 hciconfig "$(watched_hci)" up 2>/dev/null
   command -v bluetoothctl >/dev/null 2>&1 && timeout 15 bluetoothctl power on >/dev/null 2>&1
   return 0
 }

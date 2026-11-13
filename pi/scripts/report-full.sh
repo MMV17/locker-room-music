@@ -115,8 +115,17 @@ else
   echo "(rfkill is not installed)"
 fi
 echo
+# Every adapter, and which one does what (2026-11-13, the USB dongle). With a
+# dongle plugged in, PHONES is the one that must read PSCAN ISCAN, and RELAY is
+# the built-in chip, which is deliberately NOT discoverable.
+echo "--- adapters and their roles (lockerroom/adapters.py) ---"
+run 10 env PYTHONPATH=/opt/lockerroom /opt/lockerroom/venv/bin/python -m lockerroom.adapters
+echo "READ THIS: SPLIT=1 means a USB dongle carries the phones (PHONES) and the"
+echo "  built-in chip carries only the relay speaker (RELAY), hidden from phones."
+echo "  SPLIT=0: one adapter does both, as before the dongle."
+echo
 if command -v hciconfig >/dev/null 2>&1; then
-  run 10 hciconfig hci0
+  run 10 hciconfig -a
   echo
   echo "READ THIS LINE: 'UP RUNNING PSCAN ISCAN' is a discoverable box."
   echo "  UP RUNNING with NO PSCAN/ISCAN is the 2026-09-20 fault exactly — the"

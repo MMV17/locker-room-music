@@ -169,6 +169,8 @@ async def run_listener(
             session_manager.set_profiles(watcher.disconnect_profile, watcher.connect_profile)
         if hasattr(watcher, "connect_device"):
             session_manager.set_device_connect(watcher.connect_device)
+        if hasattr(watcher, "disconnect_device"):
+            session_manager.set_device_disconnect(watcher.disconnect_device)
         try:
             await watcher.start()
         except BaseException:
