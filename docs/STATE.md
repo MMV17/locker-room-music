@@ -119,6 +119,17 @@ the pretty hostname and the built-in chip's to "<name> (speaker link)", writing
 only when it differs because Alias writes go to flash. And bt-agent ignores
 SIGTERM, so every restart waited 90s; `TimeoutStopSec=5` in bt-agent.service.
 
+**THE TWO-PHONE TEST PASSED ON THE DONGLE (2026-11-13, afternoon).** Setup:
+iPad as DJ, iPhone waiting, both on the dongle (hci1), and the JBL relay on the
+built-in chip. The DJ stayed clean while the waiting iPhone pressed play and
+streamed; in the same situation the night before, the DJ was knocked out within
+2s. Heard: "maybe a crack here or there in the very beginning 10-30s, none
+after that", most likely link setup and settling. The waiting phone got the
+designed behaviour: one AVRCP pause, then PAUSE_COOLDOWN (10s) before the next,
+and its audio is never routed. The dongle is the fix for the knock-outs. Still
+open: the very first 10-30s, if it shows up mid-song too, and the UB500 Plus
+vs UB500 comparison.
+
 **Bring-up when it arrives:** plug the dongle into a **black USB 2 port** (an
 extension cable is better), press Fix the speaker, then Get a report. Want
 `SPLIT=1`, the dongle `UP RUNNING PSCAN ISCAN`, and the built-in chip without
