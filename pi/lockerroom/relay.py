@@ -117,7 +117,11 @@ async def _bluetoothctl_connect(mac: str) -> bool:
     path = _relay_device_path(mac)
     if path is not None:
         ok, text = await _device_call(path, "Connect")
-        return ok or "AlreadyConnected" in text
+        if not (ok or "AlreadyConnected" in text):
+            log.info("connect to %s through the built-in adapter: %s",
+                     mac, " ".join(text.split())[:200] or "(no reason given)")
+            return False
+        return True
     text = await _bluetoothctl("connect", mac)
     # bluetoothctl exits 0 even when a connection fails, so the exit code alone
     # is not an answer. Measured on the box: success prints exactly this.
@@ -136,11 +140,27 @@ async def _bluetoothctl_pair(mac: str) -> bool:
     """
     path = _relay_device_path(mac)
     if path is not None:
+        # ALREADY PAIRED? Then do not ask again. Asking costs nothing when the
+        # speaker is idle, but on hardware (2026-11-13 13:42:58) a Pair sent
+        # while the JBL was busy failed, and the relay gave up on the whole
+        # cycle for a speaker that had been paired all along.
+        rc, prop = await _busctl("get-property", "org.bluez", path, "org.bluez.Device1",
+                                 "Paired", timeout=10)
+        if rc == 0 and prop.strip().endswith("true"):
+            return True
+        if "UnknownObject" in prop or "doesn't exist" in prop or "not exist" in prop:
+            log.warning(
+                "the built-in adapter has never seen %s - scan for it from the Admin "
+                "screen with the speaker in pairing mode", mac,
+            )
+            return False
         # The speaker must have been SEEN by the built-in chip first, which is
-        # what bt-scan.sh does when split; otherwise this is UnknownObject and
-        # the Admin screen says to scan with the speaker in pairing mode.
+        # what bt-scan.sh does when split.
         done, text = await _device_call(path, "Pair", timeout=PAIR_TIMEOUT_S)
         ok = done or "AlreadyExists" in text
+        if not ok:
+            log.warning("pairing %s through the built-in adapter failed: %s",
+                        mac, " ".join(text.split())[:200] or "(no reason given)")
         if ok:
             try:
                 await _busctl("set-property", "org.bluez", path, "org.bluez.Device1",

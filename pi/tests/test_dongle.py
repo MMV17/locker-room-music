@@ -240,10 +240,39 @@ async def test_relay_connects_through_the_relay_adapter(split_roles, busctl_call
 
 
 @pytest.mark.asyncio
-async def test_relay_pair_already_paired_counts_and_trusts(split_roles, busctl_calls):
+async def test_relay_pair_already_exists_counts_and_trusts(split_roles, busctl_calls):
     assert await relay_mod._bluetoothctl_pair(MAC)
-    assert busctl_calls[1] == ("set-property", "org.bluez", "/org/bluez/hci0/dev_78_66_F3_1C_9D_B6",
+    assert busctl_calls[0][0] == "get-property" and busctl_calls[0][-1] == "Paired"
+    assert busctl_calls[1][-1] == "Pair"
+    assert busctl_calls[2] == ("set-property", "org.bluez", "/org/bluez/hci0/dev_78_66_F3_1C_9D_B6",
                                "org.bluez.Device1", "Trusted", "b", "true")
+
+
+@pytest.mark.asyncio
+async def test_an_already_paired_speaker_is_not_asked_to_pair_again(split_roles, monkeypatch):
+    """2026-11-13 13:42:58: a Pair sent to a busy, already-paired JBL failed and
+    the relay gave up the whole cycle."""
+    calls = []
+
+    async def fake(*args, timeout=0):
+        calls.append(args)
+        if args[0] == "get-property":
+            return 0, "b true\n"
+        raise AssertionError("must not Pair an already-paired speaker")
+
+    monkeypatch.setattr(relay_mod, "_busctl", fake)
+    assert await relay_mod._bluetoothctl_pair(MAC)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_speaker_the_built_in_chip_never_saw_says_to_scan(split_roles, monkeypatch, caplog):
+    async def fake(*args, timeout=0):
+        return 1, "Failed to get property Paired on interface org.bluez.Device1: Unknown object '/org/bluez/hci0/dev_78_66_F3_1C_9D_B6'. org.freedesktop.DBus.Error.UnknownObject"
+
+    monkeypatch.setattr(relay_mod, "_busctl", fake)
+    assert not await relay_mod._bluetoothctl_pair(MAC)
+    assert "scan for it from the Admin" in caplog.text
 
 
 @pytest.mark.asyncio
