@@ -33,6 +33,7 @@ def test_it_reads_both_logs_and_matches_every_line_it_promises(tmp_path):
         "x INFO the audio connection of Mack's iPad is back\n"
         "x INFO dropped the audio stream of waiting phone Mack's iPad (21:B0)\n"
         "x INFO speaker routed to 5C:AD:BA:F0:B2:61\n"
+        "x WARNING lockerroom.relay: relay speaker 78:66:F3:1C:9D:B6 is connected but the player cannot open it\n"
     )
     cmd = filter_command().replace("/var/log/lockerroom", str(tmp_path))
     out = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=10).stdout
@@ -40,6 +41,6 @@ def test_it_reads_both_logs_and_matches_every_line_it_promises(tmp_path):
     assert "is streaming" in out                      # from the OLDER file
     for needle in ("aux granted", "audio connection is gone", "reconnect its audio",
                    "released the aux", "is back", "dropped the audio stream",
-                   "speaker routed to"):
+                   "speaker routed to", "lockerroom.relay"):
         assert needle in out, needle
     assert "unrelated chatter" not in out
