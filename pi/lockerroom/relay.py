@@ -39,6 +39,10 @@ CONNECT_TIMEOUT_S = 20.0
 # Pairing waits on a human holding a speaker, so it gets longer than a connect.
 PAIR_TIMEOUT_S = 40.0
 RECONNECT_INTERVAL_S = 30.0
+# How long to wait before looking again when the speaker's audio channel is
+# missing, before concluding it is really gone. See _audio_channel_ok.
+AUDIO_RECHECK_S = 5.0
+AUDIO_CHECK_TIMEOUT_S = 10.0
 ROUTE_ARGV = ["sudo", "/usr/local/bin/audio-route.sh"]
 ROUTE_TIMEOUT_S = 30.0
 
@@ -96,6 +100,35 @@ async def _bluetoothctl_disconnect(mac: str) -> None:
         log.debug("disconnect of %s failed, continuing", mac, exc_info=True)
 
 
+async def _audio_channel_ok(mac: str) -> bool:
+    """Whether bluealsa has a PLAYBACK PCM for the speaker - the thing the
+    player opens. Seen on hardware 2026-11-13: the JBL's A2DP stream closed
+    ("Device not available ... dev_78_66_F3_1C_9D_B6/sep2") while the speaker
+    stayed connected, and the player logged "Couldn't get BlueALSA PCM: PCM not
+    found" every five seconds - silence, with the relay reporting connected.
+
+    Unknown counts as fine: a check that cannot run must never be the reason
+    the speaker gets disconnected.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bluealsa-cli", "list-pcms",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await _communicate(proc, AUDIO_CHECK_TIMEOUT_S)
+    except Exception:
+        log.debug("could not run bluealsa-cli", exc_info=True)
+        return True
+    if proc.returncode != 0:
+        return True
+    dev = "dev_" + mac.upper().replace(":", "_")
+    return any(
+        dev in line and "/a2dpsrc/" in line
+        for line in (out or b"").decode(errors="replace").splitlines()
+    )
+
+
 async def _run_audio_route() -> None:
     """Hand the routing decision back to the one script that owns it, rather
     than writing /etc/asound.conf or output.env from here. Two writers of the
@@ -122,6 +155,8 @@ class RelayManager:
         route: Callable[[], Awaitable[None]] = _run_audio_route,
         pair: Callable[[str], Awaitable[bool]] = _bluetoothctl_pair,
         disconnect: Callable[[str], Awaitable[None]] = _bluetoothctl_disconnect,
+        audio_ok: Callable[[str], Awaitable[bool]] = _audio_channel_ok,
+        recheck_s: float = AUDIO_RECHECK_S,
     ):
         # None is a real state, not an error: a box that has never been given a
         # speaker still has a manager, so one can be chosen from the Admin
@@ -133,6 +168,8 @@ class RelayManager:
         self._route = route
         self._pair = pair
         self._disconnect = disconnect
+        self._audio_ok = audio_ok
+        self._recheck_s = recheck_s
         self._live = False
         self._paired: set[str] = set()
         self._last_error: str | None = None
@@ -229,7 +266,22 @@ class RelayManager:
         if self._mac is None:
             return False
         if self._live:
-            return True
+            if await self._audio_alive():
+                return True
+            # Connected, but with no audio channel: the silent relay. A fresh
+            # connection brings a fresh A2DP stream; falling back to the wired
+            # output in between is audible, which silence is not.
+            log.warning(
+                "relay speaker %s is connected but its audio channel is gone - "
+                "reconnecting it", self._mac,
+            )
+            mac = self._mac
+            try:
+                await self._disconnect(mac)
+            except Exception:
+                log.exception("could not disconnect %s", mac)
+            await self.on_disconnected()
+            # Fall through and reconnect now, rather than a whole cycle later.
 
         if self._mac not in self._paired:
             # Only on a target we have not paired before. Re-pairing a speaker
@@ -281,6 +333,19 @@ class RelayManager:
         except Exception:
             log.exception("connected to %s but audio-route.sh failed", self._mac)
         return True
+
+    async def _audio_alive(self) -> bool:
+        """Two looks, AUDIO_RECHECK_S apart, so a channel being renegotiated at
+        the moment of the check is not mistaken for one that is gone."""
+        assert self._mac is not None
+        try:
+            if await self._audio_ok(self._mac):
+                return True
+            await asyncio.sleep(self._recheck_s)
+            return await self._audio_ok(self._mac)
+        except Exception:
+            log.debug("audio channel check failed", exc_info=True)
+            return True
 
     async def on_disconnected(self) -> None:
         """The speaker went away. Remove the target FIRST, then reroute.

@@ -42,10 +42,20 @@ HCI="${AUXGOAT_HCI:-hci0}"
 # only its own spelling, so both are tried. Silent when nothing changes; one
 # journal line when it does, so a report shows it happened.
 hold_central() {
-  [ "$PREFER_CENTRAL" = "1" ] || return 0
   command -v "$HCICONFIG" >/dev/null 2>&1 || return 0
   local lm
   lm="$(timeout 5 "$HCICONFIG" "$HCI" lm 2>/dev/null)" || return 0
+  if [ "$PREFER_CENTRAL" != "1" ]; then
+    # Switched off - so UNDO it if an earlier run left it set. Turning the
+    # experiment off did not reset the adapter on 2026-11-13: it kept reading
+    # "Link mode: ACCEPT CENTRAL" until the next rebind or boot.
+    case "$lm" in
+      *CENTRAL*|*MASTER*)
+        timeout 5 "$HCICONFIG" "$HCI" lm accept >/dev/null 2>&1 \
+          && echo "keep-discoverable: link mode reset to the default (central-role experiment is off)" ;;
+    esac
+    return 0
+  fi
   case "$lm" in
     *CENTRAL*|*MASTER*) return 0 ;;
   esac

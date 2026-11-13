@@ -75,6 +75,33 @@ Build order status (spec section 10):
 
 ---
 
+## The silent relay, and Admin fixes run mid-song (2026-11-13)
+
+**The silent relay (seen on hardware):** the phone's audio reached the Pi fine,
+but at 22:39:07 the JBL's A2DP channel closed (`Device not available …
+dev_78_66_F3_1C_9D_B6/sep2`) while the JBL stayed connected. bluealsa-aplay then
+logged `Couldn't get BlueALSA PCM … PCM not found` every 5s, and the relay kept
+reporting "connected". It is the same shape as the stale aux, on the output
+side. **Fix:** `RelayManager.ensure_connected` now also checks, every 30s
+while live, that `bluealsa-cli list-pcms` has an `a2dpsrc` PCM for the
+speaker. Missing on two looks 5s apart: disconnect it, fall back to wired, and
+reconnect straight away for a fresh channel. A check that cannot run counts as
+fine, so it never disconnects anything. Log line: `relay speaker … is connected
+but its audio channel is gone - reconnecting it`. Tests:
+`pi/tests/test_relay_audio_channel.py`. Immediate workaround: power-cycle the JBL.
+
+**Central-role leftover:** turning the experiment off never reset the adapter
+(the report still read `Link mode: ACCEPT CENTRAL`). keep-discoverable now
+resets it to `lm accept` when the experiment is off.
+
+**Admin fixes run mid-song:** "Fix the speaker" (run-repair) and "Install update"
+are no longer refused while a song is open. Both sit behind a confirm that says
+the music stops, and a stale aux keeps an open play forever, so the old rule
+could block the fix that was needed. The scan keeps its mid-song rule, because
+the team screen's "Find speakers" sends it too.
+**Bootstrap:** the refusal lives in the installed listener, so the update that
+removes it is itself refused mid-song. Pause once to install it.
+
 ## The stale aux: ROOT CAUSE found, handled in the listener (2026-11-13)
 
 **Symptom (seen before fix #1 and during it):** a phone holds the aux on the

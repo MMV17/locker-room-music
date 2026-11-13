@@ -493,26 +493,19 @@ class TestReportPayload:
 
 
 class TestMayRun:
-    def test_a_repair_is_refused_while_a_song_is_playing(self):
-        """A repair restarts bluetooth and every lockerroom unit, which cuts
-        the music outright — worse than the stutter a scan causes."""
-        ok, why = control.may_run(
-            "run-repair", FakeSessions({"id": "p1", "status": "playing"})
-        )
-        assert ok is False
-        assert "playing" in why.lower()
+    def test_a_repair_runs_even_while_a_song_is_playing(self):
+        """"Fix the speaker" is pressed on purpose, behind a confirm that says
+        the music stops. Refusing it mid-song meant a stale aux - which keeps
+        an open play for ever - could not be fixed at all (2026-11-13)."""
+        for status in ("playing", "paused"):
+            assert control.may_run(
+                "run-repair", FakeSessions({"id": "p1", "status": status})
+            ) == (True, ""), status
 
     def test_a_scan_is_still_refused_while_a_song_is_playing(self):
+        """The team screen's Find speakers sends it too; that keeps its rule."""
         ok, _ = control.may_run(
             "scan-speakers", FakeSessions({"id": "p1", "status": "playing"})
-        )
-        assert ok is False
-
-    def test_a_repair_is_still_refused_while_a_song_is_paused(self):
-        """A repair restarts bluetooth, which drops the phone whether or not
-        its song is paused. Only the scan was relaxed."""
-        ok, _ = control.may_run(
-            "run-repair", FakeSessions({"id": "p1", "status": "paused"})
         )
         assert ok is False
 

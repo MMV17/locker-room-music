@@ -24,6 +24,7 @@ echo "$*" >> "$STATE_DIR/calls"
 [ "$2" = "lm" ] || exit 0
 if [ -n "${3:-}" ]; then
   case "$3" in
+    accept) echo "PERIPHERAL ACCEPT" > "$STATE_DIR/lm" ;;
     *"$SPELLING"*) echo "${SPELLING^^} ACCEPT" > "$STATE_DIR/lm" ;;
     *) echo "Invalid link mode" >&2; exit 1 ;;
   esac
@@ -80,7 +81,7 @@ def test_already_central_is_left_alone_and_quiet(tmp_path):
 def test_switched_off_touches_nothing(tmp_path):
     _, lm, calls = run(tmp_path, "PERIPHERAL ACCEPT", AUXGOAT_PREFER_CENTRAL="0")
     assert lm == "PERIPHERAL ACCEPT"
-    assert calls == ""
+    assert calls == "hci0 lm\n"          # it looks, and changes nothing
 
 
 def test_a_refused_switch_is_reported_and_the_loop_survives(tmp_path):
@@ -93,4 +94,18 @@ def test_a_refused_switch_is_reported_and_the_loop_survives(tmp_path):
 def test_off_by_default_since_ios_refused_it(tmp_path):
     _, lm, calls = run(tmp_path, "PERIPHERAL ACCEPT", AUXGOAT_PREFER_CENTRAL="default")
     assert lm == "PERIPHERAL ACCEPT"
-    assert calls == ""
+    assert calls == "hci0 lm\n"
+
+
+def test_switched_off_undoes_a_central_left_over_from_before(tmp_path):
+    """The 2026-11-13 report still read ACCEPT CENTRAL after it was turned off."""
+    result, lm, calls = run(tmp_path, "CENTRAL ACCEPT", AUXGOAT_PREFER_CENTRAL="default")
+    assert lm == "PERIPHERAL ACCEPT"
+    assert "lm accept\n" in calls
+    assert "link mode reset" in result.stdout
+
+
+def test_switched_off_and_already_default_is_quiet(tmp_path):
+    result, lm, calls = run(tmp_path, "PERIPHERAL ACCEPT", AUXGOAT_PREFER_CENTRAL="default")
+    assert "accept" not in calls.replace("lm\n", "")
+    assert result.stdout == ""
