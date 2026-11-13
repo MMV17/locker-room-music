@@ -4,7 +4,11 @@
 # DiscoverableTimeout=0 in main.conf, which would make the speaker
 # invisible to the next DJ. Cheap enough to just poll.
 #
-# It also holds the adapter's link mode at CENTRAL (2026-11-13, an EXPERIMENT).
+# It can also hold the adapter's link mode at CENTRAL (2026-11-13, an EXPERIMENT
+# that FAILED, now OFF by default). On hardware the link mode took
+# ("Link mode: ACCEPT CENTRAL") but both iPhone and iPad reconnected as
+# PERIPHERAL anyway: iOS refuses the role switch. Kept, switched off, so
+# nobody has to rediscover that. What it was meant to do, for the record:
 #
 # WHY. The two-device test on 2026-11-12 (docs/STATE.md, "Two phones: the
 # second stream knocks out the first") caught the box in a scatternet:
@@ -30,7 +34,7 @@
 # TO TURN IT OFF: set PREFER_CENTRAL=0 below, commit, Admin -> Update software.
 set -uo pipefail
 
-PREFER_CENTRAL="${AUXGOAT_PREFER_CENTRAL:-1}"
+PREFER_CENTRAL="${AUXGOAT_PREFER_CENTRAL:-0}"
 HCICONFIG="${HCICONFIG:-hciconfig}"
 HCI="${AUXGOAT_HCI:-hci0}"
 

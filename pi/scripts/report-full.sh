@@ -160,7 +160,9 @@ echo "--- who was routed to the speaker, and who streamed while waiting ---"
 echo "READ THIS: 'waiting phone XX:XX is streaming' means a phone that did NOT"
 echo "  have the aux was sending audio into the same radio as the DJ's phone."
 echo "  Lots of those lines around a spotty patch is the answer to why."
-run 10 sh -c "grep -h 'is streaming\|speaker routed to' /var/log/lockerroom/listener.log.1 /var/log/lockerroom/listener.log 2>/dev/null | tail -n 40"
+echo "  'dropped the audio stream of waiting phone' is the fix for that cutting"
+echo "  them off; 'could not reconnect the audio stream' is a DJ left silent."
+run 10 sh -c "grep -h 'is streaming\|speaker routed to\|audio stream of'/var/log/lockerroom/listener.log.1 /var/log/lockerroom/listener.log 2>/dev/null | tail -n 40"
 
 # ---------------------------------------------------------------------------
 # Audio. audio-check.sh already walks the whole path and is read-only.

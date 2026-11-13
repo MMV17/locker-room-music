@@ -93,6 +93,33 @@ PAUSE_COOLDOWN = timedelta(seconds=10)
 AUX_SETTLE = timedelta(seconds=6)
 # At most one "waiting phone is streaming" log line per phone per this long.
 STREAM_NOTE_INTERVAL = timedelta(seconds=60)
+# Cut a waiting phone's A2DP stream instead of only pausing it (2026-11-13).
+#
+# WHY. The two-device test on 2026-11-12 (docs/STATE.md, "Two phones: the
+# second stream knocks out the first"): a waiting iPad pressed play, its stream
+# came up in the one radio the DJ's iPhone was already streaming into, and two
+# seconds later the iPhone's stream was gone. Our AVRCP pause landed three
+# seconds after that. Pausing is a courtesy that iOS undoes on its own; it was
+# never going to win a race against the radio.
+#
+# So a phone that opens a stream while someone else holds the aux gets its A2DP
+# profile disconnected (Device1.DisconnectProfile on the Audio Source UUID) -
+# just that profile, so AVRCP and HFP keep the phone connected and it still
+# shows as waiting. When it is granted the aux, the profile is reconnected.
+#
+# UNVERIFIED ON HARDWARE: some phones treat a dropped A2DP profile as a full
+# disconnect. If that turns out to be iOS, set this to False and ship it via
+# Admin -> Update software; everything goes back to pause-only.
+DROP_WAITING_STREAMS = True
+# The phone's side of A2DP: it is the Audio Source and we are the sink.
+A2DP_SOURCE_UUID = "0000110a-0000-1000-8000-00805f9b34fb"
+# At most one drop per phone per this long, so a phone that reconnects its
+# stream instantly is not hammered with D-Bus calls.
+DROP_COOLDOWN = timedelta(seconds=5)
+# Bounds on the two D-Bus calls. A drop runs under the session lock, like a
+# pause; a reconnect does not (it can take seconds) and runs in its own task.
+PROFILE_DROP_TIMEOUT_S = 5.0
+PROFILE_CONNECT_TIMEOUT_S = 20.0
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -187,6 +214,13 @@ class Session:
     # When this phone was last logged as streaming without the aux. See
     # _note_waiting_stream — diagnostics only.
     last_stream_note_at: datetime | None = None
+    # The last MediaTransport1 State seen for this phone, so a drop deferred
+    # past the AUX_SETTLE window can tell whether the phone is still streaming.
+    last_transport_state: str | None = None
+    # True once WE disconnected this phone's A2DP profile; _grant reconnects it.
+    a2dp_dropped: bool = False
+    # When the last drop was attempted. See DROP_COOLDOWN.
+    last_drop_at: datetime | None = None
 
 
 class NullAux:
@@ -253,6 +287,13 @@ class SessionManager:
         # Set by main.py to BluezWatcher.pause. Optional so the whole lifecycle
         # stays testable without a D-Bus bus; see _pause_politely.
         self._pause: Callable[[str], Awaitable[None]] | None = None
+        # Set by main.py to BluezWatcher.disconnect_profile / connect_profile.
+        # Optional for the same reason as _pause; see DROP_WAITING_STREAMS.
+        self._disconnect_profile: Callable[[str, str], Awaitable[None]] | None = None
+        self._connect_profile: Callable[[str, str], Awaitable[None]] | None = None
+        # Strong references to fire-and-forget tasks (profile reconnects,
+        # deferred drops); asyncio only keeps weak ones.
+        self._side_tasks: set[asyncio.Task] = set()
 
     @property
     def relay_mac(self) -> str | None:
@@ -290,6 +331,23 @@ class SessionManager:
         because it keeps every test in test_lifecycle.py free of D-Bus.
         """
         self._pause = pause
+
+    def set_profiles(
+        self,
+        disconnect: Callable[[str, str], Awaitable[None]],
+        connect: Callable[[str, str], Awaitable[None]],
+    ) -> None:
+        """Give the manager a way to cut and restore a phone's A2DP stream.
+
+        Injected for the same reasons as set_pause. See DROP_WAITING_STREAMS.
+        """
+        self._disconnect_profile = disconnect
+        self._connect_profile = connect
+
+    def _spawn(self, coro: Awaitable[None]) -> None:
+        task = asyncio.create_task(coro)
+        self._side_tasks.add(task)
+        task.add_done_callback(self._side_tasks.discard)
 
     def open_play_state(self, at: datetime | None = None) -> dict[str, Any] | None:
         """The play currently on the speaker, for the beacon to report.
@@ -452,6 +510,81 @@ class SessionManager:
         session.last_active_at = now()
         log.info("aux granted to %s (%s)", session.alias, session.mac)
         await self._resync_aux()
+        # We cut their stream while they were waiting; give it back. In its own
+        # task: ConnectProfile can take seconds and must not hold the lock.
+        if session.a2dp_dropped:
+            session.a2dp_dropped = False
+            if self._connect_profile is not None:
+                self._spawn(self._reconnect_stream(session))
+
+    async def _reconnect_stream(self, session: Session) -> None:
+        assert self._connect_profile is not None
+        try:
+            await asyncio.wait_for(
+                self._connect_profile(session.device_path, A2DP_SOURCE_UUID),
+                timeout=PROFILE_CONNECT_TIMEOUT_S,
+            )
+            log.info("reconnected the audio stream of %s, which now holds the aux", session.alias)
+        except Exception:
+            # The phone can still bring it back itself, and does on most
+            # play presses. Logged loudly because the other outcome is a DJ
+            # whose music comes out of their own phone.
+            log.warning(
+                "could not reconnect the audio stream of %s - they may need to "
+                "turn Bluetooth off and on", session.alias, exc_info=True,
+            )
+
+    async def _drop_waiting_stream(self, session: Session) -> None:
+        """Cut the A2DP stream of a phone that is streaming without the aux.
+
+        See DROP_WAITING_STREAMS. Assumes the lock is held.
+        """
+        if not DROP_WAITING_STREAMS or self._disconnect_profile is None:
+            return
+        if session.last_transport_state not in ("pending", "active"):
+            return
+        moment = now()
+        holder = self._holder(moment)
+        if holder is None or holder is session:
+            return
+        # NEVER inside the setup window: tearing A2DP down while iOS is still
+        # negotiating it is what produced "Cannot Connect - forget this
+        # device" in production on 2026-08-09 (see AUX_SETTLE). Look again once
+        # the window has passed.
+        settle_left = AUX_SETTLE - (moment - session.connected_at)
+        if settle_left > timedelta(0):
+            self._spawn(self._drop_after(session, settle_left.total_seconds()))
+            return
+        if (
+            session.last_drop_at is not None
+            and moment - session.last_drop_at < DROP_COOLDOWN
+        ):
+            return
+        # Stamped before the call, for the same reason as the pause.
+        session.last_drop_at = moment
+        try:
+            await asyncio.wait_for(
+                self._disconnect_profile(session.device_path, A2DP_SOURCE_UUID),
+                timeout=PROFILE_DROP_TIMEOUT_S,
+            )
+            session.a2dp_dropped = True
+            log.info(
+                "dropped the audio stream of waiting phone %s (%s) while %s holds the aux",
+                session.alias, session.mac[-5:], holder.mac[-5:],
+            )
+        except Exception:
+            log.warning("could not drop the audio stream of %s", session.alias, exc_info=True)
+
+    async def _drop_after(self, session: Session, delay: float) -> None:
+        try:
+            await asyncio.sleep(max(delay, 0))
+        except asyncio.CancelledError:
+            return
+        async with self._lock:
+            # Re-checked from scratch: they may have left, got the aux, or
+            # stopped streaming in the meantime.
+            if self._sessions.get(session.device_path) is session:
+                await self._drop_waiting_stream(session)
 
     def _aux_target(self) -> str | None:
         """Which MAC the audio player should be filtered to. None = no filter.
@@ -786,7 +919,9 @@ class SessionManager:
         session = self._sessions.get(device_path)
         if session is None:
             return
+        session.last_transport_state = state
         self._note_waiting_stream(session, state)
+        await self._drop_waiting_stream(session)
         if session.current_play is None:
             return
         play = session.current_play

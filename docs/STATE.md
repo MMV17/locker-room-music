@@ -104,6 +104,24 @@ lm`. Off switch: `PREFER_CENTRAL=0` in the script.
 links switch roles), confirm every `lm` reads CENTRAL in report-full, then rerun
 steps 2 and 3. Unverified on this kernel/chip until then.
 
+**RESULT (2026-11-13): FAILED, switched off.** The link mode took (`Link mode:
+ACCEPT CENTRAL`) and both phones reconnected with fresh handles, but both came
+in as `lm PERIPHERAL`: iOS refuses the role switch. Now `PREFER_CENTRAL=0` by
+default. It is kept in the script so nobody has to rediscover this.
+
+**Fix #1 SHIPPED IN CODE (2026-11-13), unverified on hardware:**
+`DROP_WAITING_STREAMS` in `lifecycle.py`. When a phone that does NOT hold the aux
+opens an A2DP transport (pending/active), the listener calls
+`Device1.DisconnectProfile(0000110a…)` on it. AVRCP and HFP stay up, so it stays
+"waiting". `_grant` calls `ConnectProfile` when it gets the aux. Never inside
+AUX_SETTLE (that is what made iOS say "forget this device" on 2026-08-09); a
+stream seen inside the window is re-checked once the window ends. 5s cooldown
+per phone. Logs `dropped the audio stream of waiting phone …` /
+`reconnected the audio stream of …` / `could not reconnect …`, which
+report-full now greps. Tests: `pi/tests/test_drop_waiting_stream.py`. **Off
+switch: `DROP_WAITING_STREAMS = False`, then Update software.** The open
+question is whether iOS treats the dropped profile as a full disconnect.
+
 **Still on the table afterwards:** (1) the USB Bluetooth dongle for phones in
 (moves them off the UART, where those lost fragments are), and (2) dropping a
 waiting phone's A2DP profile so it cannot stream at all (fix #1 in the TO DO below).

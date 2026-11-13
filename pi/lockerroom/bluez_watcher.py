@@ -105,6 +105,21 @@ class BluezWatcher:
         await player.call_pause()
         log.info("paused %s over AVRCP", device_path)
 
+    async def disconnect_profile(self, device_path: str, uuid: str) -> None:
+        """Disconnect ONE profile of a device, leaving the rest connected.
+
+        Wired into SessionManager.set_profiles: a waiting phone's A2DP stream
+        is cut so it cannot crowd the DJ's out of the radio, while AVRCP and
+        HFP keep it connected. Raises on failure.
+        """
+        device = (await self._get_proxy(device_path)).get_interface(DEVICE_IFACE)
+        await device.call_disconnect_profile(uuid)
+
+    async def connect_profile(self, device_path: str, uuid: str) -> None:
+        """Reconnect one profile of an already-connected device. Raises on failure."""
+        device = (await self._get_proxy(device_path)).get_interface(DEVICE_IFACE)
+        await device.call_connect_profile(uuid)
+
     def _player_for(self, device_path: str):
         """The MediaPlayer1 interface belonging to a device, if it has one.
 
