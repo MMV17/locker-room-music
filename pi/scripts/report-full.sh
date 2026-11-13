@@ -173,7 +173,9 @@ echo "  'dropped the audio stream of waiting phone' is the fix for that cutting"
 echo "  them off; 'could not reconnect the audio stream' is a DJ left silent."
 echo "  'holds the aux but its audio connection is gone' then 'released the aux' is"
 echo "  the stale-aux guard taking the speaker from a phone the room could not hear."
-run 10 sh -c "grep -h 'is streaming\|speaker routed to\|audio stream of\|audio connection\|reconnect its audio\|released the aux\|aux granted' /var/log/lockerroom/listener.log.1 /var/log/lockerroom/listener.log 2>/dev/null | tail -n 40"
+echo "  'lockerroom.relay' lines are the JBL link: connected, disconnected, the"
+echo "  player-cannot-open-it reconnect, and BlueZ's reason when a pair or connect fails."
+run 10 sh -c "grep -h 'is streaming\|speaker routed to\|audio stream of\|audio connection\|reconnect its audio\|released the aux\|aux granted\|lockerroom.relay' /var/log/lockerroom/listener.log.1 /var/log/lockerroom/listener.log 2>/dev/null | tail -n 40"
 
 # ---------------------------------------------------------------------------
 # Audio. audio-check.sh already walks the whole path and is read-only.

@@ -119,7 +119,14 @@ the pretty hostname and the built-in chip's to "<name> (speaker link)", writing
 only when it differs because Alias writes go to flash. And bt-agent ignores
 SIGTERM, so every restart waited 90s; `TimeoutStopSec=5` in bt-agent.service.
 
-**THE TWO-PHONE TEST PASSED ON THE DONGLE (2026-11-13, afternoon).** Setup:
+**CORRECTION, same afternoon: NOT YET A PASS.** At 18:49 the box reported
+`out=jack relay=0 "could not pair"`, so the JBL relay was down by the handover
+to the iPhone. That is the re-pair bug (#35) plus, likely, the player-failure
+check counting a handover's transient "busy" open errors, now narrowed to "No
+such device" / "PCM not found". Re-run once both are installed, and confirm
+`relay:` output in a report.
+
+**(Original note) THE TWO-PHONE TEST PASSED ON THE DONGLE (2026-11-13, afternoon).** Setup:
 iPad as DJ, iPhone waiting, both on the dongle (hci1), and the JBL relay on the
 built-in chip. The DJ stayed clean while the waiting iPhone pressed play and
 streamed; in the same situation the night before, the DJ was knocked out within

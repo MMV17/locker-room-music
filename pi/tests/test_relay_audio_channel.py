@@ -146,6 +146,14 @@ def test_one_or_two_failures_while_settling_are_not_enough():
     assert not relay_mod.player_failing(MAC, two)
 
 
+def test_a_busy_speaker_during_a_handover_does_not_count():
+    """A handover restarts the player; the new one can find the speaker still
+    held by the old one. That is not the speaker being gone."""
+    busy = FAILING.replace("Open PCM: No such device", "Open PCM: Device or resource busy")
+    busy = "\n".join(l for l in busy.splitlines() if "PCM not found" not in l)
+    assert not relay_mod.player_failing(MAC, busy)
+
+
 def test_failures_aimed_at_another_device_do_not_count():
     other = FAILING.replace("78:66:F3:1C:9D:B6", "AA:BB:CC:DD:EE:FF")
     assert not relay_mod.player_failing(MAC, other)

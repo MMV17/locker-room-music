@@ -223,7 +223,16 @@ def player_failing(mac: str, journal: str) -> bool:
         "Opening ALSA playback PCM" in l and f"DEV={mac.upper()}" in l.upper()
         for l in lines
     )
-    failures = sum("Couldn't open ALSA playback PCM" in l for l in lines)
+    # ONLY the real failure's wording. On 2026-11-13 the silent JBL logged "PCM
+    # not found" / "No such device". A handover restarts the player, and the new
+    # one can briefly fail to open a speaker the old one still holds ("busy") -
+    # that is not the speaker being gone, and counting it reconnected a working
+    # JBL at the moment the aux changed hands.
+    failures = sum(
+        "Couldn't open ALSA playback PCM" in l
+        and ("No such device" in l or "PCM not found" in l)
+        for l in lines
+    )
     return aimed_here and failures >= PLAYER_FAIL_MIN
 
 
