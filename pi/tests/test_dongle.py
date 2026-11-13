@@ -328,3 +328,19 @@ async def test_the_relay_speaker_itself_is_never_turned_away(monkeypatch):
     mgr.set_device_disconnect(disconnect)
     await mgr.on_device_connected("/org/bluez/hci0/dev_78_66_F3_1C_9D_B6", MAC, "JBL Charge 6")
     assert gone == []
+
+
+@pytest.mark.asyncio
+async def test_the_listener_tells_the_relay_when_the_speaker_connects():
+    mgr = SessionManager(FakeStore(), aux=FakeAux(), relay_speaker_mac=MAC)
+    adopted = []
+
+    class Relay:
+        async def on_connected(self):
+            adopted.append(True)
+
+    mgr.set_relay(Relay())
+    await mgr.on_device_connected("/org/bluez/hci0/dev_78_66_F3_1C_9D_B6", MAC, "JBL Charge 6")
+    await asyncio.sleep(0.01)
+    assert adopted == [True]
+    assert not mgr._sessions

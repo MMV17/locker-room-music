@@ -487,6 +487,13 @@ class SessionManager:
         # comes OUT, not someone asking to play. relay.py owns it.
         if self._relay_mac and mac.upper() == self._relay_mac:
             log.info("relay speaker connected: %s (%s) - not a session", alias, mac)
+            # Tell the relay NOW. On 2026-11-13 14:09:06 the JBL reconnected by
+            # itself in the same second the relay's own connect failed with
+            # "Operation already in progress" - and the output sat on the jack
+            # until the relay's next 30s try. Adopting it here closes that gap.
+            adopt = getattr(self._relay, "on_connected", None) if self._relay else None
+            if adopt is not None:
+                self._spawn(adopt())
             return
         if _adapters.on_relay_only_adapter(device_path):
             await self._turn_away(device_path, mac, alias)

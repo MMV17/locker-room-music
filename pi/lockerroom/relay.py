@@ -454,6 +454,18 @@ class RelayManager:
             log.debug("audio channel check failed", exc_info=True)
             return True
 
+    async def on_connected(self) -> None:
+        """The speaker connected (often by itself, reconnecting to us). If the
+        relay does not already count it as live, adopt it now: ensure_connected
+        sees it paired, Connect returns success or AlreadyConnected, and the
+        output is rerouted - instead of waiting for the next 30s cycle."""
+        if self._mac is None or self._live:
+            return
+        try:
+            await self.ensure_connected()
+        except Exception:
+            log.exception("could not adopt the relay speaker %s", self._mac)
+
     async def on_disconnected(self) -> None:
         """The speaker went away. Remove the target FIRST, then reroute.
 

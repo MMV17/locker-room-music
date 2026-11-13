@@ -204,3 +204,15 @@ async def test_off_in_production_it_never_disconnects(tmp_path, monkeypatch):
 def test_the_switch_is_on_in_the_source():
     src = Path(relay_mod.__file__).read_text()
     assert "\nRELAY_AUDIO_KICK = True\n" in src
+
+
+@pytest.mark.asyncio
+async def test_a_speaker_that_reconnects_by_itself_is_adopted_at_once(tmp_path):
+    """2026-11-13 14:09:06: the JBL reconnected on its own while the relay's
+    connect failed 'already in progress'; output stayed on the jack ~30s."""
+    mgr, connect, route, _ = mk(tmp_path, AudioOk([]))
+    assert not mgr.connected
+    await mgr.on_connected()
+    assert mgr.connected and len(connect.calls) == 1 and len(route.calls) == 1
+    await mgr.on_connected()                     # already live: nothing more
+    assert len(connect.calls) == 1
