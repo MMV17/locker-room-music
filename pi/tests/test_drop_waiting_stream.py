@@ -29,6 +29,9 @@ def fast(monkeypatch):
     monkeypatch.setattr(lifecycle_mod, "TRANSPORT_IDLE_GRACE", timedelta(seconds=0.05))
     monkeypatch.setattr(lifecycle_mod, "AUX_SETTLE", timedelta(seconds=0.02))
     monkeypatch.setattr(lifecycle_mod, "DROP_COOLDOWN", timedelta(seconds=0.2))
+    # OFF in production since the 2026-11-13 hardware test (the restore does
+    # not bring iOS's stream back). On here so the mechanism stays tested.
+    monkeypatch.setattr(lifecycle_mod, "DROP_WAITING_STREAMS", True)
 
 
 class FakeProfiles:
@@ -225,3 +228,9 @@ async def test_without_profile_control_nothing_changes():
     await mgr.on_transport_state_changed(OTHER, "pending")
 
     assert OTHER in mgr._sessions
+
+
+def test_off_in_production_until_the_restore_works():
+    """Read from the source, not the module: the fixture above patches it."""
+    src = Path(lifecycle_mod.__file__).read_text()
+    assert "\nDROP_WAITING_STREAMS = False\n" in src
