@@ -75,6 +75,50 @@ Build order status (spec section 10):
 
 ---
 
+## The stale aux: ROOT CAUSE found, handled in the listener (2026-11-13)
+
+**Symptom (seen before fix #1 and during it):** a phone holds the aux on the
+site and says "Connected", its music plays out of its own speaker, the room
+hears nothing, and the site keeps a stale song. On 2026-11-13 the iPad logged
+12 plays of the same song in four minutes like this.
+
+**Cause:** a phone's A2DP transport can vanish while the phone stays connected
+over AVRCP and HFP. Radio overload does it (the iPhone at 2026-11-12 21:15),
+and so did fix #1's cut. `BluezWatcher` only ever reported a whole DEVICE
+disconnecting, never a transport going away. So the listener kept the phone as
+DJ and kept turning its AVRCP into plays. iOS does not reopen A2DP by itself in
+that state; turning Bluetooth off and on does.
+
+**Fix (listener, ships via Install update):**
+- The watcher reports `on_transport_removed`. Each session tracks `has_audio_link`.
+- When the HOLDER loses it: wait `AUDIO_LOST_GRACE` (8s) for it to come back.
+  Then `Device1.Connect` (reconnect missing profiles). Wait 8s more. Still
+  gone: close the play, hand the aux to whoever waits, and mark the phone
+  `audio_lost`. Its AVRCP then records nothing and grants nothing; pressing play
+  retries the reconnect (30s cooldown). If its audio comes back mid-song with
+  the aux free, it gets the aux back and the song is recorded.
+- Log lines: `holds the aux but its audio connection is gone`, `asked … to
+  reconnect its audio`, `released the aux from …`, `the audio connection of … is back`.
+- Also fixed: removed objects never unsubscribed their PropertiesChanged
+  handler, and BlueZ reuses paths, so a forgotten-and-re-paired phone had every
+  signal delivered twice.
+- Tests: `pi/tests/test_stale_aux.py`, `pi/tests/test_watcher_removal.py`.
+- **Unverified on hardware:** whether `Device1.Connect` actually restores iOS's
+  audio. If the log shows `released the aux` every time, it does not, and the
+  phone owner has to toggle Bluetooth. The site does not say so yet.
+
+## Admin cleanup (2026-11-13)
+
+- **Diagnostics is three buttons, one per situation:** "Get a report"
+  (report-full), "Fix the speaker" (run-repair), "Install update". "Restart the
+  app" and "Reboot the box" are no longer buttons. `remote-repair.sh` ends with
+  a health check, then SCHEDULES (systemd-run, +45s, after its report is up) a
+  listener restart if healthy or a reboot if not. It skips both while a
+  software update is scheduled or on trial, so a trial is never mistaken for a
+  failure. Both commands stay on the allowlist.
+- **"Bluetooth pairings" section removed.** JustWorksRepairing = always made
+  its Forget button unnecessary. `forget-selected-phone` stays on the allowlist.
+
 ## Two phones: the second stream knocks out the first (tested 2026-11-12) — central-role EXPERIMENT shipping
 
 **The test** (iPhone on the aux, relay to the JBL, iPad waiting): connecting the

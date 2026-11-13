@@ -16,11 +16,13 @@ const WATCH_MS = 6 * 60_000;
  * button that says "Try to fix it".
  */
 const COMMAND_LABELS: Record<string, string> = {
-  "report-full": "Check it",
-  "run-repair": "Try to fix it",
+  "report-full": "Get a report",
+  "run-repair": "Fix the speaker",
+  // No buttons any more (2026-11-13): "Fix the speaker" restarts the app and,
+  // when that is not enough, reboots. Kept so old history rows read sensibly.
   "restart-listener": "Restart the app",
   reboot: "Reboot the box",
-  "update-software": "Update speaker software",
+  "update-software": "Install update",
   "scan-speakers": "Scan for speakers",
   "report-status": "Quick check",
   "forget-selected-phone": "Forget the selected phone",
@@ -85,11 +87,27 @@ export function Speaker({ call }: { call: Call }) {
    * strictly less than a full check, and two buttons that differ only in
    * thoroughness is a choice nobody wants to make while a speaker is dead.
    */
+  /*
+   * ONE button per situation (2026-11-13). There used to be three fixes -
+   * "Try to fix it", "Restart the app", "Reboot the box" - for the one
+   * situation "the speaker is not working", and nobody should have to guess
+   * which. "Fix the speaker" now does all of it in order: it repairs
+   * Bluetooth and the services, checks the result, then restarts the app if
+   * healthy or reboots the box if not (pi/scripts/remote-repair.sh, at the
+   * end). Both commands stay on the allowlist; they just are not buttons.
+   */
   const ACTIONS: { cmd: string; label: string; sub: string; danger?: boolean }[] = [
-    { cmd: "report-full", label: COMMAND_LABELS["report-full"], sub: "Full diagnostic. Safe while music is playing." },
-    { cmd: "run-repair", label: COMMAND_LABELS["run-repair"], sub: "Restarts Bluetooth and the services. Stops the music." , danger: true },
-    { cmd: "restart-listener", label: COMMAND_LABELS["restart-listener"], sub: "Just the listener. Usually enough.", danger: true },
-    { cmd: "reboot", label: COMMAND_LABELS["reboot"], sub: "Last resort. About a minute offline.", danger: true },
+    {
+      cmd: "report-full",
+      label: COMMAND_LABELS["report-full"],
+      sub: "Use when something seems off, or when asked for one. Changes nothing - safe while music plays.",
+    },
+    {
+      cmd: "run-repair",
+      label: COMMAND_LABELS["run-repair"],
+      sub: "Use when music or Bluetooth is not working. Does everything, and reboots the box if it has to. Stops the music for a minute or two.",
+      danger: true,
+    },
   ];
 
   const send = async (cmd: string, label: string) => {
@@ -97,11 +115,7 @@ export function Speaker({ call }: { call: Call }) {
       const ok = await confirm({
         title: `${label}?`,
         body:
-          cmd === "reboot"
-            ? "Music stops for about a minute, and whoever is DJing is cut off."
-            : cmd === "run-repair"
-              ? "Restarts Bluetooth and the speaker's services. Music stops if anything is playing, and the speaker can show as offline for a few minutes. It will not touch the listener's code."
-              : "Restarts the listener. Anything playing right now is interrupted.",
+          "Repairs Bluetooth and the speaker's services, then restarts the speaker app. If it is still not healthy after that, the box reboots by itself. Music stops, phones reconnect on their own, and the speaker can show as offline for one to three minutes.",
         confirmLabel: label,
         danger: true,
       });
@@ -132,9 +146,9 @@ export function Speaker({ call }: { call: Call }) {
   const updateSoftware = async () => {
     const bootstrap = !info?.software;
     const ok = await confirm({
-      title: "Update speaker software?",
+      title: "Install update?",
       body: bootstrap
-        ? "This speaker has not had a wireless update before. The first one goes through Run repair: Bluetooth restarts, music stops if anything is playing, and the speaker can show as offline for a few minutes."
+        ? "This speaker has not had a wireless update before. The first one goes through Fix the speaker: Bluetooth restarts, music stops if anything is playing, and the speaker can show as offline for a few minutes."
         : "Installs the latest speaker software from GitHub and restarts the listener. Music stops for a moment. If the new version cannot check in within a few minutes, the speaker puts the old version back by itself.",
       confirmLabel: "Update",
       danger: true,
@@ -149,8 +163,8 @@ export function Speaker({ call }: { call: Call }) {
       });
       setSent(
         r.bootstrap
-          ? "Run repair — queued, to install the updater. The speaker picks it up on its next check-in."
-          : "Update speaker software — queued. The speaker picks it up on its next check-in.",
+          ? "Fix the speaker — queued, to install the updater. The speaker picks it up on its next check-in."
+          : "Install update — queued. The speaker picks it up on its next check-in.",
       );
       watch();
     } catch (e) {
@@ -238,9 +252,9 @@ export function Speaker({ call }: { call: Call }) {
       {error && <Banner kind="bad">{error}</Banner>}
       {sent && <Banner kind="info">{sent}</Banner>}
       <p className="t-sub" style={{ marginBottom: 12 }}>
-        Check the box, try to fix it, and read what it sent back. It checks in
-        every ten seconds or so, and this screen updates by itself: no need to
-        reload.
+        Get a report when something seems off; fix the speaker when it is not
+        working. It checks in every ten seconds or so, and this screen updates
+        by itself: no need to reload.
       </p>
 
       {info && (
@@ -295,11 +309,11 @@ export function Speaker({ call }: { call: Call }) {
         ))}
         <div className="row">
           <span className="row-main">
-            <span className="row-title">Update speaker software</span>
+            <span className="row-title">Install update</span>
             <span className="row-sub">
               {info && !info.software
-                ? "First update goes through Run repair. Stops the music."
-                : "Latest version from GitHub. Rolls back by itself if it fails."}
+                ? "Use only when told there is a new version. The first one goes through Fix the speaker and stops the music."
+                : "Use only when told there is a new version. Rolls back by itself if it fails."}
             </span>
           </span>
           <button className="btn-quiet is-danger" disabled={busy} onClick={updateSoftware}>

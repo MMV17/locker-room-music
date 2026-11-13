@@ -829,7 +829,11 @@ class TestBootstrapThroughTheInstalledRepair:
         assert "VERIFIED" in again.stdout
         assert "installed " not in again.stdout, "an unchanged file was reinstalled"
         assert "this box updates from the Admin screen" in again.stdout
-        assert not (site.stub / "systemd-run.log").exists()
+        # Nothing scheduled but "Fix the speaker"'s own follow-up (a restart or
+        # a reboot, after the repair has reported) - and no update.
+        log = site.stub / "systemd-run.log"
+        scheduled = log.read_text().splitlines() if log.exists() else []
+        assert all("auxgoat-fix-followup-" in line for line in scheduled), scheduled
         assert "restart lockerroom-listener" not in site.systemctl_log()[len(log_before):]
 
     def test_a_failed_first_update_can_be_retried_with_a_new_commit(self, site):

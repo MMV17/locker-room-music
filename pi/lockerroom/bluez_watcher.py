@@ -40,6 +40,8 @@ class LifecycleSink(Protocol):
     ) -> None: ...
     async def on_status_changed(self, device_path: str, status: str) -> None: ...
     async def on_transport_state_changed(self, device_path: str, state: str) -> None: ...
+    # Optional: older sinks (and test doubles) lack it; see _handle_removed_object.
+    async def on_transport_removed(self, device_path: str) -> None: ...
 
 
 def _device_path_for(child_path: str, device_paths: set[str]) -> str | None:
@@ -59,7 +61,10 @@ class BluezWatcher:
         self._device_aliases: dict[str, str] = {}
         # child object path -> owning device path, for MediaPlayer1/MediaTransport1
         self._owner: dict[str, str] = {}
-        self._prop_watches: dict[str, Callable] = {}
+        # object path -> (org.freedesktop.DBus.Properties proxy, handler), kept
+        # so the subscription can be removed with the object. See
+        # _handle_removed_object for why that matters.
+        self._prop_watches: dict[str, tuple[Any, Callable]] = {}
         # player object path -> org.bluez.MediaPlayer1 interface, kept so we
         # can read Position when a Track change arrives
         self._players: dict[str, Any] = {}
@@ -119,6 +124,13 @@ class BluezWatcher:
         """Reconnect one profile of an already-connected device. Raises on failure."""
         device = (await self._get_proxy(device_path)).get_interface(DEVICE_IFACE)
         await device.call_connect_profile(uuid)
+
+    async def connect_device(self, device_path: str) -> None:
+        """Device1.Connect on an already-connected device: BlueZ connects every
+        auto-connect profile that is missing, A2DP included. Raises on failure.
+        """
+        device = (await self._get_proxy(device_path)).get_interface(DEVICE_IFACE)
+        await device.call_connect()
 
     def _player_for(self, device_path: str):
         """The MediaPlayer1 interface belonging to a device, if it has one.
@@ -188,8 +200,27 @@ class BluezWatcher:
             self._device_aliases.pop(path, None)
             log.info("device object removed: %s", path)
             await self._sink.on_device_disconnected(path)
+        # A phone's A2DP transport going away while the phone itself stays
+        # connected (AVRCP and HFP still up) is the "stale aux" state: the phone
+        # says Connected, its music plays out of its own speaker, and nothing
+        # here used to notice. Reported before the owner mapping is dropped.
+        if TRANSPORT_IFACE in interfaces:
+            owner = self._owner.get(path)
+            removed = getattr(self._sink, "on_transport_removed", None)
+            if owner is not None and removed is not None:
+                await removed(owner)
         self._owner.pop(path, None)
-        self._prop_watches.pop(path, None)
+        # UNSUBSCRIBE, not just forget. BlueZ reuses object paths: a phone that
+        # is forgotten and re-paired comes back at the same dev_XX/player0,
+        # _watch_properties subscribes again, and the old subscription - still
+        # live on the bus - delivers every signal a second time.
+        watch = self._prop_watches.pop(path, None)
+        if watch is not None:
+            props_iface, handler = watch
+            try:
+                props_iface.off_properties_changed(handler)
+            except Exception:  # noqa: BLE001 - a dead proxy has nothing to remove
+                pass
         self._players.pop(path, None)
 
     async def _cache_player(self, path: str) -> None:
@@ -239,7 +270,7 @@ class BluezWatcher:
 
         handler = self._make_props_handler(path)
         props_iface.on_properties_changed(handler)
-        self._prop_watches[path] = handler
+        self._prop_watches[path] = (props_iface, handler)
 
     async def _handle_props_changed(self, path: str, iface: str, changed: dict[str, Any]) -> None:
         if iface == DEVICE_IFACE:

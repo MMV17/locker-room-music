@@ -323,7 +323,9 @@ case "$OTA_VIA_REPAIR" in
     fi ;;
   *) echo "  not requested here (OTA_VIA_REPAIR=$OTA_VIA_REPAIR)" ;;
 esac
+UPDATE_REQUESTED=0
 if [ "$WANT" = "1" ] && [ "$UPDATER_OK" = "1" ]; then
+  UPDATE_REQUESTED=1
   timeout 75 "$UPDATER" request --via-repair 2>&1 | sed 's/^/  /'
   echo "  If that says 'scheduled': the speaker restarts its software in about a"
   echo "  minute. Press 'run repair' again afterwards to read the outcome here."
@@ -332,4 +334,72 @@ elif [ "$WANT" = "1" ]; then
 fi
 echo
 
-echo "repair finished. Run report-full to see the box's state now."
+# ---------------------------------------------------------------------------
+# Last: the follow-up that makes this ONE button (2026-11-13).
+#
+# Admin used to offer "try to fix it", "restart the app" and "reboot" for what
+# is one situation - the speaker is not working - and left the operator to
+# guess which. This is now "Fix the speaker", and it does all three in order:
+#
+#   1. everything above (Bluetooth, the services, routing)
+#   2. a health check of what a phone needs to connect and be heard
+#   3. healthy   -> restart the listener, to clear any stale state it holds
+#      unhealthy -> reboot the box, the biggest fix there is
+#
+# Step 3 is SCHEDULED, never run inline, for the reason at the top of this
+# file: the listener is the control channel and is running this script.
+# systemd-run starts it in its own unit FOLLOWUP_DELAY_S after now, by which
+# time this repair has finished and its report has gone up.
+# ---------------------------------------------------------------------------
+echo "===== health check and follow-up ====="
+FOLLOWUP_DELAY_S="${AUXGOAT_FOLLOWUP_DELAY_S:-45}"
+SYSTEMD_RUN="${AUXGOAT_SYSTEMD_RUN:-systemd-run}"
+HEALTHY=1
+for u in bluetooth bt-agent keep-discoverable bluealsa bluealsa-aplay; do
+  if [ "$(systemctl is-active "$u" 2>/dev/null)" != "active" ]; then
+    echo "  UNHEALTHY: $u is not running"
+    HEALTHY=0
+  fi
+done
+if command -v hciconfig >/dev/null 2>&1; then
+  HCI_STATE="$(timeout 10 hciconfig hci0 2>/dev/null)"
+  if ! printf '%s' "$HCI_STATE" | grep -q "UP RUNNING PSCAN ISCAN"; then
+    echo "  UNHEALTHY: the adapter is not up and discoverable (want UP RUNNING PSCAN ISCAN)"
+    HEALTHY=0
+  fi
+else
+  BT_SHOW="$(timeout 10 bluetoothctl show 2>/dev/null)"
+  if ! printf '%s' "$BT_SHOW" | grep -q "Powered: yes" \
+     || ! printf '%s' "$BT_SHOW" | grep -q "Discoverable: yes"; then
+    echo "  UNHEALTHY: the adapter is not powered and discoverable"
+    HEALTHY=0
+  fi
+fi
+
+# NEVER while a software update is pending or on trial. The updater restarts
+# the listener itself and judges the new release by whether it keeps checking
+# in; a restart or a reboot from here in the middle of that would be read as
+# the release failing, and roll it back. Caught by test_auxgoat_update.py.
+UPDATE_STATE="idle"
+if [ "$UPDATER_OK" = "1" ]; then
+  UPDATE_STATE="$(timeout 15 "$UPDATER" status --field state 2>/dev/null || echo idle)"
+fi
+STAMP="$(date +%s 2>/dev/null || echo 0)"
+if [ "$UPDATE_REQUESTED" = "1" ] || { [ -n "$UPDATE_STATE" ] && [ "$UPDATE_STATE" != "idle" ]; }; then
+  echo "  a software update is scheduled or running (state: ${UPDATE_STATE:-?}) -"
+  echo "  no restart or reboot from here, so the update is not interrupted."
+  [ "$HEALTHY" = "1" ] || echo "  If the speaker is still not working once the update is done, press Fix the speaker again."
+elif [ "$HEALTHY" = "1" ]; then
+  echo "  healthy - restarting the speaker app in ${FOLLOWUP_DELAY_S}s to clear any"
+  echo "  stuck state (phones reconnect on their own; music stops briefly)."
+  timeout 15 "$SYSTEMD_RUN" --unit="auxgoat-fix-followup-$STAMP" --collect \
+    --on-active="$FOLLOWUP_DELAY_S" systemctl restart lockerroom-listener 2>&1 | sed 's/^/    /'
+else
+  echo "  still unhealthy after the repair - REBOOTING the speaker in ${FOLLOWUP_DELAY_S}s."
+  echo "  It is offline for one to three minutes; press 'Get a report' after that."
+  timeout 15 "$SYSTEMD_RUN" --unit="auxgoat-fix-followup-$STAMP" --collect \
+    --on-active="$FOLLOWUP_DELAY_S" systemctl reboot 2>&1 | sed 's/^/    /'
+fi
+echo
+
+echo "repair finished. Press 'Get a report' in a couple of minutes to see the box's state now."
